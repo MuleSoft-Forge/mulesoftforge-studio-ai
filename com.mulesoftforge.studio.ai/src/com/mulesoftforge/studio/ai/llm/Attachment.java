@@ -1,9 +1,13 @@
 package com.mulesoftforge.studio.ai.llm;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import dev.langchain4j.data.message.ImageContent;
 
 // Something sent with a message. Paths are relative to the project; project is null when unknown.
 public record Attachment(Kind kind, String project, String path, String lines, String content, boolean truncated) {
@@ -16,8 +20,12 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     SELECTION,
     FOLDER,
     PROBLEMS,
-    CONSOLE
+    CONSOLE,
+    IMAGE
   }
+
+  public static final int MAX_IMAGES = 5;
+  private static final Pattern DATA_URL = Pattern.compile("data:(image/[a-z+.-]+);base64,(.+)", Pattern.DOTALL);
 
   private static final Pattern ANSI = Pattern.compile("\u001B\\[[0-9;?]*[A-Za-z]");
   private static final Pattern FAILURE = Pattern.compile(
@@ -96,13 +104,28 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return new Attachment(Kind.CONSOLE, null, name, selected ? "selection" : null, clean, truncated);
   }
 
+  // A picture for the model to look at, e.g. "pasted image 1". Content is the image as a base64 data URL.
+  public static Attachment image(String name, int width, int height, String mimeType, byte[] bytes) {
+    return new Attachment(Kind.IMAGE, null, name, width + "×" + height,
+        "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(bytes), false);
+  }
+
   // Whether this shows something failing, so the composer can suggest fixing it.
   public boolean reportsFailure() {
     return switch (kind) {
       case PROBLEMS -> content.startsWith(Problem.Severity.ERROR + " ");
       case CONSOLE -> FAILURE.matcher(content).find();
-      case OPEN_FILE, FILE, SELECTION, FOLDER -> false;
+      case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE -> false;
     };
+  }
+
+  // For IMAGE: the image itself, sent as an image part rather than as text.
+  ImageContent toImage() {
+    Matcher m = DATA_URL.matcher(content);
+    if (kind != Kind.IMAGE || !m.matches()) {
+      throw new IllegalStateException("Not an image attachment: " + label());
+    }
+    return ImageContent.from(m.group(2), m.group(1));
   }
 
   private static Attachment capped(Kind kind, String project, String path, String lines, String content) {
@@ -126,6 +149,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
       case PROBLEMS -> "problems in " + where + " (" + lines + ")";
       case CONSOLE -> (lines == null ? "console " : "selected text in console ") + where
           + (truncated ? " (last part)" : "");
+      case IMAGE -> path + " (" + lines + ")";
     };
   }
 
@@ -147,7 +171,9 @@ public record Attachment(Kind kind, String project, String path, String lines, S
           + (truncated ? " (only the last part)" : "")
           + "\nThis is output from Studio's Console view, such as a Maven build or a running Mule app. File"
           + " paths in it are absolute; map them to project paths before reading files.";
+      case IMAGE -> "ATTACHED IMAGE: " + label() + ", pasted by the user. The image itself is sent with this"
+          + " message only; later messages keep just this line, so describe what matters in it when you answer.";
     };
-    return heading + "\n```\n" + content + "\n```\n\n";
+    return kind == Kind.IMAGE ? heading + "\n\n" : heading + "\n```\n" + content + "\n```\n\n";
   }
 }

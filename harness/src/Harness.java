@@ -1,3 +1,4 @@
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,6 +16,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Stream;
+
+import javax.imageio.ImageIO;
 
 import com.mulesoftforge.studio.ai.edit.AttachmentReader;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
@@ -52,6 +55,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -62,7 +67,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  *   java Harness test-connection [provider...]
  *   java Harness list-models [provider...]
- *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--project dir [--apply]] "prompt"
+ *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
  *   java Harness check-tools
  *
  * Reads keys from ../.env (KEY=value lines). Never prints secret values.
@@ -70,6 +75,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 public class Harness {
   private static final Path ENV = Path.of("..").resolve(".env").toAbsolutePath().normalize();
   private static String modelOverride;
+  private static final String IMAGE_SPEC = "image:";
   private static ChatMode mode = ChatMode.AGENT;
   private static final Path DEFAULT_STATE = Path.of(System.getProperty("user.home"),
       "AnypointStudio", "studio-workspace-728", ".metadata", ".plugins", "com.mulesoftforge.studio.ai");
@@ -116,6 +122,7 @@ public class Harness {
             case "--file" -> file = Path.of(args[++i]);
             case "--attach" -> attach.add(args[++i]);
             case "--lines" -> attach.add("lines:" + args[++i]);
+            case "--image" -> attach.add(IMAGE_SPEC + args[++i]);
             case "--project" -> project = Path.of(args[++i]);
             case "--apply" -> apply = true;
             case "--model" -> modelOverride = args[++i];
@@ -213,11 +220,23 @@ public class Harness {
           : file.toString();
       attachments.add(Attachment.openFile(project == null ? null : project.name(), shown, Files.readString(file)));
     }
-    if (!attach.isEmpty() && project == null) {
-      throw new IllegalArgumentException("--attach and --lines need --project");
-    }
+    int images = 0;
     for (String spec : attach) {
-      attachments.add(attachmentFor(project, spec));
+      if (spec.startsWith(IMAGE_SPEC)) {
+        Path picture = Path.of(spec.substring(IMAGE_SPEC.length()));
+        BufferedImage pixels = ImageIO.read(picture.toFile());
+        if (pixels == null) {
+          throw new IllegalArgumentException("Not a readable image: " + picture);
+        }
+        String fileName = picture.toString().toLowerCase(Locale.ROOT);
+        String mime = fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") ? "image/jpeg" : "image/png";
+        attachments.add(Attachment.image("pasted image " + ++images, pixels.getWidth(), pixels.getHeight(), mime,
+            Files.readAllBytes(picture)));
+      } else if (project == null) {
+        throw new IllegalArgumentException("--attach and --lines need --project");
+      } else {
+        attachments.add(attachmentFor(project, spec));
+      }
     }
     System.out.println("CHAT  " + provider.label + "  model=" + connection.model()
         + (project == null ? "" : "  project=" + project.root));
@@ -425,6 +444,35 @@ public class Harness {
         && prompts.get(2).contains("rename every flow"));
     session.send(recorder, "after", List.of(), null);
     failed += check("cancel note sent only once", !prompts.get(3).contains("cancelled"));
+
+    List<ChatRequest> requests = new ArrayList<>();
+    ChatModel looker = new ChatModel() {
+      @Override
+      public ChatResponse doChat(ChatRequest request) {
+        requests.add(request);
+        return ChatResponse.builder().aiMessage(AiMessage.from("ok")).build();
+      }
+    };
+    Attachment picture = Attachment.image("pasted image 1", 2, 1, "image/png", new byte[] {1, 2, 3});
+    failed += check("image label", picture.label().equals("pasted image 1 (2×1)"));
+    failed += check("image is not a failure", !picture.reportsFailure());
+    ChatSession withImage = new ChatSession();
+    withImage.send(looker, "what is wrong here", List.of(picture), null);
+    UserMessage asked = (UserMessage) requests.get(0).messages().get(requests.get(0).messages().size() - 1);
+    ImageContent part = asked.contents().stream().filter(ImageContent.class::isInstance).map(ImageContent.class::cast)
+        .findFirst().orElse(null);
+    failed += check("image sent as an image part", part != null && "AQID".equals(part.image().base64Data())
+        && "image/png".equals(part.image().mimeType()));
+    String askedText = asked.contents().stream().filter(TextContent.class::isInstance)
+        .map(c -> ((TextContent) c).text()).findFirst().orElse("");
+    failed += check("image named in the prompt without its data", askedText.contains("ATTACHED IMAGE: pasted image 1 (2×1)")
+        && !askedText.contains("AQID") && askedText.endsWith("what is wrong here"));
+    withImage.send(looker, "and now?", List.of(), null);
+    boolean resent = requests.get(1).messages().stream().anyMatch(m -> m instanceof UserMessage u
+        && u.contents().stream().anyMatch(ImageContent.class::isInstance));
+    failed += check("image not resent on later turns", !resent);
+    failed += check("saved chat keeps the image label, not the image", withImage.savedHistory().get(0).text()
+        .startsWith("[Attached at the time: pasted image 1 (2×1)]") && !withImage.savedHistory().get(0).text().contains("AQID"));
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -864,7 +912,7 @@ public class Harness {
         Usage:
           java Harness test-connection [provider...]
           java Harness list-models [provider...]
-          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--project dir [--apply]] "prompt"
+          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-html [preview.html]
           java Harness check-updates [latest.json URL]
         Providers: openrouter openai anthropic mulesoft ollama custom

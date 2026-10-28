@@ -62,6 +62,8 @@ The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Wind
 
 **Console output.** + Context > **Console: &lt;name&gt;** attaches a console's text, such as Maven Output from a failed build or a running Mule app's log; the console showing in the Console view is listed first. In the Console view itself, right-click (or Cmd/Ctrl+Alt+I) and choose **Ask MuleSoftForge AI** to attach the selected text, or the whole console when nothing is selected. Long output keeps its last 40k characters, where errors usually are. If it shows a failure (ERROR, BUILD FAILURE, an exception) and the message box is empty, it fills in "Explain the error in this console output and fix its cause."
 
+**Screenshots and images.** Copy a screenshot or picture, then press Cmd/Ctrl+V in the chat view; it is attached as **pasted image 1 (width×height)** instead of pasting text. + Context > **Clipboard image** does the same. Up to 5 images go with one message. Images larger than 1568 px on their longest side are scaled down, and sent as PNG (JPEG when the PNG would be over 3.5 MB). An image is sent only with the message it was pasted into; later messages and saved chats keep just its label. The model must accept images: Claude, GPT-4o/GPT-5 and Gemini do, and in Ollama a vision model such as llava. Otherwise the error says so.
+
 **Speak instead of typing.** The mic button next to **Send** starts the operating system's dictation in the message box: macOS Dictation (turn it on in System Settings > Keyboard > Dictation), or Windows voice typing (Windows+H). The plugin never records audio itself and sends none to the AI provider; the system turns speech into text and the text is sent like typing. Press Enter, or click Send, when it reads right.
 
 If you cancel a request, the AI is told with your next message that it was dropped, so it does not assume the work was done.
@@ -113,6 +115,7 @@ cd harness
 ./run-checks.sh                                        # every offline check, as install and publish run them
 ./run.sh chat --mode plan --project /tmp/proj "add a /health endpoint"   # modes: ask, agent, plan
 ./run.sh chat --project /tmp/proj --attach src --lines src/main/mule/app.xml:1-12 "explain this"
+./run.sh chat --image /abs/path/screenshot.png "what does this error dialog say?"
 ./run.sh prices openai anthropic                       # what the model picker shows, with list prices
 ./run.sh check-tls                                     # certificate sources, trusted and untrusted HTTPS
 CA_PEM=~/corp-root.pem ./run.sh test-connection openai # try a corporate CA (USE_SYSTEM_CA=false to skip OS certs)

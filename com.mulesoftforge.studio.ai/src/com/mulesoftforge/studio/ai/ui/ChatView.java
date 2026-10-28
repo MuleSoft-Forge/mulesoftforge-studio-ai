@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jface.action.Action;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.SWT;
@@ -22,8 +23,10 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
+import org.eclipse.ui.IActionBars;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.actions.ActionFactory;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.texteditor.ITextEditor;
@@ -140,6 +143,15 @@ public class ChatView extends ViewPart {
         append(speaker, text);
       }
     });
+
+    IActionBars bars = getViewSite().getActionBars();
+    bars.setGlobalActionHandler(ActionFactory.PASTE.getId(), new Action() {
+      @Override
+      public void run() {
+        composer.paste();
+      }
+    });
+    bars.updateActionBars();
 
     refreshHeader();
     refreshCost();
@@ -424,6 +436,11 @@ public class ChatView extends ViewPart {
         if (!cancelled.get()) {
           Activator.logError("MuleSoftForge AI request failed", e);
           error = Errors.describe(e);
+          if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
+            error += "\n\nThis message included an image. If the model " + model.defaultRequestParameters().modelName()
+                + " cannot read images, pick one that can (for example a Claude, GPT-4o/GPT-5 or Gemini model,"
+                + " or a vision model such as llava in Ollama), or remove the image and send again.";
+          }
         }
       }
       ChatSession.Turn result = turn;

@@ -14,7 +14,10 @@ import com.mulesoftforge.studio.ai.history.ChatRecord;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.Content;
+import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -75,9 +78,14 @@ public class ChatSession {
     StringBuilder context = new StringBuilder();
     List<String> sent = new ArrayList<>();
     List<String> dropped = new ArrayList<>();
+    List<ImageContent> images = new ArrayList<>();
     for (Attachment attachment : attachments) {
       String block = attachment.toPrompt();
-      if (context.length() + block.length() > Attachment.MAX_TOTAL_CHARS) {
+      if (attachment.kind() == Attachment.Kind.IMAGE) {
+        images.add(attachment.toImage());
+        context.append(block);
+        sent.add(attachment.label());
+      } else if (context.length() + block.length() > Attachment.MAX_TOTAL_CHARS) {
         dropped.add(attachment.label());
       } else {
         context.append(block);
@@ -103,7 +111,13 @@ public class ChatSession {
     }
     text = notes + text;
     savedText = notes + savedText;
-    UserMessage message = UserMessage.from(text);
+    UserMessage textOnly = UserMessage.from(text);
+    UserMessage message = textOnly;
+    if (!images.isEmpty()) {
+      List<Content> parts = new ArrayList<>(images);
+      parts.add(TextContent.from(text));
+      message = UserMessage.from(parts);
+    }
     String system = project == null ? SYSTEM_PROMPT : SYSTEM_PROMPT + mode.projectPrompt(project.name());
 
     ChangeSet changes = new ChangeSet();
@@ -157,7 +171,8 @@ public class ChatSession {
     // Tool traffic stays out of history: some providers reject tool messages in a request without tools.
     String remembered = changes.isEmpty() ? answer : answer + "\n\n[Proposed for review: "
         + String.join(", ", changes.all().stream().map(c -> c.path()).toList()) + "]";
-    history.add(message);
+    // Images are large and billed on every request that carries them, so later turns keep only the text.
+    history.add(textOnly);
     history.add(AiMessage.from(remembered));
     saved.add(new ChatRecord.Message("user", savedText));
     saved.add(new ChatRecord.Message("ai", remembered));

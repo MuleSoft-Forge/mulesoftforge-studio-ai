@@ -17,6 +17,7 @@ import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.accessibility.AccessibleAdapter;
 import org.eclipse.swt.accessibility.AccessibleEvent;
+import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -139,7 +140,8 @@ final class Composer {
 
     Button addContext = new Button(actions, SWT.PUSH);
     addContext.setText("+ Context");
-    addContext.setToolTipText("Attach files, folders, the editor selection, the project's file list, Studio's problems, or Console output");
+    addContext.setToolTipText("Attach files, folders, the editor selection, the project's file list, Studio's problems,"
+        + " Console output, or a clipboard image. Pasting an image into the message box attaches it too.");
     addContext.addListener(SWT.Selection, e -> showContextMenu(addContext));
     Button clear = new Button(actions, SWT.PUSH);
     clear.setText("New chat");
@@ -237,10 +239,51 @@ final class Composer {
       return false;
     }
     if (a.kind() == Attachment.Kind.PROBLEMS || b.kind() == Attachment.Kind.PROBLEMS
-        || a.kind() == Attachment.Kind.CONSOLE || b.kind() == Attachment.Kind.CONSOLE) {
+        || a.kind() == Attachment.Kind.CONSOLE || b.kind() == Attachment.Kind.CONSOLE
+        || a.kind() == Attachment.Kind.IMAGE || b.kind() == Attachment.Kind.IMAGE) {
       return a.kind() == b.kind() && a.path().equals(b.path());
     }
     return a.label().equals(b.label());
+  }
+
+  // Cmd/Ctrl+V anywhere in the chat view. An image on the clipboard is attached; text pastes as usual.
+  void paste() {
+    Display display = root.getDisplay();
+    if (ClipboardImage.available(display)) {
+      attachClipboardImage();
+      return;
+    }
+    Control focus = display.getFocusControl();
+    if (focus instanceof Text text) {
+      text.paste();
+    } else if (focus instanceof Combo combo) {
+      combo.paste();
+    } else if (focus instanceof StyledText styled) {
+      styled.paste();
+    } else {
+      input.paste();
+    }
+  }
+
+  private void attachClipboardImage() {
+    long images = attached.stream().filter(a -> a.kind() == Attachment.Kind.IMAGE).count();
+    if (images >= Attachment.MAX_IMAGES) {
+      listener.note("Note", "At most " + Attachment.MAX_IMAGES + " images can go with one message.");
+      return;
+    }
+    Attachment image;
+    try {
+      image = ClipboardImage.read(root.getDisplay(), "pasted image " + (images + 1));
+    } catch (Exception e) {
+      Activator.logError("Could not read the clipboard image", e);
+      listener.note("Error", "Could not read the image on the clipboard: " + Errors.describe(e));
+      return;
+    }
+    if (image == null) {
+      listener.note("Note", "The clipboard has no image. Copy a screenshot or picture first.");
+      return;
+    }
+    attach(new Attachments.Result(List.of(image), List.of()));
   }
 
   void clearAttached() {
@@ -370,6 +413,11 @@ final class Composer {
     whole.setText(project == null ? "Project file list (no project open)" : "File list of " + project.name());
     whole.setEnabled(project != null);
     whole.addListener(SWT.Selection, e -> attach(Attachments.fromResources(List.of(project.resource()))));
+    MenuItem clipboard = new MenuItem(menu, SWT.PUSH);
+    boolean hasImage = ClipboardImage.available(root.getDisplay());
+    clipboard.setText(hasImage ? "Clipboard image" : "Clipboard image (no image copied)");
+    clipboard.setEnabled(hasImage);
+    clipboard.addListener(SWT.Selection, e -> attachClipboardImage());
 
     new MenuItem(menu, SWT.SEPARATOR);
     IFile openFile = editor == null ? null : Adapters.adapt(editor.getEditorInput(), IFile.class);
