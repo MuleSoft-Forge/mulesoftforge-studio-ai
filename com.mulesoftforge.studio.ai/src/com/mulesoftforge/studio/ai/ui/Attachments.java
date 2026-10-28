@@ -44,8 +44,8 @@ final class Attachments {
     return new Result(attached, problems);
   }
 
-  // Selected text in an editor, files and folders selected in a tree such as Package Explorer, or rows in
-  // the Problems view.
+  // Selected text in an editor, files and folders selected in a tree such as Package Explorer, rows in
+  // the Problems view, or processors selected on a Mule editor's canvas.
   static Result fromSelection(ISelection selection, IEditorPart editor) {
     if (selection instanceof ITextSelection && editor != null) {
       Attachment lines = ActiveFile.selection(editor);
@@ -73,6 +73,9 @@ final class Attachments {
     if (groupHeading) {
       return new Result(List.of(), List.of("Select the problems themselves (Cmd/Ctrl+A selects them all), not the"
           + " group heading, or use + Context > Problems."));
+    }
+    if (resources.isEmpty()) {
+      return CanvasSelection.attach(selection, editor);
     }
     return fromResources(resources);
   }

@@ -214,7 +214,7 @@ public class ChatView extends ViewPart {
     composer.focus();
   }
 
-  // Used by the Ask AI command.
+  // Used by the Send to MuleSoftForge AI command and menu items.
   void attach(Attachments.Result result) {
     composer.attach(result);
   }

@@ -761,6 +761,18 @@ public class Harness {
     failed += check("no block, nothing to apply", DataWeaveFix.script("The script is already correct.") == null);
     failed += check("only other languages, nothing to apply", DataWeaveFix.script("```json\n{}\n```") == null);
 
+    String logger = "<logger level=\"INFO\" doc:name=\"Log request\" message=\"#[payload]\"/>";
+    String request = "<http:request method=\"GET\" config-ref=\"HTTP\" path=\"/a\"/>";
+    String flow = "<flow name=\"get-a\">\n  " + logger + "\n  " + request + "\n</flow>";
+    Attachment canvas = Attachment.processors("p", "src/main/mule/api.xml", List.of(logger, request));
+    failed += check("canvas label names elements and doc:name", canvas.label().equals(
+        "canvas selection in src/main/mule/api.xml (2 elements: logger \"Log request\", http:request)"));
+    failed += check("canvas XML kept in order", canvas.content().equals(logger + "\n\n" + request));
+    Attachment nested = Attachment.processors("p", "src/main/mule/api.xml", List.of(flow, logger));
+    failed += check("element inside a selected flow is not sent twice", nested.content().equals(flow)
+        && nested.label().endsWith("(1 element: flow \"get-a\")"));
+    failed += check("canvas does not report a failure", !canvas.reportsFailure());
+
     List<String> prompts = new ArrayList<>();
     ChatModel recorder = new ChatModel() {
       @Override
@@ -771,8 +783,10 @@ public class Harness {
     };
     ChatSession session = new ChatSession();
     session.send(recorder, "explain", List.of(Attachment.openFile("p", "a.xml", "<a/>"), lines, folder, problems,
-        console, dataWeave), null);
+        console, dataWeave, canvas), null);
     String sent = prompts.get(0);
+    failed += check("canvas block", sent.contains("SELECTED ON THE CANVAS OF src/main/mule/api.xml (project p),"
+        + " 2 elements") && sent.contains("doc:name=\"Log request\""));
     failed += check("DataWeave block", sent.contains("DATAWEAVE SCRIPT FROM STUDIO'S DATAWEAVE EDITOR, FOR"
         + " src/main/mule/api.xml (project p)") && sent.contains("e.name"));
     failed += check("problems block", sent.contains("PROBLEMS STUDIO REPORTS IN / (project p), 2 errors, 1 warning")

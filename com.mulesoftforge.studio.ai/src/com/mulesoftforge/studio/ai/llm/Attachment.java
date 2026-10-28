@@ -22,12 +22,17 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     PROBLEMS,
     CONSOLE,
     IMAGE,
-    DATAWEAVE
+    DATAWEAVE,
+    PROCESSORS
   }
 
   public static final int MAX_IMAGES = 5;
   private static final Pattern DATA_URL = Pattern.compile("data:(image/[a-z+.-]+);base64,(.+)", Pattern.DOTALL);
 
+  private static final Pattern START_TAG = Pattern.compile("^\\s*<([\\w.:-]+)([^>]*)>");
+  private static final Pattern DOC_NAME = Pattern.compile("\\bdoc:name\\s*=\\s*\"([^\"]*)\"");
+  private static final Pattern NAME = Pattern.compile("(?<![:\\w])name\\s*=\\s*\"([^\"]*)\"");
+  private static final int MAX_NAMED = 5;
   private static final Pattern ANSI = Pattern.compile("\u001B\\[[0-9;?]*[A-Za-z]");
   private static final Pattern FAILURE = Pattern.compile(
       "BUILD FAILURE|\\bERROR\\b|\\bFATAL\\b|Exception\\b|Caused by:|\\bFAILED\\b");
@@ -115,6 +120,35 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return capped(Kind.DATAWEAVE, project, where, lines, content);
   }
 
+  // Elements selected on the canvas of a Mule editor (processors, scopes, flows), one XML string each, for the file
+  // at path. An element inside another selected one is dropped, since its parent's XML already has it.
+  public static Attachment processors(String project, String path, List<String> elements) {
+    List<String> kept = new ArrayList<>();
+    for (String xml : elements) {
+      String trimmed = xml.strip();
+      if (!trimmed.isEmpty() && elements.stream().noneMatch(other -> other != xml && other.length() > xml.length()
+          && other.contains(trimmed))) {
+        kept.add(trimmed);
+      }
+    }
+    List<String> names = new ArrayList<>();
+    for (String xml : kept.subList(0, Math.min(kept.size(), MAX_NAMED))) {
+      Matcher tag = START_TAG.matcher(xml);
+      if (tag.find()) {
+        Matcher name = DOC_NAME.matcher(tag.group(2));
+        boolean named = name.find();
+        if (!named) {
+          name = NAME.matcher(tag.group(2));
+          named = name.find();
+        }
+        names.add(named ? tag.group(1) + " \"" + name.group(1) + "\"" : tag.group(1));
+      }
+    }
+    String summary = kept.size() + (kept.size() == 1 ? " element: " : " elements: ") + String.join(", ", names)
+        + (kept.size() > MAX_NAMED ? ", …" : "");
+    return capped(Kind.PROCESSORS, project, path, summary, String.join("\n\n", kept));
+  }
+
   // A picture for the model to look at, e.g. "pasted image 1". Content is the image as a base64 data URL.
   public static Attachment image(String name, int width, int height, String mimeType, byte[] bytes) {
     return new Attachment(Kind.IMAGE, null, name, width + "×" + height,
@@ -126,7 +160,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return switch (kind) {
       case PROBLEMS -> content.startsWith(Problem.Severity.ERROR + " ");
       case CONSOLE -> FAILURE.matcher(content).find();
-      case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE, DATAWEAVE -> false;
+      case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE, DATAWEAVE, PROCESSORS -> false;
     };
   }
 
@@ -162,6 +196,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
           + (truncated ? " (last part)" : "");
       case IMAGE -> path + " (" + lines + ")";
       case DATAWEAVE -> (lines == null ? "DataWeave script" : "DataWeave " + lines) + " in " + where;
+      case PROCESSORS -> "canvas selection in " + where + " (" + lines + ")";
     };
   }
 
@@ -188,6 +223,9 @@ public record Attachment(Kind kind, String project, String path, String lines, S
       case DATAWEAVE -> (lines == null ? "DATAWEAVE SCRIPT" : "SELECTED " + lines.toUpperCase() + " OF A DATAWEAVE SCRIPT")
           + " FROM STUDIO'S DATAWEAVE EDITOR, FOR " + path + in + cut
           + "\nThis is the text in the editor, which may not be saved to the file yet.";
+      case PROCESSORS -> "SELECTED ON THE CANVAS OF " + path + in + cut + ", " + lines
+          + "\nThe XML of each selected element as Studio's model holds it. Attribute order and spacing can differ"
+          + " from the file, so read the file before proposing an edit to it.";
     };
     return kind == Kind.IMAGE ? heading + "\n\n" : heading + "\n```\n" + content + "\n```\n\n";
   }

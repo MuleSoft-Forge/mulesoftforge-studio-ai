@@ -21,8 +21,8 @@
   <extension point="org.eclipse.ui.commands">
     <command
         id="com.mulesoftforge.studio.ai.ask"
-        name="Ask MuleSoftForge AI"
-        description="Open MuleSoftForge AI with the selected lines, files or folders attached"
+        name="Send to MuleSoftForge AI"
+        description="Open MuleSoftForge AI with the selected lines, files, folders or processors attached"
         categoryId="com.mulesoftforge.studio.ai.commands"/>
     <category id="com.mulesoftforge.studio.ai.commands" name="MuleSoftForge"/>
   </extension>
@@ -46,15 +46,15 @@
       <toolbar id="com.mulesoftforge.studio.ai.toolbar" label="MuleSoftForge AI">
         <command
             commandId="com.mulesoftforge.studio.ai.ask"
-            label="Ask AI"
-            tooltip="Ask MuleSoftForge AI about the selection"
+            label="Send to AI"
+            tooltip="Send the selection to MuleSoftForge AI"
             style="push"/>
       </toolbar>
     </menuContribution>
     <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
       <command
           commandId="com.mulesoftforge.studio.ai.ask"
-          label="Ask MuleSoftForge AI"
+          label="Send to MuleSoftForge AI"
           style="push">
         <visibleWhen checkEnabled="false">
           <or>
@@ -93,5 +93,11 @@
         class="com.mulesoftforge.studio.ai.ui.DataWeaveAction:fix"
         contextMenu="true"
         group="group.generate"/>
+  </extension>
+
+  <!-- The Mule editor's canvas also builds its own context menu. Studio adds items from providers on this
+       extension point of org.mule.tooling.messageflow; CanvasMenu is a factory for one. -->
+  <extension point="org.mule.tooling.messageflow.nodecontextmenu">
+    <nodecontextmenu class="com.mulesoftforge.studio.ai.ui.CanvasMenu"/>
   </extension>
 </plugin>
