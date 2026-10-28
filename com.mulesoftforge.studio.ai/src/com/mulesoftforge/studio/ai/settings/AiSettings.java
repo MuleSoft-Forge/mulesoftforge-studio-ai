@@ -1,10 +1,14 @@
 package com.mulesoftforge.studio.ai.settings;
 
+import java.util.List;
+import java.util.function.Consumer;
+
 import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.equinox.security.storage.ISecurePreferences;
 import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
 import org.eclipse.equinox.security.storage.StorageException;
 import org.eclipse.jface.preference.IPreferenceStore;
+import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
 
 import com.mulesoftforge.studio.ai.Activator;
@@ -17,6 +21,7 @@ public final class AiSettings {
   private static final String PROVIDER = "provider";
   private static final String BASE_URL = "baseUrl.";
   private static final String MODEL = "model.";
+  private static final String FETCHED_MODELS = "fetchedModels.";
   private static final String API_KEY = "apiKey.";
   private static final String CHAT_MODE = "chat.mode";
   private static final String PLAIN_TRANSCRIPT = "chat.plainTranscript";
@@ -52,6 +57,29 @@ public final class AiSettings {
   public static String model(Provider provider) {
     String value = store().getString(MODEL + provider.name());
     return value.isBlank() ? provider.defaultModel : value;
+  }
+
+  // The models Refresh models last fetched for the provider, so the chat view's picker can offer them too.
+  public static List<String> fetchedModels(Provider provider) {
+    String value = store().getString(FETCHED_MODELS + provider.name());
+    return value.isBlank() ? List.of() : List.of(value.split("\n"));
+  }
+
+  public static void saveFetchedModels(Provider provider, List<String> models) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(FETCHED_MODELS + provider.name(), String.join("\n", models));
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Called on the thread that changed the setting; null keys are possible for bulk changes.
+  public static Runnable onChange(Consumer<String> listener) {
+    IPropertyChangeListener wrapped = event -> listener.accept(event.getProperty());
+    store().addPropertyChangeListener(wrapped);
+    return () -> store().removePropertyChangeListener(wrapped);
+  }
+
+  public static boolean affectsModels(String key) {
+    return key == null || key.equals(PROVIDER) || key.startsWith(MODEL) || key.startsWith(FETCHED_MODELS);
   }
 
   public static void saveModel(Provider provider, String model) throws Exception {

@@ -1,6 +1,8 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.Status;
@@ -40,7 +42,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Text baseUrl;
   private Combo model;
   private Text apiKey;
+  private Label keyInfo;
   private Label testResult;
+  // Edits to providers other than the one on screen, kept until Apply so switching does not lose them.
+  private final Map<Provider, Connection> drafts = new EnumMap<>(Provider.class);
+  private Provider shown;
   private Button saveChats;
   private Button richTranscript;
   private Button checkUpdates;
@@ -64,7 +70,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       provider.add(p.label);
     }
     provider.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-    provider.addListener(SWT.Selection, e -> load(selected()));
+    provider.addListener(SWT.Selection, e -> {
+      drafts.put(shown, fromFields());
+      load(selected());
+    });
 
     new Label(body, SWT.NONE);
     hint = new Label(body, SWT.WRAP);
@@ -83,6 +92,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     label(body, "API key:");
     apiKey = text(body, SWT.BORDER | SWT.PASSWORD);
+    new Label(body, SWT.NONE);
+    keyInfo = new Label(body, SWT.WRAP);
+    keyInfo.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+    apiKey.addListener(SWT.Modify, e -> showKeyInfo());
 
     Composite actions = new Composite(body, SWT.NONE);
     actions.setLayout(new GridLayout(2, false));
@@ -232,7 +245,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   @Override
   public boolean performOk() {
     try {
+      for (Connection draft : drafts.values()) {
+        if (draft.provider() != shown && changed(draft)) {
+          AiSettings.save(draft);
+        }
+      }
       AiSettings.save(fromFields());
+      drafts.clear();
       int days;
       try {
         days = Integer.parseInt(retentionDays.getText().trim());
@@ -267,20 +286,47 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   }
 
   private void load(Provider p) {
+    shown = p;
+    Connection draft = drafts.get(p);
     hint.setText(p.hint);
-    baseUrl.setText(AiSettings.baseUrl(p));
+    baseUrl.setText(draft != null ? draft.baseUrl() : AiSettings.baseUrl(p));
     // Do not keep the previous provider's model text (e.g. openrouter/auto on OpenAI).
-    seedSuggestions(p, AiSettings.model(p), false);
+    seedSuggestions(p, draft != null ? draft.model() : AiSettings.model(p), false);
     apiKey.setEnabled(p != Provider.OLLAMA);
     try {
-      apiKey.setText(AiSettings.apiKey(p));
+      apiKey.setText(draft != null ? draft.apiKey() : AiSettings.apiKey(p));
       setErrorMessage(null);
     } catch (Exception e) {
       apiKey.setText("");
       setErrorMessage("Secure storage unavailable: " + Errors.describe(e));
     }
+    showKeyInfo();
     testResult.setText("");
     hint.getParent().layout(true, true);
+  }
+
+  private static String keyHint(Connection connection) {
+    String problem = connection.provider().keyProblem(connection.apiKey());
+    return problem == null ? "" : problem + "\n\n";
+  }
+
+  private boolean changed(Connection draft) throws StorageException {
+    Provider p = draft.provider();
+    return !draft.baseUrl().equals(AiSettings.baseUrl(p)) || !draft.model().equals(AiSettings.model(p))
+        || !draft.apiKey().equals(AiSettings.apiKey(p));
+  }
+
+  // Shows the start and end of the key on screen, so a key saved under the wrong provider is easy to spot.
+  private void showKeyInfo() {
+    if (shown == null || shown == Provider.OLLAMA) {
+      keyInfo.setText("");
+      return;
+    }
+    String key = apiKey.getText();
+    String problem = shown.keyProblem(key);
+    keyInfo.setText("Key for " + shown.label + ": " + Provider.describeKey(key)
+        + (problem == null ? "" : "\n" + problem));
+    keyInfo.getParent().layout(true, true);
   }
 
   private void testConnection() {
@@ -295,7 +341,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         result = "Connected. Model replied: " + shorten(reply)
             + "\nUse Refresh models to update the dropdown.";
       } catch (Exception e) {
-        result = "Failed:\n" + Errors.describe(e);
+        result = "Failed:\n" + keyHint(connection) + Errors.describe(e);
       }
       String text = result;
       display.asyncExec(() -> {
@@ -320,8 +366,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         List<String> raw = ModelLists.list(connection);
         picker = ModelLists.forPicker(connection.provider(), raw, connection.model());
         result = ModelLists.summarize(connection.provider(), raw.size(), picker);
+        AiSettings.saveFetchedModels(connection.provider(), ModelLists.filterForChat(connection.provider(), raw));
       } catch (Exception e) {
-        result = "Could not load models:\n" + Errors.describe(e);
+        result = "Could not load models:\n" + keyHint(connection) + Errors.describe(e);
       }
       String text = result;
       List<String> choices = picker;
@@ -359,8 +406,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
   }
 
+  // The fields always show the provider last loaded, which is the selected one except mid-switch.
   private Connection fromFields() {
-    return new Connection(selected(), baseUrl.getText().trim(), model.getText().trim(), apiKey.getText().trim());
+    return new Connection(shown, baseUrl.getText().trim(), model.getText().trim(), apiKey.getText().trim());
   }
 
   private Provider selected() {

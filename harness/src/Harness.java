@@ -350,6 +350,21 @@ public class Harness {
     failed += diskUntouched ? 0 : 1;
     System.out.println(changes.all().size() == 2 ? "PASS  2 proposed files" : "FAIL  expected 2 proposed files");
     failed += changes.all().size() == 2 ? 0 : 1;
+
+    String openRouterKey = "sk-or-v1-" + "0123456789abcdef".repeat(4);
+    String anthropicKey = "sk-ant-api03-" + "x".repeat(95);
+    failed += check("an OpenRouter key fits OpenRouter", Provider.OPENROUTER.keyProblem(openRouterKey) == null);
+    failed += check("an Anthropic key under OpenRouter is named",
+        "This looks like an Anthropic key, not an OpenRouter key.".equals(Provider.OPENROUTER.keyProblem(anthropicKey)));
+    failed += check("an OpenRouter key under OpenAI is named",
+        "This looks like an OpenRouter key, not an OpenAI key.".equals(Provider.OPENAI.keyProblem(openRouterKey)));
+    failed += check("an OpenAI project key fits OpenAI", Provider.OPENAI.keyProblem("sk-proj-" + "a".repeat(150)) == null);
+    failed += check("a key with a line break is caught",
+        Provider.ANTHROPIC.keyProblem("sk-ant-abc\ndef").startsWith("The key contains spaces"));
+    failed += check("a missing key is caught only where one is needed",
+        Provider.OPENROUTER.keyProblem("") != null && Provider.OLLAMA.keyProblem("") == null);
+    failed += check("describeKey shows only the start and end",
+        Provider.describeKey(openRouterKey).equals("sk-or-…cdef, 73 characters"));
     System.exit(failed == 0 ? 0 : 1);
   }
 

@@ -60,6 +60,45 @@ public enum Provider {
     };
   }
 
+  // A key pasted for the wrong provider is the usual cause of "401 User not found" and similar replies.
+  public String keyProblem(String key) {
+    String value = key == null ? "" : key.trim();
+    if (value.isEmpty()) {
+      return needsApiKey() ? "No API key is saved for " + label + "." : null;
+    }
+    if (value.chars().anyMatch(Character::isWhitespace)) {
+      return "The key contains spaces or line breaks. Paste it again as one line.";
+    }
+    String other = value.startsWith("sk-or-") ? "an OpenRouter" : value.startsWith("sk-ant-") ? "an Anthropic"
+        : value.startsWith("sk-") ? "an OpenAI" : null;
+    boolean fits = switch (this) {
+      case OPENROUTER -> value.startsWith("sk-or-");
+      case ANTHROPIC -> value.startsWith("sk-ant-");
+      case OPENAI -> "an OpenAI".equals(other);
+      case MULESOFT_AI_GATEWAY, OLLAMA, CUSTOM -> true;
+    };
+    if (fits) {
+      return null;
+    }
+    String mine = ("AEIOU".indexOf(label.charAt(0)) >= 0 ? "an " : "a ") + label + " key";
+    return other == null ? "This does not look like " + mine + "."
+        : "This looks like " + other + " key, not " + mine + ".";
+  }
+
+  // Enough to tell keys apart without showing them: sk-or-…a1b2, 73 characters.
+  public static String describeKey(String key) {
+    String value = key == null ? "" : key.trim();
+    if (value.isEmpty()) {
+      return "none";
+    }
+    if (value.length() < 12) {
+      return value.length() + " characters";
+    }
+    int dash = value.indexOf('-', 3);
+    String start = dash > 0 && dash < 8 ? value.substring(0, dash + 1) : value.substring(0, 3);
+    return start + "…" + value.substring(value.length() - 4) + ", " + value.length() + " characters";
+  }
+
   public static Provider fromName(String name) {
     for (Provider provider : values()) {
       if (provider.name().equals(name)) {

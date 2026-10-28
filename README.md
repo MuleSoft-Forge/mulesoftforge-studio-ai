@@ -110,6 +110,8 @@ If the company proxy re-signs HTTPS, calls fail with "certificate is not trusted
 
 Test connection and Refresh models use the settings on screen, before you click Apply.
 
+Each provider keeps its own base URL, model and key. Switching provider on the page keeps what you typed for the others, and Apply saves them all. Under the key, the page shows its start and end (`sk-or-…a1b2, 73 characters`) and warns when it looks like another provider's key, the usual cause of a 401. The models Refresh models finds are saved for that provider and offered in the chat view's model picker, and the chat view updates when settings change, however Preferences was opened.
+
 **Preferences > MuleSoftForge AI > Chat history**: turn saving off, set how many days to keep chats (default 90, 0 = forever), or delete all chats.
 
 ## Test without Studio

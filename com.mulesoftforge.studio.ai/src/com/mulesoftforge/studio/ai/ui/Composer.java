@@ -306,11 +306,15 @@ final class Composer {
     send.getParent().layout();
   }
 
-  // The curated models for the current provider plus whatever is chosen, which may be a typed id.
+  // The curated models for the current provider, those Refresh models last fetched, and whatever is chosen,
+  // which may be a typed id.
   void refreshModels() {
+    if (modelPicker.isDisposed()) {
+      return;
+    }
     Provider provider = AiSettings.provider();
     String current = AiSettings.model(provider);
-    List<String> models = ModelLists.suggestionsOnly(provider, current);
+    List<String> models = ModelLists.forPicker(provider, AiSettings.fetchedModels(provider), current);
     modelPicker.setItems(models.toArray(String[]::new));
     modelPicker.setText(current);
     showPrices(provider, current, models);

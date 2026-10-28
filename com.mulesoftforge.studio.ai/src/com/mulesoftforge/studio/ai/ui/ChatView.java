@@ -79,6 +79,8 @@ public class ChatView extends ViewPart {
   private Transcript transcript;
   private ChangesPanel changes;
   private Composer composer;
+  private Runnable stopWatchingSettings;
+  private final AtomicBoolean settingsRefreshPending = new AtomicBoolean();
 
   @Override
   public void createPartControl(Composite parent) {
@@ -154,9 +156,34 @@ public class ChatView extends ViewPart {
     });
     bars.updateActionBars();
 
+    Display display = parent.getDisplay();
+    stopWatchingSettings = AiSettings.onChange(key -> {
+      if (AiSettings.affectsModels(key) && settingsRefreshPending.compareAndSet(false, true)) {
+        display.asyncExec(this::settingsChanged);
+      }
+    });
+
     refreshHeader();
     refreshCost();
     pruneOldChats();
+  }
+
+  // Preferences can be opened from Studio's menu as well as from this view, and saves several keys at once.
+  private void settingsChanged() {
+    settingsRefreshPending.set(false);
+    if (header.isDisposed()) {
+      return;
+    }
+    refreshHeader();
+    composer.refreshModels();
+  }
+
+  @Override
+  public void dispose() {
+    if (stopWatchingSettings != null) {
+      stopWatchingSettings.run();
+    }
+    super.dispose();
   }
 
   @Override
@@ -344,9 +371,11 @@ public class ChatView extends ViewPart {
     List<Attachment> attachments = new ArrayList<>();
     EclipseProject project;
     Provider provider;
+    String keyProblem;
     try {
       Connection connection = AiSettings.current();
       provider = connection.provider();
+      keyProblem = provider.keyProblem(connection.apiKey());
       model = ChatModels.create(connection);
       List<Attachment> attached = composer.attached();
       Attachment open = composer.includeOpenFile() ? ActiveFile.capture(getSite().getPage()) : null;
@@ -436,7 +465,7 @@ public class ChatView extends ViewPart {
       } catch (Exception e) {
         if (!cancelled.get()) {
           Activator.logError("MuleSoftForge AI request failed", e);
-          error = Errors.describe(e);
+          error = (keyProblem == null ? "" : keyProblem + " Check the key in Settings.\n\n") + Errors.describe(e);
           if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
             error += "\n\nThis message included an image. If the model " + model.defaultRequestParameters().modelName()
                 + " cannot read images, pick one that can (for example a Claude, GPT-4o/GPT-5 or Gemini model,"
@@ -574,7 +603,5 @@ public class ChatView extends ViewPart {
 
   private void openSettings() {
     PreferencesUtil.createPreferenceDialogOn(getSite().getShell(), AiPreferencePage.ID, null, null).open();
-    composer.refreshModels();
-    refreshHeader();
   }
 }
