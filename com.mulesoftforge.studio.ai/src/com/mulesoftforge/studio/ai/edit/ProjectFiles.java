@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.edit;
 
+import java.nio.file.Path;
 import java.util.List;
 
 // Read-only view of one project. Studio backs it with an IProject; the harness backs it with a folder.
@@ -11,4 +12,9 @@ public interface ProjectFiles {
 
   // Project-relative file paths under directory ("" for the project root).
   List<String> list(String directory, int limit) throws Exception;
+
+  // Where Studio keeps the connector models it generated for this workspace; null when unknown.
+  default Path connectorModels() {
+    return null;
+  }
 }

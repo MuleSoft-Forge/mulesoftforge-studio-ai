@@ -8,6 +8,8 @@ public enum ChatMode {
       You are in Ask mode: explain and answer, and do not propose file changes. If a change would help,
       show the relevant snippet and say that Agent mode can make it.
       - Read only what you need, and batch tool calls in one response.
+      - For questions about a connector's operations, parameters or error types, use connector_reference
+        (the models of the exact connector versions in pom.xml) rather than memory.
       """),
   AGENT("Agent", "Reads the project and proposes changes for you to review.", true, """
 
@@ -29,13 +31,17 @@ public enum ChatMode {
         or your own such as APP:NOT_FOUND for raise-error). Put environment values in properties as
         ${name} defined in the project's config files and secrets as ${secure::name}; never hardcode
         passwords, tokens or keys.
+      - Before you write or change a connector element, look it up with connector_reference (for
+        example "db:select") in the same batch as your reads, and use only the element names,
+        parameters and error types it lists for the version in pom.xml.
       - Edit results may end with CHECKS: problems your proposals introduced. Fix them before you finish.
       - When done, reply with a short summary of what you proposed and why.
       """),
   PLAN("Plan", "Reads the project and writes a step-by-step plan. Build it in Agent mode afterwards.", false, """
 
       You can read the open Mule project "%s" with tools. Paths are relative to the project root.
-      You are in Plan mode: do not write the changes. Read what you need (batch tool calls), then reply with:
+      You are in Plan mode: do not write the changes. Read what you need (batch tool calls; use
+      connector_reference for the connector operations the plan relies on), then reply with:
       ## Goal (one or two sentences)
       ## Changes: a numbered list, one item per file, saying what changes in it and why
       ## Risks and open questions

@@ -53,6 +53,9 @@ public class ChatSession {
       if (read > 0) {
         parts.add("read " + plural(read, "file"));
       }
+      if (toolCounts.getOrDefault("connector_reference", 0) > 0) {
+        parts.add("looked up connector details");
+      }
       if (toolCounts.getOrDefault("check_project", 0) > 0) {
         parts.add("ran the project checks");
       }

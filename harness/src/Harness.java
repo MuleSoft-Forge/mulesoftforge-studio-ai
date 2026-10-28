@@ -22,6 +22,7 @@ import javax.imageio.ImageIO;
 
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
+import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 import com.mulesoftforge.studio.ai.edit.AttachmentReader;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.FileChange;
@@ -73,7 +74,9 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
  *   java Harness check-tools
  *   java Harness check-mule
- *   java Harness check-project /path/to/mule-app
+ *   java Harness check-project /path/to/mule-app [studio-workspace]
+ *   java Harness check-connectors
+ *   java Harness connector /path/to/mule-app ["db" | "db:select"] [studio-workspace]
  *
  * Reads keys from ../.env (KEY=value lines). Never prints secret values.
  */
@@ -82,8 +85,11 @@ public class Harness {
   private static String modelOverride;
   private static final String IMAGE_SPEC = "image:";
   private static ChatMode mode = ChatMode.AGENT;
-  private static final Path DEFAULT_STATE = Path.of(System.getProperty("user.home"),
-      "AnypointStudio", "studio-workspace-728", ".metadata", ".plugins", "com.mulesoftforge.studio.ai");
+  private static final Path DEFAULT_WORKSPACE = Path.of(System.getProperty("user.home"),
+      "AnypointStudio", "studio-workspace-728");
+  private static final Path DEFAULT_STATE = DEFAULT_WORKSPACE.resolve(".metadata").resolve(".plugins")
+      .resolve("com.mulesoftforge.studio.ai");
+  private static Path workspace = DEFAULT_WORKSPACE;
 
   public static void main(String[] args) throws Exception {
     Map<String, String> env = loadEnv(ENV);
@@ -131,6 +137,7 @@ public class Harness {
             case "--project" -> project = Path.of(args[++i]);
             case "--apply" -> apply = true;
             case "--model" -> modelOverride = args[++i];
+            case "--workspace" -> workspace = Path.of(args[++i]);
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
             default -> throw new IllegalArgumentException("Unknown flag: " + args[i]);
           }
@@ -145,9 +152,19 @@ public class Harness {
       }
       case "check-tools" -> checkTools();
       case "check-mule" -> checkMule();
+      case "check-connectors" -> checkConnectors();
       case "check-project" -> {
-        List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(new DiskProject(Path.of(args[1])), null));
+        Path models = models(args.length > 2 ? Path.of(args[2]) : DEFAULT_WORKSPACE);
+        List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(new DiskProject(Path.of(args[1])), null),
+            models == null ? null : ConnectorCatalog.at(models));
         System.out.print(problems.isEmpty() ? "No problems found\n" : MuleChecks.describe(problems));
+      }
+      case "connector" -> {
+        Path models = models(args.length > 3 ? Path.of(args[3]) : DEFAULT_WORKSPACE);
+        ProjectTools tools = new ProjectTools(new DiskProject(Path.of(args[1]), models), new ChangeSet(), false);
+        System.out.println(tools.execute(ToolExecutionRequest.builder().id("t").name("connector_reference")
+            .arguments(new ObjectMapper().writeValueAsString(Map.of("component", args.length > 2 ? args[2] : "")))
+            .build()));
       }
       case "check-attach" -> checkAttach();
       case "check-html" -> checkHtml(args.length > 1 ? Path.of(args[1]) : null);
@@ -222,7 +239,7 @@ public class Harness {
     if (modelOverride != null) {
       connection = new Connection(provider, connection.baseUrl(), modelOverride, connection.apiKey());
     }
-    DiskProject project = projectDir == null ? null : new DiskProject(projectDir);
+    DiskProject project = projectDir == null ? null : new DiskProject(projectDir, models(workspace));
     List<Attachment> attachments = new ArrayList<>();
     if (file != null) {
       String shown = projectDir != null && file.toAbsolutePath().startsWith(projectDir.toAbsolutePath())
@@ -315,7 +332,8 @@ public class Harness {
     failed += expect(tools, "list_files", "{\"directory\":\"\"}", "src/main/mule/api.xml");
     ProjectTools readOnly = new ProjectTools(new DiskProject(root), new ChangeSet(), false);
     failed += check("Ask/Plan offer only read tools", readOnly.specifications().stream()
-        .map(spec -> spec.name()).toList().equals(List.of("list_files", "read_file", "check_project")));
+        .map(spec -> spec.name()).toList()
+        .equals(List.of("list_files", "read_file", "connector_reference", "check_project")));
     failed += expect(readOnly, "write_file", "{\"path\":\"src/x.xml\",\"content\":\"x\"}",
         "ERROR: this mode cannot change files");
     failed += expect(tools, "edit_file",
@@ -413,6 +431,15 @@ public class Harness {
         "HTTP belongs to a connector or module");
     failed += expectProblem("raise-error with an app namespace", base, api,
         muleFile("", "", API_BODY.replace("<logger", "<raise-error type=\"APP:NOT_FOUND\"/>\n    <logger")), null);
+    failed += expectProblem("a processor after the flow's error-handler", base, api,
+        muleFile("", "", API_BODY.replace("    </error-handler>\n", "    </error-handler>\n    <logger level=\"INFO\"/>\n")),
+        "<logger> comes after the <error-handler> of <flow>");
+    failed += expectProblem("an error-handler in a sub-flow", base, api, muleFile("", "", API_BODY.replace(
+        "</sub-flow>", "  <error-handler><on-error-continue type=\"MULE:ANY\"/></error-handler>\n  </sub-flow>")),
+        "a sub-flow cannot have an <error-handler>");
+    failed += expectProblem("an error-handler last in a try scope", base, api, muleFile("", "", API_BODY.replace(
+        "<logger level=\"INFO\" message=\"${api.timeout}\"/>", "<try><logger level=\"INFO\"/>"
+            + "<error-handler><on-error-continue type=\"MULE:ANY\"/></error-handler></try>")), null);
     failed += expectProblem("MULE:VALIDATION is a core error type", base, api,
         muleFile("", "", API_BODY.replace("MULE:CONNECTIVITY", "MULE:VALIDATION")), null);
     failed += expectProblem("error-mapping into a connector namespace", base, api, muleFile("", "", API_BODY.replace(
@@ -481,12 +508,134 @@ public class Harness {
     System.exit(failed == 0 ? 0 : 1);
   }
 
+  private static Path models(Path studioWorkspace) {
+    Path models = studioWorkspace.resolve(".mule").resolve("plugins-tmp").resolve("repository");
+    return Files.isDirectory(models) ? models : null;
+  }
+
+  private static final String DB_MODEL = """
+      {"minMuleVersion": "4.1.1", "extensionModel": {
+        "name": "Database", "version": "9.9.9",
+        "xmlDsl": {"prefix": "db", "namespace": "http://www.mulesoft.org/schema/mule/db"},
+        "errors": [{"error": "DB:CONNECTIVITY"}, {"error": "DB:QUERY_EXECUTION"}, {"error": "MULE:ANY"}],
+        "configurations": [{
+          "name": "config", "description": "Database configuration.", "parameterGroupModels": [],
+          "connectionProviders": [{"name": "my-sql", "description": "MySQL connection.", "parameterGroupModels": [
+            {"name": "General", "parameters": [{"name": "host", "type": {"type": "String"}, "required": true,
+              "expressionSupport": "SUPPORTED", "role": "BEHAVIOUR"}]}]}],
+          "operations": [
+            {"name": "bulkInsert", "description": "Inserts many rows. More detail here.", "errors": ["DB:CONNECTIVITY"],
+             "parameterGroupModels": [{"name": "General", "parameters": [{"name": "config-ref",
+               "type": {"type": "Object"}, "dslConfiguration": {"allowsReferences": true},
+               "expressionSupport": "NOT_SUPPORTED", "role": "BEHAVIOUR"}]}]},
+            {"name": "select", "description": "Selects data from a database. Streaming applies.",
+             "errors": ["DB:CONNECTIVITY", "DB:QUERY_EXECUTION"],
+             "parameterGroupModels": [{"name": "General", "parameters": [
+               {"name": "config-ref", "type": {"type": "Object"}, "dslConfiguration": {"allowsReferences": true},
+                "expressionSupport": "NOT_SUPPORTED", "role": "BEHAVIOUR"},
+               {"name": "sql", "type": {"type": "String"}, "defaultValue": "", "layoutModel": {"text": true},
+                "expressionSupport": "SUPPORTED", "role": "BEHAVIOUR",
+                "description": "The text of the SQL query to be executed."},
+               {"name": "inputParameters", "type": {"type": "Object"}, "role": "PRIMARY_CONTENT",
+                "expressionSupport": "SUPPORTED"},
+               {"name": "queryTimeout", "type": {"type": "Number"}, "defaultValue": "0",
+                "expressionSupport": "SUPPORTED", "role": "BEHAVIOUR"},
+               {"name": "fetchMode", "type": {"type": "String", "annotations": {"enum": {"values": ["ALL", "FIRST"], "type": "[Ljava.lang.String;"}}},
+                "expressionSupport": "NOT_SUPPORTED", "role": "BEHAVIOUR"},
+               {"name": "reconnectionStrategy", "type": {"type": "Object"}, "role": "BEHAVIOUR", "modelProperties":
+                 {"org.mule.runtime.extension.api.property.InfrastructureParameterModelProperty": {}}}]}]}],
+          "messageSources": [{"name": "listener", "description": "Polls a table.", "parameterGroupModels": []}]}],
+        "operations": [], "messageSources": [], "constructs": [], "connectionProviders": []}}
+      """;
+  private static final String DB_NS = "\n      xmlns:db=\"http://www.mulesoft.org/schema/mule/db\"";
+  private static final String DB_LOCATION =
+      "\n        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd";
+  private static final String DB_BODY = """
+        <db:config name="Database_Config">
+          <db:my-sql-connection host="localhost"/>
+        </db:config>
+        <flow name="orders">
+          <db:select config-ref="Database_Config" queryTimeout="5">
+            <db:sql>SELECT 1</db:sql>
+          </db:select>
+          <error-handler>
+            <on-error-continue type="DB:CONNECTIVITY"/>
+          </error-handler>
+        </flow>
+      """;
+
+  // Offline: reading Studio's connector models, the connector_reference tool, and the checks that use them.
+  private static void checkConnectors() throws Exception {
+    Path models = Files.createTempDirectory("msf-models");
+    Path modelDir = models.resolve("4.12.3/org/mule/connectors/mule-db-connector/9.9.9");
+    Files.createDirectories(modelDir);
+    Files.writeString(modelDir.resolve("mule-db-connector-9.9.9-mule-plugin.json"), DB_MODEL);
+    String pom = POM.formatted("<dependency><groupId>org.mule.connectors</groupId><artifactId>mule-db-connector"
+        + "</artifactId><version>${db.version}</version><classifier>mule-plugin</classifier></dependency>")
+        .replace("<dependencies>", "<properties><db.version>9.9.9</db.version></properties>\n  <dependencies>");
+    Path root = Files.createTempDirectory("msf-connectors");
+    Files.writeString(root.resolve("pom.xml"), pom);
+    ProjectTools tools = new ProjectTools(new DiskProject(root, models), new ChangeSet(), false);
+    int failed = 0;
+    failed += expect(tools, "connector_reference", "{}",
+        "db: Database 9.9.9 (org.mule.connectors:mule-db-connector) — 1 config, 2 operations, 1 source");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db\"}", "db:bulk-insert — Inserts many rows.");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db\"}", "db:my-sql-connection (in db:config)");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db\"}",
+        "Error types: DB:CONNECTIVITY, DB:QUERY_EXECUTION");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "sql: child element <db:sql>. The text of the SQL query to be executed.");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}", "queryTimeout: attribute, default 0");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "fetchMode: attribute, one of ALL, FIRST, no expressions");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "inputParameters: child element <db:input-parameters>");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "standard Mule elements for: reconnectionStrategy");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "Error types it can raise: DB:CONNECTIVITY, DB:QUERY_EXECUTION");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:bulkInsert\"}", "<db:bulk-insert> — operation");
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:selekt\"}",
+        "No component db:selekt in Database 9.9.9");
+    Files.writeString(root.resolve("pom.xml"), pom.replace("9.9.9", "1.0.0"));
+    failed += expect(tools, "connector_reference", "{\"component\":\"db:select\"}",
+        "Studio has not generated a model for org.mule.connectors:mule-db-connector:1.0.0");
+    failed += expect(new ProjectTools(new DiskProject(root), new ChangeSet(), false), "connector_reference", "{}",
+        "Connector models are not available");
+
+    ConnectorCatalog catalog = ConnectorCatalog.at(models);
+    Map<String, String> base = new TreeMap<>();
+    base.put("pom.xml", pom);
+    String flow = "src/main/mule/orders.xml";
+    base.put(flow, muleFile(DB_NS, DB_LOCATION, DB_BODY));
+    failed += check("the sample passes the model checks", MuleChecks.check(base, catalog).isEmpty());
+    failed += expectProblem("unknown connector operation", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("db:select", "db:selekt")),
+        "<db:selekt> is not an operation, source or scope of Database 9.9.9");
+    failed += expectProblem("unknown operation attribute", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("queryTimeout=", "queryTimout=")),
+        "<db:select> has no parameter \"queryTimout\" in Database 9.9.9");
+    failed += expectProblem("connector error type that does not exist", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("DB:CONNECTIVITY", "DB:NOT_REAL")),
+        "Database 9.9.9 has no error type DB:NOT_REAL. Its error types are: DB:CONNECTIVITY, DB:QUERY_EXECUTION.");
+    failed += expectProblem("a real connector error type", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("DB:CONNECTIVITY", "DB:QUERY_EXECUTION")), null);
+    failed += expectProblem("without models the connector checks are skipped", base, null, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("db:select", "db:selekt")), null);
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
   // expected null: the change must not add any problem.
   private static int expectProblem(String name, Map<String, String> base, String path, String content,
       String expected) {
+    return expectProblem(name, base, null, path, content, expected);
+  }
+
+  private static int expectProblem(String name, Map<String, String> base, ConnectorCatalog catalog, String path,
+      String content, String expected) {
     Map<String, String> after = new TreeMap<>(base);
     after.put(path, content);
-    List<Problem> problems = MuleChecks.introduced(MuleChecks.check(base), MuleChecks.check(after));
+    List<Problem> problems = MuleChecks.introduced(MuleChecks.check(base, catalog), MuleChecks.check(after, catalog));
     boolean ok = expected == null ? problems.isEmpty()
         : problems.stream().anyMatch(problem -> problem.toString().contains(expected));
     System.out.println((ok ? "PASS" : "FAIL") + "  " + name + (ok && expected == null ? ""
@@ -975,9 +1124,21 @@ public class Harness {
 
   private static final class DiskProject implements ProjectFiles {
     final Path root;
+    private final Path models;
 
     DiskProject(Path root) {
+      this(root, null);
+    }
+
+    // models: a Studio workspace's .mule/plugins-tmp/repository, or null.
+    DiskProject(Path root, Path models) {
       this.root = root.toAbsolutePath().normalize();
+      this.models = models;
+    }
+
+    @Override
+    public Path connectorModels() {
+      return models;
     }
 
     @Override

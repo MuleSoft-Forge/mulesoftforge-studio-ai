@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
+import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -35,10 +36,22 @@ public final class ProjectTools {
               .build())
           .build(),
       ToolSpecification.builder()
+          .name("connector_reference")
+          .description("Look up the connectors and modules in this project's pom.xml, for the exact versions it"
+              + " uses: their operations, sources, configs and connections, each component's parameters (and"
+              + " whether each is an attribute or a child element), and the error types. Use it before writing"
+              + " or changing a connector element instead of guessing names.")
+          .parameters(JsonObjectSchema.builder()
+              .addStringProperty("component", "\"\" to list the connectors, a prefix such as \"db\" for one"
+                  + " connector's components, or \"db:select\" for one component's parameters and errors")
+              .build())
+          .build(),
+      ToolSpecification.builder()
           .name("check_project")
           .description("Run static checks on the Mule XML, pom.xml and properties files, including your pending"
               + " proposals: well-formed XML, unbound prefixes, xsi:schemaLocation, a pom.xml dependency for each"
-              + " namespace, config-ref and flow-ref targets, undefined ${properties}, and error types."
+              + " namespace, config-ref and flow-ref targets, undefined ${properties}, error types, error-handler"
+              + " placement, and connector elements against the connector versions in pom.xml."
               + " Use it to diagnose a project that will not deploy.")
           .parameters(JsonObjectSchema.builder().build())
           .build(),
@@ -70,6 +83,7 @@ public final class ProjectTools {
   private final ProjectFiles files;
   private final ChangeSet changes;
   private final boolean canEdit;
+  private final ConnectorCatalog connectors;
   private List<Problem> baseline;
 
   public ProjectTools(ProjectFiles files, ChangeSet changes) {
@@ -80,6 +94,7 @@ public final class ProjectTools {
     this.files = files;
     this.changes = changes;
     this.canEdit = canEdit;
+    this.connectors = ConnectorCatalog.of(files);
   }
 
   public List<ToolSpecification> specifications() {
@@ -96,7 +111,8 @@ public final class ProjectTools {
     try {
       JsonNode args = JSON.readTree(request.arguments() == null || request.arguments().isBlank()
           ? "{}" : request.arguments());
-      JsonNode value = args.has("path") ? args.get("path") : args.get("directory");
+      JsonNode value = args.has("path") ? args.get("path") : args.has("component") ? args.get("component")
+          : args.get("directory");
       target = value == null || value.asText().isBlank() ? "project root" : value.asText();
     } catch (Exception e) {
       target = "?";
@@ -105,6 +121,7 @@ public final class ProjectTools {
       case "list_files" -> "Listing " + target;
       case "read_file" -> "Reading " + target;
       case "check_project" -> "Checking the project";
+      case "connector_reference" -> "Looking up " + (target.equals("project root") ? "the project's connectors" : target);
       case "edit_file" -> "Drafting an edit to " + target;
       case "write_file" -> "Drafting " + target;
       default -> request.name() + " " + target;
@@ -123,6 +140,7 @@ public final class ProjectTools {
         case "list_files" -> list(args);
         case "read_file" -> read(args);
         case "check_project" -> checkProject();
+        case "connector_reference" -> connectorReference(args);
         case "edit_file" -> edit(args);
         case "write_file" -> write(args);
         default -> "ERROR: unknown tool " + request.name();
@@ -212,16 +230,25 @@ public final class ProjectTools {
   public List<Problem> problemsIntroduced() {
     try {
       if (baseline == null) {
-        baseline = MuleChecks.check(MuleChecks.snapshot(files, null));
+        baseline = MuleChecks.check(MuleChecks.snapshot(files, null), connectors);
       }
-      return MuleChecks.introduced(baseline, MuleChecks.check(MuleChecks.snapshot(files, changes)));
+      return MuleChecks.introduced(baseline, MuleChecks.check(MuleChecks.snapshot(files, changes), connectors));
     } catch (Exception e) {
       return List.of();
     }
   }
 
+  private String connectorReference(JsonNode args) throws Exception {
+    if (connectors == null) {
+      return "Connector models are not available: Studio has not generated any in this workspace yet (it does"
+          + " when it resolves a project's dependencies). Do not guess operations or parameters; say you could"
+          + " not check them.";
+    }
+    return connectors.reference(current("pom.xml"), text(args, "component", false));
+  }
+
   private String checkProject() throws Exception {
-    List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(files, changes));
+    List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(files, changes), connectors);
     String scope = changes.isEmpty() ? "" : ", including your pending proposals";
     if (problems.isEmpty()) {
       return "No problems found" + scope + ". These are static checks of the files; they do not run the app.";

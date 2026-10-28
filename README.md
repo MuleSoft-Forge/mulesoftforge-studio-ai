@@ -88,6 +88,9 @@ Ask for a change ("add a /health flow", "log the request method"). The AI can li
 - `config-ref`, `tlsContext`, `objectStore`, `listenerConfig`, `cachingStrategy-ref`, `defaultErrorHandler-ref`, `error-handler ref` or `flow-ref` pointing at a name that does not exist. This check is skipped when a file uses `<import>` or the project uses a domain.
 - `${property}` or `${secure::property}` not defined in a `.properties`/`.yaml` file or a `global-property`, and `configuration-properties` naming a file that is not there.
 - Error types: `MULE:` types that do not exist, and `raise-error` or `error-mapping targetType` using a connector's namespace.
+- Connector elements, checked against the connector version in `pom.xml`: an operation, source or scope that does not exist, an attribute the component does not have, and an error type the connector does not define.
+
+**Connector lookup.** In every mode the AI can look up the connectors in `pom.xml` (`connector_reference`): their configs, connections, operations, sources, parameters (attribute or child element, defaults, allowed values) and error types. The answers come from the models Studio generates for each connector version under `<workspace>/.mule/plugins-tmp/repository/`, so they match the version the project uses. If Studio has not generated a model yet (a new dependency), the AI is told to save `pom.xml` or refresh the project rather than guess, and the connector element checks skip that connector.
 
 Problems already in the project are not blamed on a proposal. Whatever the AI leaves unfixed shows as a note under its answer. In any mode the AI can also run the same checks on the whole project (`check_project`), which helps with "why won't this deploy?". The checks read files only; they do not build or run the app.
 
@@ -119,7 +122,9 @@ cd harness
 ./run.sh list-models openai
 ./run.sh check-tools                                   # offline: path guard and edit rules
 ./run.sh check-mule                                    # offline: the proposal checks
-./run.sh check-project /abs/path/to/mule-app           # run the proposal checks on a real project
+./run.sh check-connectors                              # offline: connector models, lookup and element checks
+./run.sh check-project /abs/path/to/mule-app [ws]      # run the proposal checks on a real project
+./run.sh connector /abs/path/to/mule-app "db:select"   # what connector_reference returns ("" lists all, "db" one connector)
 ./run.sh check-render                                  # offline: Markdown and code colouring
 ./run.sh check-history                                 # offline: save, reload, export, prune, cost ledger
 ./run.sh check-attach                                  # offline: attachments, size caps, cancel note
@@ -150,6 +155,7 @@ com.mulesoftforge.studio.ai/            the plugin
   src/.../llm/        LangChain4j model creation, chat loop with tool calls
   src/.../edit/       project tools, path guard, staged changes, line diff (no Eclipse imports)
   src/.../check/      static checks of Mule XML, pom.xml and properties (no Eclipse imports)
+  src/.../connector/  connector models Studio generated, lookup for the AI (no Eclipse imports)
   src/.../history/    saved chats, cost ledger, Markdown export (no Eclipse imports)
   src/.../render/     Markdown rendering and code highlighting (no Eclipse imports)
   src/.../ui/         chat view, change review, preferences page, open-file capture

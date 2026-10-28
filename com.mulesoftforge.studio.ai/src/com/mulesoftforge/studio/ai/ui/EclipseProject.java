@@ -3,6 +3,7 @@ package com.mulesoftforge.studio.ai.ui;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -81,6 +82,13 @@ final class EclipseProject implements ProjectFiles {
     try (InputStream in = file.getContents(true)) {
       return new String(in.readAllBytes(), Charset.forName(file.getCharset()));
     }
+  }
+
+  // Studio writes them under the workspace root, which is not always where the project lives.
+  @Override
+  public Path connectorModels() {
+    return project.getWorkspace().getRoot().getLocation().toFile().toPath()
+        .resolve(".mule").resolve("plugins-tmp").resolve("repository");
   }
 
   @Override

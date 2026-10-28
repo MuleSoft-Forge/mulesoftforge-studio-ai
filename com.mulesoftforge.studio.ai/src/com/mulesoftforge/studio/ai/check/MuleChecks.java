@@ -1,7 +1,10 @@
 package com.mulesoftforge.studio.ai.check;
 
 import java.io.StringReader;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -27,6 +30,10 @@ import org.xml.sax.Locator;
 import org.xml.sax.SAXParseException;
 import org.xml.sax.helpers.DefaultHandler;
 
+import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
+import com.mulesoftforge.studio.ai.connector.ConnectorModel;
+import com.mulesoftforge.studio.ai.connector.ConnectorModel.Component;
+import com.mulesoftforge.studio.ai.connector.ConnectorModel.Kind;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
@@ -42,6 +49,9 @@ public final class MuleChecks {
   private static final List<String> RESOURCE_DIRS = List.of("src/main/resources", "src/test/resources");
   private static final int LIST_LIMIT = 2000;
   private static final int REPORT_LIMIT = 15;
+
+  // Core elements whose <error-handler> must be their last child.
+  private static final Set<String> HANDLER_OWNERS = Set.of("flow", "sub-flow", "try");
 
   // Shipped with the runtime or MUnit: no application dependency provides these namespaces.
   private static final Set<String> RUNTIME_NAMESPACES = Set.of("core", "ee/core", "documentation", "tls", "batch",
@@ -124,9 +134,25 @@ public final class MuleChecks {
   }
 
   public static List<Problem> check(Map<String, String> project) {
+    return check(project, null);
+  }
+
+  // connectors: Studio's connector models, or null to skip the checks that need them.
+  public static List<Problem> check(Map<String, String> project, ConnectorCatalog connectors) {
     Map<String, Problem> problems = new LinkedHashMap<>();
     List<Problem> found = new ArrayList<>();
     Pom pom = project.containsKey("pom.xml") ? Pom.parse(project.get("pom.xml"), found) : null;
+    Map<String, ConnectorModel> byNamespace = new HashMap<>();
+    Map<String, ConnectorModel> byErrorNamespace = new HashMap<>();
+    if (connectors != null && pom != null) {
+      for (ConnectorCatalog.Entry entry : connectors.forPom(project.get("pom.xml"))) {
+        ConnectorModel model = entry.model();
+        if (model != null) {
+          byNamespace.putIfAbsent(model.namespace(), model);
+          model.errorNamespaces().forEach(namespace -> byErrorNamespace.putIfAbsent(namespace, model));
+        }
+      }
+    }
 
     Set<String> properties = new HashSet<>();
     Set<String> resources = new HashSet<>();
@@ -156,7 +182,9 @@ public final class MuleChecks {
 
     for (ConfigFile config : configs) {
       checkNamespaces(config, pom, found);
-      checkErrorTypes(config, found);
+      checkErrorTypes(config, byErrorNamespace, found);
+      checkComponents(config, byNamespace, found);
+      found.addAll(config.structure);
       checkPlaceholders(config, properties, found);
       for (Use file : config.propertyFiles) {
         if (literal(file.value) && !resources.contains(file.value)) {
@@ -241,7 +269,34 @@ public final class MuleChecks {
     return words.isEmpty() ? List.of(namespace) : words;
   }
 
-  private static void checkErrorTypes(ConfigFile config, List<Problem> found) {
+  // Connector elements placed directly in a flow, scope or router must be one of the connector's
+  // operations, sources or scopes, and their attributes must be its parameters.
+  private static void checkComponents(ConfigFile config, Map<String, ConnectorModel> models, List<Problem> found) {
+    for (ElementUse use : config.elements) {
+      ConnectorModel model = models.get(use.uri);
+      if (model == null || use.depth <= 2 || !use.parentUri.equals(CORE_NS)) {
+        continue;
+      }
+      String element = model.prefix() + ":" + use.localName;
+      Component component = model.components().get(use.localName);
+      if (component == null || component.kind() == Kind.CONFIG || component.kind() == Kind.CONNECTION) {
+        found.add(new Problem(config.path, use.line, "<" + element + "> is not an operation, source or scope of "
+            + model.label() + ". Look up its components with connector_reference \"" + model.prefix() + "\"."));
+        continue;
+      }
+      Set<String> parameters = new HashSet<>();
+      component.parameters().forEach(parameter -> parameters.add(parameter.name()));
+      for (String attribute : use.attributes) {
+        if (!parameters.contains(attribute)) {
+          found.add(new Problem(config.path, use.line, "<" + element + "> has no parameter \"" + attribute + "\" in "
+              + model.label() + ". Look up its parameters with connector_reference \"" + element + "\"."));
+        }
+      }
+    }
+  }
+
+  private static void checkErrorTypes(ConfigFile config, Map<String, ConnectorModel> byErrorNamespace,
+      List<Problem> found) {
     Set<String> connectorNamespaces = new HashSet<>();
     config.prefixes.forEach((uri, prefix) -> {
       String name = uri.startsWith(MULE_NS) ? uri.substring(MULE_NS.length()) : "";
@@ -268,6 +323,13 @@ public final class MuleChecks {
           found.add(new Problem(config.path, use.line, use.what + " \"" + type + "\": " + namespace
               + " belongs to a connector or module, so custom errors cannot use it. Use your own namespace,"
               + " such as APP:" + id + "."));
+        } else if (!defines && byErrorNamespace.containsKey(namespace)
+            && !byErrorNamespace.get(namespace).errors().contains(namespace + ":" + id)) {
+          ConnectorModel model = byErrorNamespace.get(namespace);
+          List<String> real = model.errors().stream().filter(error -> error.startsWith(namespace + ":")).toList();
+          found.add(new Problem(config.path, use.line, use.what + " \"" + type + "\": " + model.label()
+              + " has no error type " + namespace + ":" + id + ". Its error types are: " + String.join(", ", real)
+              + "."));
         }
       }
     }
@@ -346,6 +408,10 @@ public final class MuleChecks {
 
   private record Use(String what, String value, int line) {}
 
+  // A connector or module element; attributes are its unqualified attribute names.
+  private record ElementUse(String uri, String localName, String parentUri, int depth, int line,
+      List<String> attributes) {}
+
   private record Pom(List<String> artifacts, boolean domain) {
     static Pom parse(String xml, List<Problem> found) {
       try {
@@ -399,6 +465,12 @@ public final class MuleChecks {
     final List<Use> placeholders = new ArrayList<>();
     final List<Use> errorTypes = new ArrayList<>();
     final List<Use> propertyFiles = new ArrayList<>();
+    final List<ElementUse> elements = new ArrayList<>();
+    final List<Problem> structure = new ArrayList<>();
+    private final Deque<String> openUris = new ArrayDeque<>();
+    // For each open element: its name (local for core elements), and the line of its <error-handler> once seen.
+    private final Deque<String> openNames = new ArrayDeque<>();
+    private final Deque<int[]> handlerLines = new ArrayDeque<>();
     private Locator locator;
     private int depth;
 
@@ -444,8 +516,32 @@ public final class MuleChecks {
       if (!uri.isEmpty()) {
         usedUris.add(uri);
       }
-      String name = attributes.getValue("", "name");
+      if (uri.startsWith(MULE_NS) && !uri.equals(CORE_NS) && !uri.equals(DOC_NS)) {
+        List<String> unqualified = new ArrayList<>();
+        for (int i = 0; i < attributes.getLength(); i++) {
+          if (attributes.getURI(i).isEmpty()) {
+            unqualified.add(attributes.getLocalName(i));
+          }
+        }
+        elements.add(new ElementUse(uri, localName, openUris.isEmpty() ? "" : openUris.peek(), depth, line,
+            unqualified));
+      }
       boolean core = uri.equals(CORE_NS);
+      if (!handlerLines.isEmpty() && handlerLines.peek()[0] > 0) {
+        structure.add(new Problem(path, line, "<" + qName + "> comes after the <error-handler> of <" + openNames.peek()
+            + ">. The error handler must be the last element; move it to the end."));
+      }
+      if (core && localName.equals("error-handler") && HANDLER_OWNERS.contains(openNames.peek())) {
+        handlerLines.peek()[0] = line;
+        if (openNames.peek().equals("sub-flow")) {
+          structure.add(new Problem(path, line, "a sub-flow cannot have an <error-handler>. Wrap its content in a"
+              + " <try> scope, or handle the error in the flow that calls it."));
+        }
+      }
+      openUris.push(uri);
+      openNames.push(core ? localName : qName);
+      handlerLines.push(new int[1]);
+      String name = attributes.getValue("", "name");
       if (depth == 2) {
         if (name != null) {
           globals.add(name);
@@ -502,6 +598,9 @@ public final class MuleChecks {
     @Override
     public void endElement(String uri, String localName, String qName) {
       depth--;
+      openUris.pop();
+      openNames.pop();
+      handlerLines.pop();
     }
   }
 }
