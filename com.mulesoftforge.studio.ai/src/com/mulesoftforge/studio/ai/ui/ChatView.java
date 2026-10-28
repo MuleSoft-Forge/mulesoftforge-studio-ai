@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.eclipse.compare.CompareUI;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
@@ -44,6 +45,7 @@ import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
+import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.Progress;
@@ -60,7 +62,14 @@ public class ChatView extends ViewPart {
 
   private record Running(Job job, AtomicBoolean cancelled) {}
 
+  private record DataWeaveProposal(DataWeaveScript script, String fixed) {}
+
   private static final String BUILD_PLAN = "build-plan";
+  private static final String DATAWEAVE_DIFF = "dw-diff:";
+  private static final String DATAWEAVE_APPLY = "dw-apply:";
+
+  // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
+  private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
 
   private final ChatSession session = new ChatSession();
   private final CostMeter chatCost = new CostMeter();
@@ -210,6 +219,24 @@ public class ChatView extends ViewPart {
     composer.attach(result);
   }
 
+  // Fix with MuleSoftForge AI in a DataWeave editor: sends the script and the errors the editor shows, in Ask mode
+  // because the fix goes back into the editor rather than into a file. The answer gets Review diff and Apply.
+  void fixDataWeave(DataWeaveScript script) throws Exception {
+    if (running != null) {
+      append("Note", "Wait for the current answer, or cancel it, then choose Fix with MuleSoftForge AI again.");
+      return;
+    }
+    List<Attachment.Problem> problems = script.problems();
+    List<Attachment> attached = new ArrayList<>();
+    attached.add(script.attachment(false));
+    if (!problems.isEmpty()) {
+      attached.add(Attachment.problems(script.project(), DataWeaveScript.PROBLEMS_SCOPE, problems));
+    }
+    composer.setPrompt(DataWeaveFix.prompt(script.selectedLines(), !problems.isEmpty()));
+    composer.attach(new Attachments.Result(attached, List.of()));
+    send(ChatMode.ASK, script);
+  }
+
   private final class TranscriptActions implements Transcript.Actions {
     @Override
     public void copy(String code) {
@@ -238,6 +265,17 @@ public class ChatView extends ViewPart {
         composer.setMode(ChatMode.AGENT);
         composer.setPrompt(ChatMode.BUILD_PLAN_PROMPT);
         send();
+      } else if (id.startsWith(DATAWEAVE_DIFF)) {
+        DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
+        if (proposal != null) {
+          CompareUI.openCompareEditor(ChangeCompareInput.dataWeave(proposal.script().where(),
+              proposal.script().text(), proposal.fixed()));
+        }
+      } else if (id.startsWith(DATAWEAVE_APPLY)) {
+        DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_APPLY.length()));
+        if (proposal != null) {
+          applyDataWeaveFix(proposal);
+        }
       }
     }
   }
@@ -287,6 +325,7 @@ public class ChatView extends ViewPart {
   private void resetChat() {
     session.clear();
     changes.clear();
+    dataWeaveFixes.clear();
     chatCost.reset();
     chatCounted = false;
     entries.clear();
@@ -376,6 +415,11 @@ public class ChatView extends ViewPart {
   }
 
   private void send() {
+    send(composer.mode(), null);
+  }
+
+  // With fix, the answer is checked for a corrected script to offer back to that DataWeave editor.
+  private void send(ChatMode mode, DataWeaveScript fix) {
     String prompt = composer.prompt();
     if (prompt.isEmpty() || running != null) {
       return;
@@ -413,7 +457,6 @@ public class ChatView extends ViewPart {
     String usageChat = chatId;
     String usageProject = project == null ? chatProject : project.name();
 
-    ChatMode mode = composer.mode();
     List<String> context = new ArrayList<>();
     context.add(mode.label);
     for (Attachment attachment : attachments) {
@@ -514,6 +557,9 @@ public class ChatView extends ViewPart {
           if (mode == ChatMode.PLAN && project != null) {
             transcript.action("Build this plan in Agent mode", BUILD_PLAN);
           }
+          if (fix != null) {
+            offerDataWeaveFix(fix, result.text());
+          }
         }
         running = null;
         composer.setBusy(false);
@@ -524,6 +570,46 @@ public class ChatView extends ViewPart {
     job.setUser(false);
     running = new Running(job, cancelled);
     job.schedule();
+  }
+
+  private void offerDataWeaveFix(DataWeaveScript script, String answer) {
+    String fixed = DataWeaveFix.script(answer);
+    if (fixed == null) {
+      append("Note", "The answer has no DataWeave code block, so there is nothing to apply to the editor.");
+      return;
+    }
+    if (fixed.strip().equals(script.text().strip())) {
+      append("Note", "The proposed script is the same as the one in the editor.");
+      return;
+    }
+    int index = dataWeaveFixes.size();
+    dataWeaveFixes.add(new DataWeaveProposal(script, fixed));
+    transcript.action("Review diff", DATAWEAVE_DIFF + index);
+    transcript.action("Apply to the DataWeave editor", DATAWEAVE_APPLY + index);
+  }
+
+  private DataWeaveProposal dataWeaveFix(String index) {
+    try {
+      return dataWeaveFixes.get(Integer.parseInt(index));
+    } catch (RuntimeException e) {
+      append("Note", "This fix belongs to an earlier chat. Choose Fix with MuleSoftForge AI again.");
+      return null;
+    }
+  }
+
+  private void applyDataWeaveFix(DataWeaveProposal proposal) {
+    try {
+      String problem = proposal.script().apply(proposal.fixed());
+      if (problem != null) {
+        append("Note", problem);
+        return;
+      }
+      appendStep("Applied the fix to the DataWeave editor for " + proposal.script().where()
+          + " (Cmd/Ctrl+Z in that editor undoes it; save the Mule file to keep it)");
+      session.noteReview("The user applied your corrected DataWeave script to the editor.");
+    } catch (Exception e) {
+      append("Error", "Could not apply the fix: " + Errors.describe(e));
+    }
   }
 
   private void cancel() {

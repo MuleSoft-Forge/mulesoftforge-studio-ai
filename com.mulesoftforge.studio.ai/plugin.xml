@@ -77,4 +77,21 @@
       </command>
     </menuContribution>
   </extension>
+
+  <!-- Studio's DataWeave editors (Transform Message and others) build their own context menu, which the
+       org.eclipse.ui.menus contributions above do not reach. Studio reads extra items from this extension
+       point of org.mule.tooling.dfl.ui; it has no published schema, so the attributes follow what
+       DFLEmbeddedEditorActions reads: id, class (an IAction), contextMenu="true" and group. -->
+  <extension point="org.mule.tooling.dfl.ui.weaveEmbeddedContextMenuAction">
+    <action
+        id="com.mulesoftforge.studio.ai.dataweave.send"
+        class="com.mulesoftforge.studio.ai.ui.DataWeaveAction"
+        contextMenu="true"
+        group="group.generate"/>
+    <action
+        id="com.mulesoftforge.studio.ai.dataweave.fix"
+        class="com.mulesoftforge.studio.ai.ui.DataWeaveAction:fix"
+        contextMenu="true"
+        group="group.generate"/>
+  </extension>
 </plugin>

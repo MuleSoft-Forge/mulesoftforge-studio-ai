@@ -120,7 +120,7 @@ final class ChangesPanel {
       return;
     }
     for (Pending p : chosen) {
-      CompareUI.openCompareEditor(new ChangeCompareInput(p.change()));
+      CompareUI.openCompareEditor(ChangeCompareInput.of(p.change()));
     }
   }
 

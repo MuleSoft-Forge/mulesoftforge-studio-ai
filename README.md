@@ -62,6 +62,13 @@ The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Wind
 
 **Console output.** + Context > **Console: &lt;name&gt;** attaches a console's text, such as Maven Output from a failed build or a running Mule app's log; the console showing in the Console view is listed first. In the Console view itself, right-click (or Cmd/Ctrl+Alt+I) and choose **Ask MuleSoftForge AI** to attach the selected text, or the whole console when nothing is selected. Long output keeps its last 40k characters, where errors usually are. If it shows a failure (ERROR, BUILD FAILURE, an exception) and the message box is empty, it fills in "Explain the error in this console output and fix its cause."
 
+**DataWeave editors.** Right-click in the script of a Transform Message (or another DataWeave editor) for two items under Format:
+
+- **Send to MuleSoftForge AI** attaches the selected DataWeave, or the whole script when nothing is selected, to the next message. It is the text in the editor, saved or not.
+- **Fix with MuleSoftForge AI** sends the whole script, the errors and warnings the editor marks in it, and any selection as the part to focus on, in Ask mode. When the answer contains a corrected script, **Review diff** shows it beside the current one and **Apply to the DataWeave editor** replaces the script in that editor (Cmd/Ctrl+Z there undoes it; save the Mule file to keep it). Apply refuses if the script was edited, or the editor closed, after Fix was chosen.
+
+These use Studio's `org.mule.tooling.dfl.ui.weaveEmbeddedContextMenuAction` extension point, because the DataWeave editor builds its own menu. Studio does not document that extension point, so check both items after each Studio upgrade.
+
 **Screenshots and images.** Copy a screenshot or picture, then press Cmd/Ctrl+V in the chat view; it is attached as **pasted image 1 (width×height)** instead of pasting text. + Context > **Clipboard image** does the same. Up to 5 images go with one message. Images larger than 1568 px on their longest side are scaled down, and sent as PNG (JPEG when the PNG would be over 3.5 MB). An image is sent only with the message it was pasted into; later messages and saved chats keep just its label. The model must accept images: Claude, GPT-4o/GPT-5 and Gemini do, and in Ollama a vision model such as llava. Otherwise the error says so.
 
 **Speak instead of typing.** The mic button next to **Send** starts the operating system's dictation in the message box: macOS Dictation (turn it on in System Settings > Keyboard > Dictation), or Windows voice typing (Windows+H). The plugin never records audio itself and sends none to the AI provider; the system turns speech into text and the text is sent like typing. Press Enter, or click Send, when it reads right.

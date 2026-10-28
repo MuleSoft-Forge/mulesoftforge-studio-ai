@@ -21,7 +21,8 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     FOLDER,
     PROBLEMS,
     CONSOLE,
-    IMAGE
+    IMAGE,
+    DATAWEAVE
   }
 
   public static final int MAX_IMAGES = 5;
@@ -104,6 +105,16 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return new Attachment(Kind.CONSOLE, null, name, selected ? "selection" : null, clean, truncated);
   }
 
+  // Text from a DataWeave editor such as Transform Message, as shown in Studio (it may be unsaved). Where is the
+  // Mule file it belongs to, or a description when unknown. Lines is null for the whole script, otherwise the
+  // selected lines within it.
+  public static Attachment dataWeave(String project, String where, Integer firstLine, Integer lastLine,
+      String content) {
+    String lines = firstLine == null ? null
+        : firstLine.equals(lastLine) ? "line " + firstLine : "lines " + firstLine + "–" + lastLine;
+    return capped(Kind.DATAWEAVE, project, where, lines, content);
+  }
+
   // A picture for the model to look at, e.g. "pasted image 1". Content is the image as a base64 data URL.
   public static Attachment image(String name, int width, int height, String mimeType, byte[] bytes) {
     return new Attachment(Kind.IMAGE, null, name, width + "×" + height,
@@ -115,7 +126,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return switch (kind) {
       case PROBLEMS -> content.startsWith(Problem.Severity.ERROR + " ");
       case CONSOLE -> FAILURE.matcher(content).find();
-      case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE -> false;
+      case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE, DATAWEAVE -> false;
     };
   }
 
@@ -150,6 +161,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
       case CONSOLE -> (lines == null ? "console " : "selected text in console ") + where
           + (truncated ? " (last part)" : "");
       case IMAGE -> path + " (" + lines + ")";
+      case DATAWEAVE -> (lines == null ? "DataWeave script" : "DataWeave " + lines) + " in " + where;
     };
   }
 
@@ -173,6 +185,9 @@ public record Attachment(Kind kind, String project, String path, String lines, S
           + " paths in it are absolute; map them to project paths before reading files.";
       case IMAGE -> "ATTACHED IMAGE: " + label() + ", pasted by the user. The image itself is sent with this"
           + " message only; later messages keep just this line, so describe what matters in it when you answer.";
+      case DATAWEAVE -> (lines == null ? "DATAWEAVE SCRIPT" : "SELECTED " + lines.toUpperCase() + " OF A DATAWEAVE SCRIPT")
+          + " FROM STUDIO'S DATAWEAVE EDITOR, FOR " + path + in + cut
+          + "\nThis is the text in the editor, which may not be saved to the file yet.";
     };
     return kind == Kind.IMAGE ? heading + "\n\n" : heading + "\n```\n" + content + "\n```\n\n";
   }

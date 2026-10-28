@@ -15,20 +15,38 @@ import org.eclipse.swt.graphics.Image;
 
 import com.mulesoftforge.studio.ai.edit.FileChange;
 
-// Read-only side-by-side diff: current file on the left, the AI proposal on the right.
+// Read-only side-by-side diff: current text on the left, the AI proposal on the right.
 final class ChangeCompareInput extends CompareEditorInput {
-  private final FileChange change;
+  private final String name;
+  private final String before;
+  private final String after;
 
-  ChangeCompareInput(FileChange change) {
-    super(configuration(change));
-    this.change = change;
-    setTitle("AI proposal: " + change.path());
+  private ChangeCompareInput(String title, String leftLabel, String rightLabel, String name, String before,
+      String after) {
+    super(configuration(leftLabel, rightLabel));
+    this.name = name;
+    this.before = before;
+    this.after = after;
+    setTitle(title);
   }
 
-  private static CompareConfiguration configuration(FileChange change) {
+  static ChangeCompareInput of(FileChange change) {
+    return new ChangeCompareInput("AI proposal: " + change.path(),
+        change.isNew() ? "(new file)" : "Current: " + change.path(), "Proposed: " + change.path(),
+        change.path().substring(change.path().lastIndexOf('/') + 1),
+        change.before() == null ? "" : change.before(), change.after());
+  }
+
+  // A fix for the script in a DataWeave editor, which belongs to the Mule file named by where.
+  static ChangeCompareInput dataWeave(String where, String before, String after) {
+    return new ChangeCompareInput("AI fix: DataWeave in " + where, "Current DataWeave in " + where,
+        "Proposed fix", "script.dwl", before, after);
+  }
+
+  private static CompareConfiguration configuration(String leftLabel, String rightLabel) {
     CompareConfiguration config = new CompareConfiguration();
-    config.setLeftLabel(change.isNew() ? "(new file)" : "Current: " + change.path());
-    config.setRightLabel("Proposed: " + change.path());
+    config.setLeftLabel(leftLabel);
+    config.setRightLabel(rightLabel);
     config.setLeftEditable(false);
     config.setRightEditable(false);
     return config;
@@ -36,9 +54,7 @@ final class ChangeCompareInput extends CompareEditorInput {
 
   @Override
   protected Object prepareInput(IProgressMonitor monitor) {
-    String name = change.path().substring(change.path().lastIndexOf('/') + 1);
-    String before = change.before() == null ? "" : change.before();
-    return new DiffNode(null, Differencer.CHANGE, null, new Side(name, before), new Side(name, change.after()));
+    return new DiffNode(null, Differencer.CHANGE, null, new Side(name, before), new Side(name, after));
   }
 
   private record Side(String name, String text) implements ITypedElement, IEncodedStreamContentAccessor {

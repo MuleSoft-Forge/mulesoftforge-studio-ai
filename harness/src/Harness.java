@@ -37,6 +37,7 @@ import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
+import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
@@ -743,6 +744,23 @@ public class Harness {
     failed += check("selected console text label", Attachment.console("Mule", "x", true).label()
         .equals("selected text in console Mule"));
 
+    String script = "%dw 2.0\noutput application/json\n---\npayload map (e) -> e.name";
+    Attachment dataWeave = Attachment.dataWeave("p", "src/main/mule/api.xml", null, null, script);
+    failed += check("DataWeave script label", dataWeave.label().equals("DataWeave script in src/main/mule/api.xml"));
+    failed += check("DataWeave selection label", Attachment.dataWeave("p", "src/main/mule/api.xml", 4, 4, "x")
+        .label().equals("DataWeave line 4 in src/main/mule/api.xml"));
+    failed += check("DataWeave does not report a failure", !dataWeave.reportsFailure());
+    failed += check("Fix prompt names the selection and problems", DataWeaveFix.prompt("lines 2–4", true)
+        .contains("problems Studio reports") && DataWeaveFix.prompt("lines 2–4", true).contains("Focus on lines 2–4."));
+    failed += check("fix taken from the dataweave block", script.equals(DataWeaveFix.script(
+        "Here:\n```json\n{\"a\":1}\n```\n\n```dataweave\n" + script + "\n```\n- fixed the lambda")));
+    failed += check("last dataweave block wins", "%dw 2.0\n---\n2".equals(DataWeaveFix.script(
+        "```dw\n%dw 2.0\n---\n1\n```\nthen\n```dw\n%dw 2.0\n---\n2\n```")));
+    failed += check("a lone untagged block is taken", "%dw 2.0\n---\n1".equals(DataWeaveFix.script(
+        "```\n%dw 2.0\n---\n1\n```")));
+    failed += check("no block, nothing to apply", DataWeaveFix.script("The script is already correct.") == null);
+    failed += check("only other languages, nothing to apply", DataWeaveFix.script("```json\n{}\n```") == null);
+
     List<String> prompts = new ArrayList<>();
     ChatModel recorder = new ChatModel() {
       @Override
@@ -753,8 +771,10 @@ public class Harness {
     };
     ChatSession session = new ChatSession();
     session.send(recorder, "explain", List.of(Attachment.openFile("p", "a.xml", "<a/>"), lines, folder, problems,
-        console), null);
+        console, dataWeave), null);
     String sent = prompts.get(0);
+    failed += check("DataWeave block", sent.contains("DATAWEAVE SCRIPT FROM STUDIO'S DATAWEAVE EDITOR, FOR"
+        + " src/main/mule/api.xml (project p)") && sent.contains("e.name"));
     failed += check("problems block", sent.contains("PROBLEMS STUDIO REPORTS IN / (project p), 2 errors, 1 warning")
         && sent.contains("line 12: Attribute"));
     failed += check("console block", sent.contains("CONSOLE OUTPUT: Maven Output\n") && sent.contains("lineNumber: 170"));
