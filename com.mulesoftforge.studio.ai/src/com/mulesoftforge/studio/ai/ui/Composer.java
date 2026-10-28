@@ -125,7 +125,7 @@ final class Composer {
     });
 
     Composite actions = new Composite(panel, SWT.NONE);
-    GridLayout actionsLayout = new GridLayout(6, false);
+    GridLayout actionsLayout = new GridLayout(8, false);
     actionsLayout.verticalSpacing = 2;
     actions.setLayout(actionsLayout);
     actions.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
@@ -142,9 +142,8 @@ final class Composer {
     modePicker.setToolTipText(modeHelp.toString().trim());
 
     modelPicker = new Combo(actions, SWT.DROP_DOWN);
-    GridData pickerData = new GridData(SWT.FILL, SWT.CENTER, true, false);
-    pickerData.widthHint = 160;
-    pickerData.minimumWidth = 90;
+    GridData pickerData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+    pickerData.widthHint = 200;
     modelPicker.setLayoutData(pickerData);
     modelPicker.addListener(SWT.Selection, e -> chooseModel());
     modelPicker.addListener(SWT.DefaultSelection, e -> chooseModel());
@@ -155,6 +154,10 @@ final class Composer {
     addContext.setToolTipText("Attach files, folders, the editor selection, the project's file list, Studio's problems,"
         + " Console output, or a clipboard image. Pasting an image into the message box attaches it too.");
     addContext.addListener(SWT.Selection, e -> showContextMenu(addContext));
+    includeFile = new Button(actions, SWT.CHECK);
+    includeFile.setText("Include open file");
+    includeFile.setSelection(true);
+    new Label(actions, SWT.NONE).setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     Button clear = new Button(actions, SWT.PUSH);
     clear.setText("New chat");
     clear.addListener(SWT.Selection, e -> {
@@ -182,11 +185,6 @@ final class Composer {
         listener.send();
       }
     });
-
-    includeFile = new Button(actions, SWT.CHECK);
-    includeFile.setText("Include open file");
-    includeFile.setSelection(true);
-    includeFile.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false, 6, 1));
 
     showAttached();
     refreshModels();
