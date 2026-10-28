@@ -32,6 +32,7 @@ import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.texteditor.ITextEditor;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
@@ -462,6 +463,10 @@ public class ChatView extends ViewPart {
         } else {
           appendMarkdown("AI", result.text());
           appendStep("Done in " + seconds + " s · " + result.activity() + spent);
+          if (!result.problems().isEmpty()) {
+            append("Note", "The project checks still find problems in these proposals. Look at them before you"
+                + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
+          }
           changes.add(project, result.changes().all());
           if (mode == ChatMode.PLAN && project != null) {
             transcript.action("Build this plan in Agent mode", BUILD_PLAN);

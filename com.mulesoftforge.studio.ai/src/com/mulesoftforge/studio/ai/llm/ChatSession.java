@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
@@ -35,8 +36,9 @@ public class ChatSession {
 
   private static final int MAX_TOOL_ROUNDS = 12;
 
+  // problems: what the static checks still find in the proposals when the model stopped.
   public record Turn(String text, ChangeSet changes, int toolCalls, List<CallUsage> calls,
-      Map<String, Integer> toolCounts) {
+      Map<String, Integer> toolCounts, List<Problem> problems) {
 
     // Plain-language summary for the transcript, e.g. "read 2 files, proposed changes to 1 file".
     public String activity() {
@@ -50,6 +52,9 @@ public class ChatSession {
       }
       if (read > 0) {
         parts.add("read " + plural(read, "file"));
+      }
+      if (toolCounts.getOrDefault("check_project", 0) > 0) {
+        parts.add("ran the project checks");
       }
       if (proposed > 0) {
         parts.add("proposed changes to " + plural(proposed, "file"));
@@ -178,7 +183,8 @@ public class ChatSession {
     saved.add(new ChatRecord.Message("ai", remembered));
     reviewNotes.clear();
     cancelNotes.removeAll(cancelled);
-    return new Turn(answer, changes, toolCalls, calls, toolCounts);
+    List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
+    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems);
   }
 
   // History safe to write to disk: same turns, without the open-file contents.

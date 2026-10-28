@@ -22,6 +22,14 @@ public enum ChatMode {
         more than a few changes to one file, use write_file once with the complete new content.
       - Changes are proposals. The user reviews each file in Studio and accepts or rejects it there,
         so do not ask for confirmation and never claim a change is applied.
+      - Mule rules: change existing flows and global elements in place and reuse existing configs
+        through config-ref rather than adding duplicates. Every namespace you use needs its
+        xsi:schemaLocation entry and, for connectors and modules, a pom.xml dependency. Give new
+        components a short doc:name. Use only real error types (MULE:*, documented connector types,
+        or your own such as APP:NOT_FOUND for raise-error). Put environment values in properties as
+        ${name} defined in the project's config files and secrets as ${secure::name}; never hardcode
+        passwords, tokens or keys.
+      - Edit results may end with CHECKS: problems your proposals introduced. Fix them before you finish.
       - When done, reply with a short summary of what you proposed and why.
       """),
   PLAN("Plan", "Reads the project and writes a step-by-step plan. Build it in Agent mode afterwards.", false, """

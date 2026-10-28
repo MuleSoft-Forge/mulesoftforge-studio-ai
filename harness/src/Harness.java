@@ -15,10 +15,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.stream.Stream;
 
 import javax.imageio.ImageIO;
 
+import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.AttachmentReader;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.FileChange;
@@ -69,6 +72,8 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *   java Harness list-models [provider...]
  *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
  *   java Harness check-tools
+ *   java Harness check-mule
+ *   java Harness check-project /path/to/mule-app
  *
  * Reads keys from ../.env (KEY=value lines). Never prints secret values.
  */
@@ -139,6 +144,11 @@ public class Harness {
         chat(env, provider, file, project, attach, apply, prompt);
       }
       case "check-tools" -> checkTools();
+      case "check-mule" -> checkMule();
+      case "check-project" -> {
+        List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(new DiskProject(Path.of(args[1])), null));
+        System.out.print(problems.isEmpty() ? "No problems found\n" : MuleChecks.describe(problems));
+      }
       case "check-attach" -> checkAttach();
       case "check-html" -> checkHtml(args.length > 1 ? Path.of(args[1]) : null);
       case "check-render" -> checkRender();
@@ -271,6 +281,9 @@ public class Harness {
       return;
     }
     System.out.println("\nDID  " + turn.activity());
+    if (!turn.problems().isEmpty()) {
+      System.out.print("\nCHECKS  still failing:\n" + MuleChecks.describe(turn.problems()));
+    }
     for (FileChange change : turn.changes().all()) {
       System.out.println("\n== " + change.summary());
       System.out.print(LineDiff.unified(change.path(), change.before(), change.after(), 2));
@@ -302,7 +315,7 @@ public class Harness {
     failed += expect(tools, "list_files", "{\"directory\":\"\"}", "src/main/mule/api.xml");
     ProjectTools readOnly = new ProjectTools(new DiskProject(root), new ChangeSet(), false);
     failed += check("Ask/Plan offer only read tools", readOnly.specifications().stream()
-        .map(spec -> spec.name()).toList().equals(List.of("list_files", "read_file")));
+        .map(spec -> spec.name()).toList().equals(List.of("list_files", "read_file", "check_project")));
     failed += expect(readOnly, "write_file", "{\"path\":\"src/x.xml\",\"content\":\"x\"}",
         "ERROR: this mode cannot change files");
     failed += expect(tools, "edit_file",
@@ -320,6 +333,165 @@ public class Harness {
     System.out.println(changes.all().size() == 2 ? "PASS  2 proposed files" : "FAIL  expected 2 proposed files");
     failed += changes.all().size() == 2 ? 0 : 1;
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  private static final String MULE_HEAD = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <mule xmlns="http://www.mulesoft.org/schema/mule/core"
+            xmlns:http="http://www.mulesoft.org/schema/mule/http"
+            xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"%s
+            xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+              http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd%s">
+      """;
+  private static final String GLOBAL_BODY = """
+        <configuration-properties doc:name="Configuration properties" file="config.yaml"/>
+        <http:listener-config name="HTTP_Listener_config">
+          <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+        </http:listener-config>
+        <os:object-store name="store"/>
+      """;
+  private static final String API_BODY = """
+        <flow name="main">
+          <http:listener doc:name="Listener" config-ref="HTTP_Listener_config" path="/orders"/>
+          <flow-ref doc:name="Helper" name="helper"/>
+          <error-handler>
+            <on-error-propagate type="MULE:CONNECTIVITY"/>
+          </error-handler>
+        </flow>
+        <sub-flow name="helper">
+          <logger level="INFO" message="${api.timeout}"/>
+        </sub-flow>
+      """;
+  private static final String OS_NS = "\n      xmlns:os=\"http://www.mulesoft.org/schema/mule/os\"";
+  private static final String OS_LOCATION =
+      "\n        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd";
+  private static final String KAFKA_NS = "\n      xmlns:kafka=\"http://www.mulesoft.org/schema/mule/kafka\"";
+  private static final String KAFKA_LOCATION = "\n        http://www.mulesoft.org/schema/mule/kafka"
+      + " http://www.mulesoft.org/schema/mule/kafka/current/mule-kafka.xsd";
+  private static final String POM = """
+      <project xmlns="http://maven.apache.org/POM/4.0.0">
+        <dependencies>
+          <dependency><groupId>org.mule.connectors</groupId><artifactId>mule-http-connector</artifactId><classifier>mule-plugin</classifier></dependency>
+          <dependency><groupId>org.mule.connectors</groupId><artifactId>mule-objectstore-connector</artifactId><classifier>mule-plugin</classifier></dependency>
+          %s
+        </dependencies>
+      </project>
+      """;
+
+  private static String muleFile(String namespaces, String locations, String body) {
+    return MULE_HEAD.formatted(namespaces, locations) + body + "</mule>\n";
+  }
+
+  // Offline: each Mule check, that proposals answer only for problems they add, and the tool wiring.
+  private static void checkMule() throws Exception {
+    Map<String, String> base = new TreeMap<>();
+    base.put("pom.xml", POM.formatted(""));
+    base.put("src/main/resources/config.yaml", "http:\n  port: \"8081\"\napi:\n  # seconds\n  timeout: \"30\"\n");
+    base.put("src/main/resources/secure.properties", "db.password=![abc]\n");
+    base.put("src/main/mule/global.xml", muleFile(OS_NS, OS_LOCATION, GLOBAL_BODY));
+    base.put("src/main/mule/api.xml", muleFile("", "", API_BODY));
+    String api = "src/main/mule/api.xml";
+    int failed = 0;
+
+    failed += check("the sample project passes", MuleChecks.check(base).isEmpty());
+    failed += expectProblem("dangling config-ref", base, api,
+        muleFile("", "", API_BODY.replace("HTTP_Listener_config", "Missing_config")),
+        "config-ref=\"Missing_config\" does not match the name of any global element");
+    failed += expectProblem("dangling flow-ref", base, api,
+        muleFile("", "", API_BODY.replace("name=\"helper\"/>", "name=\"nowhere\"/>")),
+        "flow-ref name=\"nowhere\" does not match any flow or sub-flow");
+    failed += expectProblem("undefined property", base, api,
+        muleFile("", "", API_BODY.replace("${api.timeout}", "${api.missing}")), "${api.missing} is not defined");
+    failed += expectProblem("secure property defined in a .properties file", base, api,
+        muleFile("", "", API_BODY.replace("${api.timeout}", "${secure::db.password}")), null);
+    failed += expectProblem("invented MULE error type", base, api,
+        muleFile("", "", API_BODY.replace("MULE:CONNECTIVITY", "MULE:NOT_FOUND")),
+        "MULE:NOT_FOUND is not a Mule core error type");
+    failed += expectProblem("raise-error with a connector namespace", base, api,
+        muleFile("", "", API_BODY.replace("<logger", "<raise-error type=\"HTTP:NOT_FOUND\"/>\n    <logger")),
+        "HTTP belongs to a connector or module");
+    failed += expectProblem("raise-error with an app namespace", base, api,
+        muleFile("", "", API_BODY.replace("<logger", "<raise-error type=\"APP:NOT_FOUND\"/>\n    <logger")), null);
+    failed += expectProblem("MULE:VALIDATION is a core error type", base, api,
+        muleFile("", "", API_BODY.replace("MULE:CONNECTIVITY", "MULE:VALIDATION")), null);
+    failed += expectProblem("error-mapping into a connector namespace", base, api, muleFile("", "", API_BODY.replace(
+        "path=\"/orders\"/>", "path=\"/orders\">\n      <error-mapping sourceType=\"MULE:ANY\" targetType=\"HTTP:BAD\"/>\n"
+            + "    </http:listener>")), "error-mapping targetType \"HTTP:BAD\": HTTP belongs to a connector");
+    Map<String, String> exchange = new TreeMap<>(base);
+    exchange.put("pom.xml", POM.formatted(
+        "<dependency><groupId>0b1e2f</groupId><artifactId>mule-plugin-openrouter-llm-api</artifactId></dependency>"));
+    failed += expectProblem("Exchange connector named after its asset, mule-mule-*.xsd", exchange, api, muleFile(
+        "\n      xmlns:open-router-api=\"http://www.mulesoft.org/schema/mule/mule-open-router-api\"",
+        "\n        http://www.mulesoft.org/schema/mule/mule-open-router-api"
+            + " http://www.mulesoft.org/schema/mule/mule-open-router-api/current/mule-mule-open-router-api.xsd",
+        API_BODY.replace("<logger", "<open-router-api:chat config-ref=\"HTTP_Listener_config\"/>\n    <logger")), null);
+    failed += expectProblem("unbound prefix", base, "src/main/mule/db.xml",
+        muleFile("", "", "  <flow name=\"query\">\n    <db:select/>\n  </flow>\n"), "is not bound");
+    failed += expectProblem("malformed XML", base, api,
+        muleFile("", "", API_BODY.replaceFirst("</flow>", "")), "not well-formed XML");
+    String kafkaBody = API_BODY.replace("<logger", "<kafka:publish config-ref=\"HTTP_Listener_config\"/>\n    <logger");
+    failed += expectProblem("connector namespace without a pom.xml dependency", base, api,
+        muleFile(KAFKA_NS, KAFKA_LOCATION, kafkaBody), "namespace \"kafka\" is used but pom.xml has no dependency");
+    Map<String, String> withKafka = new TreeMap<>(base);
+    withKafka.put("pom.xml", POM.formatted(
+        "<dependency><groupId>com.mulesoft.connectors</groupId><artifactId>mule-kafka-connector</artifactId></dependency>"));
+    failed += expectProblem("connector namespace with its dependency", withKafka, api,
+        muleFile(KAFKA_NS, KAFKA_LOCATION, kafkaBody), null);
+    failed += expectProblem("namespace missing from xsi:schemaLocation", withKafka, api,
+        muleFile(KAFKA_NS, "", kafkaBody), "kafka is used but missing from xsi:schemaLocation");
+    failed += expectProblem("doc namespace in xsi:schemaLocation", base, api, muleFile("",
+        "\n        http://www.mulesoft.org/schema/mule/documentation http://www.mulesoft.org/schema/mule/documentation/current/mule-documentation.xsd",
+        API_BODY), "lists the doc namespace");
+    failed += expectProblem("wrong schema URL", base, api,
+        muleFile("", "", API_BODY).replace("current/mule-http.xsd", "current/http.xsd"),
+        "should be http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd");
+    failed += expectProblem("missing configuration-properties file", base, "src/main/mule/global.xml",
+        muleFile(OS_NS, OS_LOCATION, GLOBAL_BODY.replace("config.yaml", "missing.yaml")),
+        "file=\"missing.yaml\" is not in src/main/resources");
+    failed += expectProblem("malformed pom.xml", base, "pom.xml", "<project><dependencies></project>",
+        "pom.xml line 1: not well-formed XML");
+
+    Map<String, String> imported = new TreeMap<>(base);
+    imported.put("src/main/mule/global.xml",
+        muleFile(OS_NS, OS_LOCATION, GLOBAL_BODY + "  <import file=\"shared.xml\"/>\n"));
+    imported.put(api, muleFile("", "", API_BODY.replace("HTTP_Listener_config", "Shared_config")));
+    failed += check("references are not checked when a file imports another",
+        MuleChecks.check(imported).stream().noneMatch(p -> p.message().contains("does not match")));
+    Map<String, String> broken = new TreeMap<>(base);
+    broken.put(api, muleFile("", "", API_BODY.replace("HTTP_Listener_config", "Missing_config")));
+    failed += expectProblem("a problem already in the project is not blamed on a proposal", broken, api,
+        broken.get(api).replace("level=\"INFO\"", "level=\"DEBUG\""), null);
+
+    Path root = Files.createTempDirectory("msf-mule-checks");
+    for (Map.Entry<String, String> file : broken.entrySet()) {
+      Files.createDirectories(root.resolve(file.getKey()).getParent());
+      Files.writeString(root.resolve(file.getKey()), file.getValue());
+    }
+    ChangeSet changes = new ChangeSet();
+    ProjectTools tools = new ProjectTools(new DiskProject(root), changes);
+    failed += expect(tools, "check_project", "{}", "1 problem found");
+    failed += expect(tools, "edit_file", "{\"path\":\"" + api + "\",\"old_text\":\"${api.timeout}\","
+        + "\"new_text\":\"${api.nope}\"}", "CHECKS: with your proposals applied, the project has 1 problem");
+    failed += check("the turn reports the unfixed problem", tools.problemsIntroduced().size() == 1);
+    failed += expect(tools, "edit_file", "{\"path\":\"" + api + "\",\"old_text\":\"${api.nope}\","
+        + "\"new_text\":\"${api.timeout}\"}", "Checks passed.");
+    failed += check("fixed proposals leave nothing to report", tools.problemsIntroduced().isEmpty());
+    failed += expect(tools, "write_file", "{\"path\":\"README.md\",\"content\":\"hi\"}", "not written yet.");
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // expected null: the change must not add any problem.
+  private static int expectProblem(String name, Map<String, String> base, String path, String content,
+      String expected) {
+    Map<String, String> after = new TreeMap<>(base);
+    after.put(path, content);
+    List<Problem> problems = MuleChecks.introduced(MuleChecks.check(base), MuleChecks.check(after));
+    boolean ok = expected == null ? problems.isEmpty()
+        : problems.stream().anyMatch(problem -> problem.toString().contains(expected));
+    System.out.println((ok ? "PASS" : "FAIL") + "  " + name + (ok && expected == null ? ""
+        : "\n" + (problems.isEmpty() ? "      (no problems)\n" : MuleChecks.describe(problems).indent(4))));
+    return ok ? 0 : 1;
   }
 
   // "path" attaches a file or folder; "lines:path:10-20" attaches those lines.

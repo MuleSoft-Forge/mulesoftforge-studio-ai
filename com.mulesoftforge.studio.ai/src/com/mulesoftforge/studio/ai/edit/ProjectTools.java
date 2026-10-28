@@ -4,6 +4,8 @@ import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.check.Problem;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -33,6 +35,14 @@ public final class ProjectTools {
               .build())
           .build(),
       ToolSpecification.builder()
+          .name("check_project")
+          .description("Run static checks on the Mule XML, pom.xml and properties files, including your pending"
+              + " proposals: well-formed XML, unbound prefixes, xsi:schemaLocation, a pom.xml dependency for each"
+              + " namespace, config-ref and flow-ref targets, undefined ${properties}, and error types."
+              + " Use it to diagnose a project that will not deploy.")
+          .parameters(JsonObjectSchema.builder().build())
+          .build(),
+      ToolSpecification.builder()
           .name("edit_file")
           .description("Propose replacing one exact snippet in an existing file. old_text must occur exactly"
               + " once; include enough surrounding lines to make it unique. Prefer this for small changes.")
@@ -60,6 +70,7 @@ public final class ProjectTools {
   private final ProjectFiles files;
   private final ChangeSet changes;
   private final boolean canEdit;
+  private List<Problem> baseline;
 
   public ProjectTools(ProjectFiles files, ChangeSet changes) {
     this(files, changes, true);
@@ -93,6 +104,7 @@ public final class ProjectTools {
     return switch (request.name()) {
       case "list_files" -> "Listing " + target;
       case "read_file" -> "Reading " + target;
+      case "check_project" -> "Checking the project";
       case "edit_file" -> "Drafting an edit to " + target;
       case "write_file" -> "Drafting " + target;
       default -> request.name() + " " + target;
@@ -110,6 +122,7 @@ public final class ProjectTools {
       return switch (request.name()) {
         case "list_files" -> list(args);
         case "read_file" -> read(args);
+        case "check_project" -> checkProject();
         case "edit_file" -> edit(args);
         case "write_file" -> write(args);
         default -> "ERROR: unknown tool " + request.name();
@@ -180,8 +193,42 @@ public final class ProjectTools {
     String before = changes.contains(path) ? null : files.read(path);
     boolean isNew = !changes.contains(path) && before == null;
     changes.stage(path, before, content);
-    return "Proposed " + (isNew ? "new file " : "change to ") + path
+    String result = "Proposed " + (isNew ? "new file " : "change to ") + path
         + ". It is pending the user's review and is not written yet.";
+    if (!MuleChecks.watches(path)) {
+      return result;
+    }
+    List<Problem> problems = problemsIntroduced();
+    if (problems.isEmpty()) {
+      return result + " Checks passed.";
+    }
+    return result + "\n\nCHECKS: with your proposals applied, the project has " + problems.size()
+        + (problems.size() == 1 ? " problem" : " problems") + " that it did not have before:\n"
+        + MuleChecks.describe(problems)
+        + "Fix them with another edit before you finish, or tell the user why they are fine.";
+  }
+
+  // Problems the pending proposals add to the project. Empty when the checks cannot run.
+  public List<Problem> problemsIntroduced() {
+    try {
+      if (baseline == null) {
+        baseline = MuleChecks.check(MuleChecks.snapshot(files, null));
+      }
+      return MuleChecks.introduced(baseline, MuleChecks.check(MuleChecks.snapshot(files, changes)));
+    } catch (Exception e) {
+      return List.of();
+    }
+  }
+
+  private String checkProject() throws Exception {
+    List<Problem> problems = MuleChecks.check(MuleChecks.snapshot(files, changes));
+    String scope = changes.isEmpty() ? "" : ", including your pending proposals";
+    if (problems.isEmpty()) {
+      return "No problems found" + scope + ". These are static checks of the files; they do not run the app.";
+    }
+    return problems.size() + (problems.size() == 1 ? " problem" : " problems") + " found" + scope + ":\n"
+        + MuleChecks.describe(problems)
+        + "These are static checks of the files; they do not run the app.";
   }
 
   private String current(String path) throws Exception {

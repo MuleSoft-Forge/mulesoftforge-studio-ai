@@ -80,6 +80,17 @@ Ask for a change ("add a /health flow", "log the request method"). The AI can li
 - Accept refuses if the file has unsaved edits or changed on disk since it was proposed.
 - Paths must stay inside the project. Absolute paths, `..`, and `target/`, `.git/`, `.mule/`, `.settings/`, `bin/` are refused.
 
+**Checks on every proposal.** When the AI proposes a change to Mule XML under `src/main/mule` or `src/test/munit`, `pom.xml`, or a `.properties`/`.yaml` file under `src/main/resources`, the plugin checks the project as it would be with the proposals applied, and returns any new problems to the AI so it fixes them before you see the change:
+
+- XML that is not well-formed, or uses a prefix without declaring it.
+- A namespace missing from `xsi:schemaLocation`, the doc namespace listed there, or a schema URL that does not follow `…/<name>/current/mule-<name>.xsd`.
+- A connector or module namespace with no matching dependency in `pom.xml`.
+- `config-ref`, `tlsContext`, `objectStore`, `listenerConfig`, `cachingStrategy-ref`, `defaultErrorHandler-ref`, `error-handler ref` or `flow-ref` pointing at a name that does not exist. This check is skipped when a file uses `<import>` or the project uses a domain.
+- `${property}` or `${secure::property}` not defined in a `.properties`/`.yaml` file or a `global-property`, and `configuration-properties` naming a file that is not there.
+- Error types: `MULE:` types that do not exist, and `raise-error` or `error-mapping targetType` using a connector's namespace.
+
+Problems already in the project are not blamed on a proposal. Whatever the AI leaves unfixed shows as a note under its answer. In any mode the AI can also run the same checks on the whole project (`check_project`), which helps with "why won't this deploy?". The checks read files only; they do not build or run the app.
+
 ### Saved chats and cost
 
 Chats save automatically after every answer to `<workspace>/.metadata/.plugins/com.mulesoftforge.studio.ai/chats/` (one JSON file per chat plus `index.json`). Open-file contents and API keys are not saved. **History ▾** in the view lists recent chats: Open (continue where you left off), Rename, Export as Markdown, Delete. Unreviewed proposals expire when a chat is closed.
@@ -107,6 +118,8 @@ cd harness
 ./run.sh test-connection openrouter openai
 ./run.sh list-models openai
 ./run.sh check-tools                                   # offline: path guard and edit rules
+./run.sh check-mule                                    # offline: the proposal checks
+./run.sh check-project /abs/path/to/mule-app           # run the proposal checks on a real project
 ./run.sh check-render                                  # offline: Markdown and code colouring
 ./run.sh check-history                                 # offline: save, reload, export, prune, cost ledger
 ./run.sh check-attach                                  # offline: attachments, size caps, cancel note
@@ -136,6 +149,7 @@ com.mulesoftforge.studio.ai/            the plugin
   src/.../settings/   providers, saved settings (API keys in Eclipse secure storage)
   src/.../llm/        LangChain4j model creation, chat loop with tool calls
   src/.../edit/       project tools, path guard, staged changes, line diff (no Eclipse imports)
+  src/.../check/      static checks of Mule XML, pom.xml and properties (no Eclipse imports)
   src/.../history/    saved chats, cost ledger, Markdown export (no Eclipse imports)
   src/.../render/     Markdown rendering and code highlighting (no Eclipse imports)
   src/.../ui/         chat view, change review, preferences page, open-file capture
