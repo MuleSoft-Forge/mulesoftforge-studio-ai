@@ -75,7 +75,11 @@ public final class HtmlPage {
         p.comment().css(), p.string().css(), p.number().css(),
         p.keyword().css(), p.key().css(), p.expression().css(),
         p.directive().css(),
-        p.you().css(), p.ai().css(), p.error().css(), p.note().css());
+        p.you().css(), p.ai().css(), p.error().css(), p.note().css())
+        + """
+        .ai .body { background: %s; border: 1px solid %s; border-radius: 8px; padding: 6px 10px; }
+        .ai .body pre { background: %s; }
+        """.formatted(p.panel().css(), border, theme.background().css());
     return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">

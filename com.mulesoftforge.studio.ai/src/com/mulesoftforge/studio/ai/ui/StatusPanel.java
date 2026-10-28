@@ -18,6 +18,8 @@ final class StatusPanel {
 
   StatusPanel(Composite parent) {
     panel = new Composite(parent, SWT.NONE);
+    panel.setBackground(TranscriptStyles.panel(parent));
+    panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
     GridLayout layout = new GridLayout(1, false);
     layout.marginWidth = 8;
     layout.verticalSpacing = 3;

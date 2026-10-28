@@ -86,7 +86,17 @@ final class Composer {
     this.page = page;
     this.listener = listener;
 
-    attachedRow = new Composite(root, SWT.NONE);
+    // A grey panel behind the message box and its controls; text boxes and pickers keep their own white.
+    Composite panel = new Composite(root, SWT.NONE);
+    GridLayout panelLayout = new GridLayout(1, false);
+    panelLayout.marginWidth = 6;
+    panelLayout.marginHeight = 6;
+    panel.setLayout(panelLayout);
+    panel.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
+    panel.setBackground(TranscriptStyles.panel(root));
+    panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
+
+    attachedRow = new Composite(panel, SWT.NONE);
     GridLayout attachedLayout = new GridLayout(2, false);
     attachedLayout.marginHeight = 0;
     attachedRow.setLayout(attachedLayout);
@@ -98,7 +108,7 @@ final class Composer {
     removeAttached.setToolTipText("Do not send these with the next message");
     removeAttached.addListener(SWT.Selection, e -> clearAttached());
 
-    input = new Text(root, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+    input = new Text(panel, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
     GridData inputData = new GridData(SWT.FILL, SWT.BOTTOM, true, false);
     inputData.heightHint = input.getLineHeight() * 4;
     input.setLayoutData(inputData);
@@ -114,7 +124,7 @@ final class Composer {
       }
     });
 
-    Composite actions = new Composite(root, SWT.NONE);
+    Composite actions = new Composite(panel, SWT.NONE);
     GridLayout actionsLayout = new GridLayout(6, false);
     actionsLayout.verticalSpacing = 2;
     actions.setLayout(actionsLayout);

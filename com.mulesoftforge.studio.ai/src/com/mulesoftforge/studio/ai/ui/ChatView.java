@@ -123,6 +123,9 @@ public class ChatView extends ViewPart {
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
     status = new StatusPanel(middle);
     middle.setWeights(78, 22);
+    // After the children exist: the transcript takes its theme from its parent's background.
+    middle.setBackground(TranscriptStyles.divider(parent));
+    middle.setSashWidth(3);
 
     changes = new ChangesPanel(parent, page, new ChangesPanel.Listener() {
       @Override

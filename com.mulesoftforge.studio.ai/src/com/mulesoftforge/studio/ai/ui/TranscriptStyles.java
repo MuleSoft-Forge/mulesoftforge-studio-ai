@@ -31,6 +31,15 @@ final class TranscriptStyles {
     return new Palette.Rgb(rgb.red, rgb.green, rgb.blue);
   }
 
+  // The grey for panels and dividers that suits the theme of control (light or dark).
+  static Color panel(Control control) {
+    return color(Palette.forBackground(rgb(control.getBackground().getRGB())).panel());
+  }
+
+  static Color divider(Control control) {
+    return color(Palette.forBackground(rgb(control.getBackground().getRGB())).divider());
+  }
+
   private static Color color(Palette.Rgb rgb) {
     return new Color(rgb.red(), rgb.green(), rgb.blue());
   }
