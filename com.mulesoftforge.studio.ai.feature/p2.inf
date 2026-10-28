@@ -1,0 +1,5 @@
+# Installing the feature adds the MuleSoftForge update site to Studio's Available Software Sites, so
+# Help > Check for Updates finds new releases. type:0 is the metadata repository, type:1 the artifact repository.
+instructions.configure=\
+  org.eclipse.equinox.p2.touchpoint.eclipse.addRepository(type:0,location:https${#58}//docs.mulesoftforge.com/studio-ai/updates/,name:MuleSoftForge,enabled:true);\
+  org.eclipse.equinox.p2.touchpoint.eclipse.addRepository(type:1,location:https${#58}//docs.mulesoftforge.com/studio-ai/updates/,name:MuleSoftForge,enabled:true);

@@ -1,0 +1,16 @@
+target/
+bin/
+.classpath
+.project
+.settings/
+.DS_Store
+*.class
+
+# Harness compile output
+harness/out/
+
+# Local secrets
+.env
+
+# Copied from Maven at build time
+com.mulesoftforge.studio.ai/lib/

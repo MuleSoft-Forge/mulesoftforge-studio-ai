@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<site>
+   <feature id="com.mulesoftforge.studio.ai.feature" version="0.0.0">
+      <category name="mulesoftforge"/>
+   </feature>
+   <category-def name="mulesoftforge" label="MuleSoftForge"/>
+</site>

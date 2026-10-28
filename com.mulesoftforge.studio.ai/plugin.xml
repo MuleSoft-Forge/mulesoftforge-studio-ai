@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+  <extension point="org.eclipse.ui.views">
+    <category id="com.mulesoftforge.studio.ai.category" name="MuleSoftForge"/>
+    <view
+        id="com.mulesoftforge.studio.ai.chat"
+        name="MuleSoftForge AI"
+        category="com.mulesoftforge.studio.ai.category"
+        class="com.mulesoftforge.studio.ai.ui.ChatView"
+        icon="icons/forge16.png"
+        restorable="true"/>
+  </extension>
+  <extension point="org.eclipse.ui.preferencePages">
+    <page
+        id="com.mulesoftforge.studio.ai.prefs"
+        name="MuleSoftForge AI"
+        class="com.mulesoftforge.studio.ai.ui.AiPreferencePage"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.commands">
+    <command
+        id="com.mulesoftforge.studio.ai.ask"
+        name="Ask MuleSoftForge AI"
+        description="Open MuleSoftForge AI with the selected lines, files or folders attached"
+        categoryId="com.mulesoftforge.studio.ai.commands"/>
+    <category id="com.mulesoftforge.studio.ai.commands" name="MuleSoftForge"/>
+  </extension>
+  <extension point="org.eclipse.ui.handlers">
+    <handler
+        commandId="com.mulesoftforge.studio.ai.ask"
+        class="com.mulesoftforge.studio.ai.ui.AskAiHandler"/>
+  </extension>
+  <extension point="org.eclipse.ui.commandImages">
+    <image commandId="com.mulesoftforge.studio.ai.ask" icon="icons/forge16.png"/>
+  </extension>
+  <extension point="org.eclipse.ui.bindings">
+    <key
+        commandId="com.mulesoftforge.studio.ai.ask"
+        schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+        sequence="M1+M3+I"/>
+  </extension>
+
+  <extension point="org.eclipse.ui.menus">
+    <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
+      <toolbar id="com.mulesoftforge.studio.ai.toolbar" label="MuleSoftForge AI">
+        <command
+            commandId="com.mulesoftforge.studio.ai.ask"
+            label="Ask AI"
+            tooltip="Ask MuleSoftForge AI about the selection"
+            style="push"/>
+      </toolbar>
+    </menuContribution>
+    <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
+      <command
+          commandId="com.mulesoftforge.studio.ai.ask"
+          label="Ask MuleSoftForge AI"
+          style="push">
+        <visibleWhen checkEnabled="false">
+          <or>
+            <with variable="activeMenuSelection">
+              <instanceof value="org.eclipse.jface.text.ITextSelection"/>
+            </with>
+            <with variable="activeMenuSelection">
+              <and>
+                <instanceof value="org.eclipse.jface.viewers.IStructuredSelection"/>
+                <iterate ifEmpty="false" operator="or">
+                  <or>
+                    <adapt type="org.eclipse.core.resources.IResource"/>
+                    <adapt type="org.eclipse.core.resources.IMarker"/>
+                  </or>
+                </iterate>
+              </and>
+            </with>
+          </or>
+        </visibleWhen>
+      </command>
+    </menuContribution>
+  </extension>
+</plugin>

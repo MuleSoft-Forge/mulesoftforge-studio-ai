@@ -1,0 +1,144 @@
+# MuleSoftForge Studio AI (proof of concept)
+
+AI chat inside Anypoint Studio. It uses [LangChain4j](https://docs.langchain4j.dev/) so one plugin can talk to:
+
+- OpenRouter (model `openrouter/auto` lets OpenRouter choose)
+- MuleSoft AI Gateway LLM Proxy (Flex Gateway)
+- OpenAI, Anthropic, Ollama (local)
+- any other OpenAI-compatible endpoint (LiteLLM, vLLM, …)
+
+Built for Anypoint Studio 7.28 (Eclipse 4.31, Java 17).
+
+## Build
+
+Needs JDK 17 and Maven.
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 mvn -DskipTests clean package
+```
+
+The installable update site is `com.mulesoftforge.studio.ai.updatesite/target/repository`.
+
+## Install into Studio
+
+Users install from the update site on the MuleSoftForge docs site; the install guide is [docs.mulesoftforge.com/studio-ai](https://docs.mulesoftforge.com/studio-ai/).
+
+1. **Help > Install New Software… > Add…** and paste `https://docs.mulesoftforge.com/studio-ai/updates/` (or **Local…** and choose `com.mulesoftforge.studio.ai.updatesite/target/repository` for a local build).
+2. Tick **MuleSoftForge Studio AI**, finish, and restart Studio. Installing also adds the site to Available Software Sites (`com.mulesoftforge.studio.ai.feature/p2.inf`), so **Help > Check for Updates** finds new releases.
+3. **Window > Show View > Other… > MuleSoftForge > MuleSoftForge AI**.
+4. Click **Settings** in the view (or **Preferences > MuleSoftForge AI**), pick a provider, enter the API key, and click **Test connection**.
+
+To remove it: **Help > About Anypoint Studio > Installation Details**, select it, **Uninstall**.
+
+The view's header shows the installed version (`v0.1.0`). Once per Studio session it reads `https://docs.mulesoftforge.com/studio-ai/updates/latest.json`; when that names a newer version the label becomes **Update to x.y.z** and opens **Help > Check for Updates**. A copy in `dropins` cannot be updated that way, so the link opens the install guide instead. Turn the check off in Preferences > MuleSoftForge AI > Chat view.
+
+`./install-dropins.sh` (below) is for your own build-and-try loop. Remove the dropins jar before installing from the update site; two copies conflict.
+
+## Release
+
+1. Bump the version: `mvn org.eclipse.tycho:tycho-versions-plugin:set-version -DnewVersion=0.2.0-SNAPSHOT` (updates the poms, `MANIFEST.MF` and `feature.xml`).
+2. `./publish-update-site.sh --notes "What changed"` builds, runs the offline checks, copies the update site into `../website/docs/public/studio-ai/updates/0.2.0/`, and rewrites the composite index, `p2.index` and `latest.json`. Every version stays, so users can roll back. It refuses to overwrite a published version unless you pass `--replace`.
+3. In `website/`, commit, open a PR (its preview deploy serves the site at the preview URL for a test install), merge, then run **Deploy to Production**. Users see the update after that deploy.
+
+## Use
+
+Open a Mule file, type a question, press Enter. **Include open file** sends the active editor's content (unsaved edits included when the editor exposes text) with your message. **New chat** clears the conversation.
+
+The first drop-down picks the mode:
+
+- **Ask**: answers and explains. It can read the project but never proposes changes.
+- **Agent**: reads the project and proposes changes for review (below).
+- **Plan**: reads the project and writes a plan (goal, changes per file, risks, how to test). **Build this plan in Agent mode** under the answer switches to Agent and asks it to propose the changes.
+
+Ask and Plan only get the read tools, and the tool layer refuses edits in those modes as well.
+
+The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Windows) for message bubbles, code blocks with Copy / Insert at cursor, real tables and collapsible progress steps. If the browser cannot start, or **Preferences > MuleSoftForge AI > Chat view** is turned off, the plain text view is used instead. Model output is escaped, the page cannot navigate, and links open through Studio.
+
+**+ Context** attaches more to the next message: files (their content), folders (a list of the files inside), the lines selected in the editor, or the project's whole file list. Attachments show above the input and clear once sent. Large attachments are cut at 40k characters each and 120k in total; anything over the total is named so the AI can read it with its tools.
+
+**Ask MuleSoftForge AI** (MuleSoftForge anvil on the toolbar, right-click menu in editors, Project/Package Explorer, Problems and Console, or Cmd/Ctrl+Alt+I) opens the view with the selected lines, files or folders attached.
+
+**Fixing problems.** + Context > **Problems in &lt;file&gt;** or **Problems in &lt;project&gt;** attaches what Studio's Problems view lists (severity, file, line, message; up to 200). You can also select rows in the Problems view, right-click, and choose **Ask MuleSoftForge AI**. If the message box is empty it fills in "Fix these problems." and switches from Ask to Agent mode, so the AI proposes the fix as a reviewable change.
+
+**Console output.** + Context > **Console: &lt;name&gt;** attaches a console's text, such as Maven Output from a failed build or a running Mule app's log; the console showing in the Console view is listed first. In the Console view itself, right-click (or Cmd/Ctrl+Alt+I) and choose **Ask MuleSoftForge AI** to attach the selected text, or the whole console when nothing is selected. Long output keeps its last 40k characters, where errors usually are. If it shows a failure (ERROR, BUILD FAILURE, an exception) and the message box is empty, it fills in "Explain the error in this console output and fix its cause."
+
+**Speak instead of typing.** The mic button next to **Send** starts the operating system's dictation in the message box: macOS Dictation (turn it on in System Settings > Keyboard > Dictation), or Windows voice typing (Windows+H). The plugin never records audio itself and sends none to the AI provider; the system turns speech into text and the text is sent like typing. Press Enter, or click Send, when it reads right.
+
+If you cancel a request, the AI is told with your next message that it was dropped, so it does not assume the work was done.
+
+The box next to **New chat** picks the model for the current provider. Choose a suggestion or type any model id and press Enter. Underneath it shows the list price per 1M input and output tokens; hover for the prices of every suggestion. You can switch models mid-chat, and the conversation carries over.
+
+### Changing files
+
+Ask for a change ("add a /health flow", "log the request method"). The AI can list and read files in the project of the active editor (or the one selected in Project Explorer), and proposes edits through tools. Nothing is written until you review it:
+
+- Proposals appear under **Proposed changes**. **Review diff** (or double-click) opens the Eclipse compare editor: current file on the left, proposal on the right.
+- **Accept** writes the file with local history kept. Undo with right-click > **Replace With > Local History**.
+- **Reject** discards it. The AI is told what you accepted or rejected with your next message.
+- Accept refuses if the file has unsaved edits or changed on disk since it was proposed.
+- Paths must stay inside the project. Absolute paths, `..`, and `target/`, `.git/`, `.mule/`, `.settings/`, `bin/` are refused.
+
+### Saved chats and cost
+
+Chats save automatically after every answer to `<workspace>/.metadata/.plugins/com.mulesoftforge.studio.ai/chats/` (one JSON file per chat plus `index.json`). Open-file contents and API keys are not saved. **History ▾** in the view lists recent chats: Open (continue where you left off), Rename, Export as Markdown, Delete. Unreviewed proposals expire when a chat is closed.
+
+Every model call is also appended to `usage.jsonl` (tokens and amounts only). The cost line shows this chat, today, and this month; the tooltip adds the Studio session, all time, and the chat's project. Deleting chats does not remove their cost.
+
+### Corporate networks (Zscaler and similar)
+
+If the company proxy re-signs HTTPS, calls fail with "certificate is not trusted". **Preferences > MuleSoftForge AI > Network**:
+
+- **Trust the operating system's certificates** (on by default) adds the Windows certificate store, the macOS keychains, or the Linux CA bundle. That usually covers a proxy root CA that IT has pushed to laptops.
+- **Corporate CA (PEM)**: a `.pem`/`.crt` file, or a folder of them, from IT.
+- **Check certificates** shows how many certificates came from each source and any file problems.
+
+Test connection and Refresh models use the settings on screen, before you click Apply.
+
+**Preferences > MuleSoftForge AI > Chat history**: turn saving off, set how many days to keep chats (default 90, 0 = forever), or delete all chats.
+
+## Test without Studio
+
+`harness/run.sh` uses the same code with keys from `.env`:
+
+```bash
+cd harness
+./run.sh test-connection openrouter openai
+./run.sh list-models openai
+./run.sh check-tools                                   # offline: path guard and edit rules
+./run.sh check-render                                  # offline: Markdown and code colouring
+./run.sh check-history                                 # offline: save, reload, export, prune, cost ledger
+./run.sh check-attach                                  # offline: attachments, size caps, cancel note
+./run.sh check-html /tmp/preview.html                  # offline: rich chat HTML and escaping; writes a preview page
+./run.sh check-updates [latest.json URL]               # offline: version compare and latest.json; with a URL, fetches it
+./run-checks.sh                                        # every offline check, as install and publish run them
+./run.sh chat --mode plan --project /tmp/proj "add a /health endpoint"   # modes: ask, agent, plan
+./run.sh chat --project /tmp/proj --attach src --lines src/main/mule/app.xml:1-12 "explain this"
+./run.sh prices openai anthropic                       # what the model picker shows, with list prices
+./run.sh check-tls                                     # certificate sources, trusted and untrusted HTTPS
+CA_PEM=~/corp-root.pem ./run.sh test-connection openai # try a corporate CA (USE_SYSTEM_CA=false to skip OS certs)
+./run.sh list-chats                                    # chats and totals saved by Studio
+./run.sh show-chat <id>                                # one saved chat as Markdown
+./run.sh chat --provider openai --project /tmp/proj "change the listener path to /api"
+./run.sh chat --provider openai --project /tmp/proj --apply "add a health flow"
+```
+
+`--project` prints each proposed diff; `--apply` also writes them to that folder. Shell variables fill in anything `.env` does not set.
+
+`./install-dropins.sh` runs the offline checks before copying into Studio and stops if any fail (`--skip-checks` to bypass).
+
+## Layout
+
+```
+com.mulesoftforge.studio.ai/            the plugin
+  src/.../settings/   providers, saved settings (API keys in Eclipse secure storage)
+  src/.../llm/        LangChain4j model creation, chat loop with tool calls
+  src/.../edit/       project tools, path guard, staged changes, line diff (no Eclipse imports)
+  src/.../history/    saved chats, cost ledger, Markdown export (no Eclipse imports)
+  src/.../render/     Markdown rendering and code highlighting (no Eclipse imports)
+  src/.../ui/         chat view, change review, preferences page, open-file capture
+  lib/                LangChain4j jars, copied by Maven at build time (not in git)
+com.mulesoftforge.studio.ai.feature/    installable feature
+com.mulesoftforge.studio.ai.updatesite/ update site for Install New Software
+install-dropins.sh                      build, check, copy into Studio's dropins (development)
+publish-update-site.sh                  build, check, add a release to the website's update site
+```
