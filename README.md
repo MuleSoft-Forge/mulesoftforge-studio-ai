@@ -98,7 +98,7 @@ Problems already in the project are not blamed on a proposal. Whatever the AI le
 
 Chats save automatically after every answer to `<workspace>/.metadata/.plugins/com.mulesoftforge.studio.ai/chats/` (one JSON file per chat plus `index.json`). Open-file contents and API keys are not saved. **History ▾** in the view lists recent chats: Open (continue where you left off), Rename, Export as Markdown, Delete. Unreviewed proposals expire when a chat is closed.
 
-Every model call is also appended to `usage.jsonl` (tokens and amounts only). The cost line shows this chat, today, and this month; the tooltip adds the Studio session, all time, and the chat's project. Deleting chats does not remove their cost.
+Every model call is also appended to `usage.jsonl` (tokens and amounts only). The column to the right of the transcript shows the model in use with its list price, and what this chat, today and this month have cost; the tooltip adds the Studio session, all time, and the chat's project. Deleting chats does not remove their cost.
 
 ### Corporate networks (Zscaler and similar)
 

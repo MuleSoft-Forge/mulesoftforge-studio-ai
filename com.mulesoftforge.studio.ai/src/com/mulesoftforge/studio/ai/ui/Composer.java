@@ -59,6 +59,9 @@ final class Composer {
 
     // A message for the transcript, e.g. an attachment problem.
     void note(String speaker, String text);
+
+    // The chosen model and its list price; price is null while it is being looked up.
+    void modelShown(String model, String price, String priceTable);
   }
 
   static final String FIX_PROBLEMS_PROMPT = "Fix these problems.";
@@ -74,9 +77,8 @@ final class Composer {
   private final Text input;
   private final Combo modePicker;
   private final Combo modelPicker;
-  private final Button send;
+  private final ColorButton send;
   private final Button includeFile;
-  private final Label priceLabel;
   private boolean busy;
 
   Composer(Composite root, IWorkbenchPage page, Listener listener) {
@@ -160,8 +162,9 @@ final class Composer {
       }
     });
     mic.addListener(SWT.Selection, e -> dictate());
-    send = new Button(actions, SWT.PUSH);
+    send = new ColorButton(actions);
     send.setText("Send");
+    send.setTone(ColorButton.Tone.GO);
     send.addListener(SWT.Selection, e -> {
       if (busy) {
         listener.cancel();
@@ -173,9 +176,7 @@ final class Composer {
     includeFile = new Button(actions, SWT.CHECK);
     includeFile.setText("Include open file");
     includeFile.setSelection(true);
-    priceLabel = new Label(actions, SWT.RIGHT);
-    priceLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 5, 1));
-    priceLabel.setFont(TranscriptStyles.italic());
+    includeFile.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false, 6, 1));
 
     showAttached();
     refreshModels();
@@ -295,15 +296,14 @@ final class Composer {
     this.busy = busy;
     send.setEnabled(true);
     send.setText(busy ? "Cancel" : "Send");
+    send.setTone(busy ? ColorButton.Tone.STOP : ColorButton.Tone.GO);
     modelPicker.setEnabled(!busy);
     modePicker.setEnabled(!busy);
-    send.getParent().layout();
   }
 
   void setCancelling() {
     send.setEnabled(false);
     send.setText("Cancelling…");
-    send.getParent().layout();
   }
 
   // The curated models for the current provider, those Refresh models last fetched, and whatever is chosen,
@@ -365,8 +365,7 @@ final class Composer {
 
   // The price list is fetched over the network the first time, so prices are looked up in a job.
   private void showPrices(Provider provider, String current, List<String> models) {
-    priceLabel.setText("Checking price…");
-    priceLabel.getParent().layout();
+    listener.modelShown(current, null, null);
     Job job = Job.create("MuleSoftForge AI model prices", monitor -> {
       String price = Pricing.priceText(provider, current);
       StringBuilder table = new StringBuilder("List prices per 1M tokens (input · output):");
@@ -375,13 +374,11 @@ final class Composer {
       }
       table.append("\n\nType any other model id and press Enter.");
       Display.getDefault().asyncExec(() -> {
-        if (priceLabel.isDisposed() || !current.equals(modelPicker.getText().trim())) {
+        if (modelPicker.isDisposed() || !current.equals(modelPicker.getText().trim())) {
           return;
         }
-        priceLabel.setText(price);
-        priceLabel.setToolTipText(table.toString());
         modelPicker.setToolTipText(table.toString());
-        priceLabel.getParent().layout();
+        listener.modelShown(current, price, table.toString());
       });
       return Status.OK_STATUS;
     });

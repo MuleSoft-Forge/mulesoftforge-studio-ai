@@ -13,6 +13,7 @@ import org.eclipse.jface.action.Action;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
@@ -75,7 +76,7 @@ public class ChatView extends ViewPart {
   private boolean replaying;
 
   private Label header;
-  private Label costLabel;
+  private StatusPanel status;
   private Transcript transcript;
   private ChangesPanel changes;
   private Composer composer;
@@ -87,26 +88,32 @@ public class ChatView extends ViewPart {
     parent.setLayout(new GridLayout(1, false));
     IWorkbenchPage page = getSite().getPage();
 
+    // Provider and Settings on the left; version and History on the right.
     Composite top = new Composite(parent, SWT.NONE);
-    top.setLayout(new GridLayout(4, false));
+    GridLayout topLayout = new GridLayout(5, false);
+    topLayout.marginHeight = 2;
+    top.setLayout(topLayout);
     top.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     header = new Label(top, SWT.NONE);
-    header.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+    header.setFont(TranscriptStyles.bold());
+    Link settings = new Link(top, SWT.NONE);
+    settings.setText("<a>Settings</a>");
+    settings.setToolTipText("Provider, model, API key, network and chat history");
+    settings.addListener(SWT.Selection, e -> openSettings());
+    new Label(top, SWT.NONE).setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     new VersionLink(top, page);
     Link history = new Link(top, SWT.NONE);
     history.setText("<a>History ▾</a>");
     history.setToolTipText("Saved chats in this workspace");
     ChatHistoryMenu historyMenu = new ChatHistoryMenu(parent.getShell(), new HistoryHost());
     history.addListener(SWT.Selection, e -> historyMenu.show(history));
-    Link settings = new Link(top, SWT.NONE);
-    settings.setText("<a>Settings</a>");
-    settings.addListener(SWT.Selection, e -> openSettings());
-    costLabel = new Label(top, SWT.NONE);
-    costLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 4, 1));
-    costLabel.setFont(TranscriptStyles.bold());
 
-    transcript = HtmlTranscript.create(parent, new TranscriptActions(), AiSettings.richTranscript());
-    transcript.control().setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+    // The transcript and, beside it, the model and cost. Drag the divider to resize.
+    SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
+    middle.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+    transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
+    status = new StatusPanel(middle);
+    middle.setWeights(78, 22);
 
     changes = new ChangesPanel(parent, page, new ChangesPanel.Listener() {
       @Override
@@ -144,6 +151,13 @@ public class ChatView extends ViewPart {
       @Override
       public void note(String speaker, String text) {
         append(speaker, text);
+      }
+
+      @Override
+      public void modelShown(String model, String price, String priceTable) {
+        if (!status.isDisposed()) {
+          status.showModel(model, price, priceTable);
+        }
       }
     });
 
@@ -576,19 +590,17 @@ public class ChatView extends ViewPart {
     CostMeter session = CostMeter.SESSION;
     int chats = session.chats();
     UsageLog ledger = Stores.usage();
-    costLabel.setText("This chat: " + chatCost.summary() + "     Today: " + CostMeter.describe(ledger.today())
-        + "     This month: " + CostMeter.describe(ledger.thisMonth()));
     String chatModels = chatCost.breakdown();
     String sessionModels = session.breakdown();
     String project = chatProject == null ? "" : "\nProject " + chatProject + ", all time: "
         + CostMeter.describe(ledger.project(chatProject));
-    costLabel.setToolTipText("This chat\n" + (chatModels.isEmpty() ? "nothing yet" : chatModels)
+    status.showCost(chatCost.summary(), CostMeter.describe(ledger.today()), CostMeter.describe(ledger.thisMonth()),
+        "This chat\n" + (chatModels.isEmpty() ? "nothing yet" : chatModels)
         + "\n\nStudio session (since Studio started), " + chats + (chats == 1 ? " chat" : " chats") + "\n"
         + (sessionModels.isEmpty() ? "nothing yet" : sessionModels)
         + "\n\nAll time in this workspace: " + CostMeter.describe(ledger.allTime()) + project
         + "\n\nOpenRouter amounts are what OpenRouter billed. Amounts marked ~ are estimated from list prices at "
         + Pricing.PRICE_LIST_URL + ". Ollama is free.");
-    costLabel.getParent().layout();
   }
 
   private void refreshHeader() {
