@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.equinox.security.storage.StorageException;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.PreferencePage;
 import org.eclipse.swt.SWT;
@@ -244,6 +245,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
       return true;
+    } catch (StorageException e) {
+      setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD
+          ? "Could not save the API key: Eclipse secure storage has no master password. Press Apply "
+              + "again and accept the password or Keychain prompt, or set one up in "
+              + "General > Security > Secure Storage > Password."
+          : "Could not save the API key: " + Errors.describe(e));
+      return false;
     } catch (Exception e) {
       setErrorMessage("Could not save settings: " + Errors.describe(e));
       return false;
