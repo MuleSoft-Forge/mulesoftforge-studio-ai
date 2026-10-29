@@ -11,6 +11,8 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.PlatformUI;
 
 // The column beside the transcript: the model in use, its list price, what chats have cost, and the list
 // price of every model in the picker.
@@ -18,8 +20,8 @@ final class StatusPanel {
   // price is what to show under the model id: a price, or why there is none.
   record PriceRow(String model, String price, boolean current) {}
 
-  // note says where the prices come from, or why they could not be loaded.
-  record PriceList(List<PriceRow> rows, String note) {}
+  // note is the short Source line; help is the full hover text for the note and help icon.
+  record PriceList(List<PriceRow> rows, String note, String help) {}
 
   private final Composite panel;
   private final Label model;
@@ -28,6 +30,7 @@ final class StatusPanel {
   private final Label todayCost;
   private final Label monthCost;
   private final Label pricesNote;
+  private final Label pricesHelp;
   private final ScrolledComposite pricesScroll;
   private final Composite pricesRows;
   private final Color muted;
@@ -53,15 +56,19 @@ final class StatusPanel {
     gap();
 
     Composite pricesHeading = new Composite(panel, SWT.NONE);
-    GridLayout headingLayout = new GridLayout(2, false);
+    GridLayout headingLayout = new GridLayout(3, false);
     headingLayout.marginWidth = 0;
     headingLayout.marginHeight = 0;
+    headingLayout.horizontalSpacing = 4;
     pricesHeading.setLayout(headingLayout);
     pricesHeading.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     Label pricesTitle = new Label(pricesHeading, SWT.NONE);
     pricesTitle.setText("Prices per 1M tokens");
     pricesTitle.setFont(TranscriptStyles.bold());
     pricesTitle.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+    pricesHelp = new Label(pricesHeading, SWT.NONE);
+    pricesHelp.setImage(PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_LCL_LINKTO_HELP));
+    pricesHelp.setToolTipText("Where these rates come from, and how they relate to Cost above.");
     Link refresh = new Link(pricesHeading, SWT.NONE);
     refresh.setText("<a>Refresh</a>");
     refresh.setToolTipText("Fetch the price list again");
@@ -117,9 +124,12 @@ final class StatusPanel {
     }
     if (list == null) {
       pricesNote.setText("Checking prices…");
+      pricesNote.setToolTipText(null);
+      pricesHelp.setToolTipText("Where these rates come from, and how they relate to Cost above.");
     } else {
       pricesNote.setText(list.note());
-      pricesNote.setToolTipText(list.note());
+      pricesNote.setToolTipText(list.help());
+      pricesHelp.setToolTipText(list.help());
       if (list.rows().isEmpty()) {
         rowLabel("No models for this provider.", false).setForeground(muted);
       }

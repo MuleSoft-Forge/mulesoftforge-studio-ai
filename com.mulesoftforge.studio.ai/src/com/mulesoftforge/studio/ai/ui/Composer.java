@@ -421,7 +421,10 @@ final class Composer {
       for (String model : models) {
         rows.add(new StatusPanel.PriceRow(model, "free", model.equals(current)));
       }
-      return new StatusPanel.PriceList(rows, "Ollama runs on this machine, so there is no charge.");
+      String note = "Source: local (Ollama), free.";
+      String help = "Ollama runs on this machine, so there is no charge.\n\n"
+          + "Cost above stays at $0. The table is only here so every provider shows the same section.";
+      return new StatusPanel.PriceList(rows, note, help);
     }
     Pricing.ListStatus status = Pricing.status();
     boolean loaded = status.fetchedAt() != null;
@@ -433,18 +436,32 @@ final class Composer {
       }
       rows.add(new StatusPanel.PriceRow(models.get(i), text, models.get(i).equals(current)));
     }
-    String note;
     if (!loaded) {
-      note = "Couldn't load the price list"
-          + (status.failure() == null ? "." : ": " + status.failure()) + " Retries in 10 minutes, or press Refresh.";
-    } else {
-      note = "OpenRouter list prices, fetched " + LocalTime.ofInstant(status.fetchedAt(), ZoneId.systemDefault())
-          .format(DateTimeFormatter.ofPattern("HH:mm")) + ".";
-      if (Pricing.listPriceIsGuide(provider)) {
-        note += " " + provider.label + " sets its own prices, so these are a guide.";
-      }
+      String reason = status.failure() == null ? "." : ": " + status.failure();
+      String note = "Source: unavailable" + reason + " Retry in 10 minutes, or press Refresh.";
+      String help = "The plugin loads public list prices from OpenRouter's model catalogue"
+          + " (https://openrouter.ai/api/v1/models). That fetch failed" + reason
+          + "\n\nCost above still uses token counts from each reply; amounts stay unknown until prices load,"
+          + " unless the provider reported a billed cost.";
+      return new StatusPanel.PriceList(rows, note, help);
     }
-    return new StatusPanel.PriceList(rows, note);
+    String fetched = LocalTime.ofInstant(status.fetchedAt(), ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("HH:mm"));
+    String note = "Source: Public list prices (via OpenRouter), fetched " + fetched + ".";
+    String help = "Public list prices (via OpenRouter), fetched " + fetched + ".\n\n"
+        + "This table is catalogue rates per 1M tokens, not your invoice. "
+        + "Cost above uses token counts from each model reply; dollars are the provider's billed amount "
+        + "when the response includes one (OpenRouter does), otherwise an estimate from these same list prices "
+        + "(shown with ~).";
+    if (Pricing.listPriceIsGuide(provider)) {
+      note += " Your endpoint sets its own prices, so treat these as a guide.";
+      help = "Public list prices (via OpenRouter), fetched " + fetched + ". "
+          + provider.label + " sets its own prices, so treat these as a guide.\n\n"
+          + "This table is catalogue rates per 1M tokens, not what your endpoint bills. "
+          + "Cost above uses token counts from each model reply; dollars are estimated from these list prices "
+          + "(shown with ~) unless the response includes a billed amount.";
+    }
+    return new StatusPanel.PriceList(rows, note, help);
   }
 
   private void showAttached() {
