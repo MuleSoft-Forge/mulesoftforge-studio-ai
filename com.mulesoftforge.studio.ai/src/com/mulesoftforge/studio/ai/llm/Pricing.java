@@ -1,10 +1,13 @@
 package com.mulesoftforge.studio.ai.llm;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -40,10 +43,36 @@ public final class Pricing {
 
   public record CallCost(CallUsage usage, Double usd, Basis basis) {}
 
+  // Whether OpenRouter's price list has loaded. fetchedAt is null until it has; failure is the last fetch error.
+  public record ListStatus(Instant fetchedAt, String failure) {}
+
   private static Map<String, Price> prices;
   private static long failedAt;
+  private static Instant fetchedAt;
+  private static String failure;
 
   private Pricing() {}
+
+  public static synchronized ListStatus status() {
+    return new ListStatus(fetchedAt, failure);
+  }
+
+  // Drops the cached list, so the next lookup fetches it again even straight after a failure.
+  public static synchronized void refresh() {
+    prices = null;
+    failedAt = 0;
+    fetchedAt = null;
+    failure = null;
+  }
+
+  // Providers that set their own prices, so OpenRouter's list price is only a guide to the bill.
+  public static boolean listPriceIsGuide(Provider provider) {
+    return switch (provider) {
+      case AZURE_OPENAI, BEDROCK, MULESOFT_AI_GATEWAY, CUSTOM -> true;
+      case OPENAI, ANTHROPIC, GEMINI, OPENROUTER, OLLAMA -> false;
+      default -> throw new IllegalStateException("Unhandled provider " + provider);
+    };
+  }
 
   public static CallCost cost(Provider provider, CallUsage usage) {
     if (usage.reportedCost() != null) {
@@ -85,6 +114,21 @@ public final class Pricing {
       return "price of whichever model it picks";
     }
     return describe(listPrice(provider, model));
+  }
+
+  // For a list headed "per 1M tokens". Null when the model is not in the price list. May fetch the list.
+  public static String shortPriceText(Provider provider, String model) {
+    if (model != null && model.trim().equals("openrouter/auto")) {
+      return "whichever model it picks";
+    }
+    ListPrice price = listPrice(provider, model);
+    if (price == null) {
+      return null;
+    }
+    if (price.isFree()) {
+      return "free";
+    }
+    return perMillion(price.inputPerMillion()) + " in · " + perMillion(price.outputPerMillion()) + " out";
   }
 
   public static String describe(ListPrice price) {
@@ -176,9 +220,12 @@ public final class Pricing {
           .timeout(Duration.ofSeconds(20))
           .GET()
           .build();
-      String body = http.send(request, BodyHandlers.ofString()).body();
+      HttpResponse<String> response = http.send(request, BodyHandlers.ofString());
+      if (response.statusCode() != 200) {
+        throw new IOException("OpenRouter answered HTTP " + response.statusCode());
+      }
       Map<String, Price> parsed = new HashMap<>();
-      for (JsonNode model : JSON.readTree(body).path("data")) {
+      for (JsonNode model : JSON.readTree(response.body()).path("data")) {
         JsonNode p = model.path("pricing");
         double input = number(p, "prompt");
         double output = number(p, "completion");
@@ -187,13 +234,19 @@ public final class Pricing {
               Math.max(0, number(p, "input_cache_read")), Math.max(0, number(p, "input_cache_write"))));
         }
       }
+      if (parsed.isEmpty()) {
+        throw new IOException("OpenRouter's model list had no prices");
+      }
       prices = parsed;
+      fetchedAt = Instant.now();
+      failure = null;
       return prices;
     } catch (Exception e) {
       if (e instanceof InterruptedException) {
         Thread.currentThread().interrupt();
       }
       failedAt = System.currentTimeMillis();
+      failure = Errors.describe(e);
       return Map.of();
     }
   }

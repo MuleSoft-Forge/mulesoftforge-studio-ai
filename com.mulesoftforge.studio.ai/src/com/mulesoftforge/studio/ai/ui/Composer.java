@@ -1,5 +1,8 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -60,8 +63,9 @@ final class Composer {
     // A message for the transcript, e.g. an attachment problem.
     void note(String speaker, String text);
 
-    // The chosen model and its list price; price is null while it is being looked up.
-    void modelShown(String model, String price, String priceTable);
+    // The chosen model and its list price, and every picker model's price; price and prices are null while
+    // they are being looked up.
+    void modelShown(String model, String price, String priceTable, StatusPanel.PriceList prices);
   }
 
   static final String FIX_PROBLEMS_PROMPT = "Fix these problems.";
@@ -317,6 +321,15 @@ final class Composer {
   // The curated models for the current provider, those Refresh models last fetched, and whatever is chosen,
   // which may be a typed id.
   void refreshModels() {
+    refreshModels(false);
+  }
+
+  // Fetches the price list again, then shows the models with the new prices.
+  void refreshPrices() {
+    refreshModels(true);
+  }
+
+  private void refreshModels(boolean refetchPrices) {
     if (modelPicker.isDisposed()) {
       return;
     }
@@ -325,7 +338,7 @@ final class Composer {
     List<String> models = ModelLists.forPicker(provider, AiSettings.fetchedModels(provider), current);
     modelPicker.setItems(models.toArray(String[]::new));
     modelPicker.setText(current);
-    showPrices(provider, current, models);
+    showPrices(provider, current, models, refetchPrices);
   }
 
   // Focus first, then start dictation once the text box is the focused control, so it types there.
@@ -372,26 +385,66 @@ final class Composer {
   }
 
   // The price list is fetched over the network the first time, so prices are looked up in a job.
-  private void showPrices(Provider provider, String current, List<String> models) {
-    listener.modelShown(current, null, null);
+  private void showPrices(Provider provider, String current, List<String> models, boolean refetch) {
+    listener.modelShown(current, null, null, null);
     Job job = Job.create("MuleSoftForge AI model prices", monitor -> {
+      if (refetch) {
+        Pricing.refresh();
+      }
       String price = Pricing.priceText(provider, current);
       StringBuilder table = new StringBuilder("List prices per 1M tokens (input · output):");
+      List<String> found = new ArrayList<>();
       for (String model : models) {
         table.append("\n").append(model).append("   ").append(Pricing.priceText(provider, model));
+        found.add(Pricing.shortPriceText(provider, model));
       }
       table.append("\n\nType any other model id and press Enter.");
+      StatusPanel.PriceList prices = priceList(provider, current, models, found);
       Display.getDefault().asyncExec(() -> {
         if (modelPicker.isDisposed() || !current.equals(modelPicker.getText().trim())) {
           return;
         }
         modelPicker.setToolTipText(table.toString());
-        listener.modelShown(current, price, table.toString());
+        listener.modelShown(current, price, table.toString(), prices);
       });
       return Status.OK_STATUS;
     });
     job.setSystem(true);
     job.schedule();
+  }
+
+  // found holds each model's short price text, null where the price list has no entry for it.
+  private static StatusPanel.PriceList priceList(Provider provider, String current, List<String> models,
+      List<String> found) {
+    if (provider == Provider.OLLAMA) {
+      List<StatusPanel.PriceRow> rows = new ArrayList<>();
+      for (String model : models) {
+        rows.add(new StatusPanel.PriceRow(model, "free", model.equals(current)));
+      }
+      return new StatusPanel.PriceList(rows, "Ollama runs on this machine, so there is no charge.");
+    }
+    Pricing.ListStatus status = Pricing.status();
+    boolean loaded = status.fetchedAt() != null;
+    List<StatusPanel.PriceRow> rows = new ArrayList<>();
+    for (int i = 0; i < models.size(); i++) {
+      String text = found.get(i);
+      if (text == null) {
+        text = loaded ? "not in the price list" : "unavailable";
+      }
+      rows.add(new StatusPanel.PriceRow(models.get(i), text, models.get(i).equals(current)));
+    }
+    String note;
+    if (!loaded) {
+      note = "Couldn't load the price list"
+          + (status.failure() == null ? "." : ": " + status.failure()) + " Retries in 10 minutes, or press Refresh.";
+    } else {
+      note = "OpenRouter list prices, fetched " + LocalTime.ofInstant(status.fetchedAt(), ZoneId.systemDefault())
+          .format(DateTimeFormatter.ofPattern("HH:mm")) + ".";
+      if (Pricing.listPriceIsGuide(provider)) {
+        note += " " + provider.label + " sets its own prices, so these are a guide.";
+      }
+    }
+    return new StatusPanel.PriceList(rows, note);
   }
 
   private void showAttached() {

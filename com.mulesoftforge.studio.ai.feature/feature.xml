@@ -2,7 +2,7 @@
 <feature
       id="com.mulesoftforge.studio.ai.feature"
       label="MuleSoftForge Studio AI"
-      version="0.4.7.qualifier"
+      version="0.4.8.qualifier"
       provider-name="MuleSoftForge">
 
    <description>

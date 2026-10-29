@@ -127,7 +127,7 @@ public class ChatView extends ViewPart {
     SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
     middle.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
-    status = new StatusPanel(middle);
+    status = new StatusPanel(middle, () -> composer.refreshPrices());
     middle.setWeights(78, 22);
     // After the children exist: the transcript takes its theme from its parent's background.
     middle.setBackground(TranscriptStyles.divider(parent));
@@ -172,9 +172,10 @@ public class ChatView extends ViewPart {
       }
 
       @Override
-      public void modelShown(String model, String price, String priceTable) {
+      public void modelShown(String model, String price, String priceTable, StatusPanel.PriceList prices) {
         if (!status.isDisposed()) {
           status.showModel(model, price, priceTable);
+          status.showPrices(prices);
         }
       }
     });
