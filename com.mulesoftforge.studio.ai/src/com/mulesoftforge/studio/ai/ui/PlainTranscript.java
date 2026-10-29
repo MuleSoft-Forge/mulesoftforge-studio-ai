@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.ui;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
@@ -12,6 +13,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 
+import com.mulesoftforge.studio.ai.render.HtmlPage;
 import com.mulesoftforge.studio.ai.render.MarkdownRenderer;
 import com.mulesoftforge.studio.ai.render.MarkdownRenderer.Rendered;
 import com.mulesoftforge.studio.ai.render.Span;
@@ -20,11 +22,18 @@ import com.mulesoftforge.studio.ai.render.Span;
 final class PlainTranscript implements Transcript {
   private record Clickable(int start, int length, String data) {}
 
+  // One checklist from offer(): where each "[x]" box is, and which are ticked.
+  private record Offer(String id, int[] boxes, boolean[] ticked) {}
+
+  private static final String BOX = "box:";
+  private static final String SUBMIT = "submit:";
+
   private final StyledText text;
   private final TranscriptStyles styles;
   private final Actions actions;
   private final List<String> codeBlocks = new ArrayList<>();
   private final List<Clickable> clickables = new ArrayList<>();
+  private final List<Offer> offers = new ArrayList<>();
 
   PlainTranscript(Composite parent, Actions actions) {
     this.actions = actions;
@@ -35,7 +44,14 @@ final class PlainTranscript implements Transcript {
     text.addListener(SWT.MouseMove, e -> text.setCursor(clickableAt(e.x, e.y) == null ? null : hand));
     text.addListener(SWT.MouseUp, e -> {
       Clickable clickable = e.button == 1 ? clickableAt(e.x, e.y) : null;
-      if (clickable != null && text.getSelectionCount() == 0) {
+      if (clickable == null || text.getSelectionCount() != 0) {
+        return;
+      }
+      if (clickable.data().startsWith(BOX)) {
+        toggle(clickable.data().substring(BOX.length()));
+      } else if (clickable.data().startsWith(SUBMIT)) {
+        submit(Integer.parseInt(clickable.data().substring(SUBMIT.length())));
+      } else {
         Clicks.dispatch(clickable.data(), codeBlocks, actions);
       }
     });
@@ -50,6 +66,7 @@ final class PlainTranscript implements Transcript {
   public void clear() {
     codeBlocks.clear();
     clickables.clear();
+    offers.clear();
     text.setText("");
   }
 
@@ -114,6 +131,10 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void action(String label, String id) {
+    button(label, "cmd:" + id);
+  }
+
+  private void button(String label, String data) {
     int start = text.getCharCount() + 2;
     text.append("\n\n" + label);
     StyleRange style = new StyleRange();
@@ -123,8 +144,44 @@ final class PlainTranscript implements Transcript {
     style.font = TranscriptStyles.bold();
     style.underline = true;
     text.setStyleRange(style);
-    clickables.add(new Clickable(start, label.length(), "cmd:" + id));
+    clickables.add(new Clickable(start, label.length(), data));
     scrollToEnd();
+  }
+
+  @Override
+  public void offer(String id, List<String> items) {
+    muted("\n\nChanges it can make (click a box to untick it):");
+    int[] boxes = new int[items.size()];
+    int index = offers.size();
+    for (int i = 0; i < items.size(); i++) {
+      text.append("\n  ");
+      boxes[i] = text.getCharCount();
+      text.append("[x] " + items.get(i));
+      clickables.add(new Clickable(boxes[i], 3, BOX + index + ":" + i));
+    }
+    boolean[] ticked = new boolean[items.size()];
+    Arrays.fill(ticked, true);
+    offers.add(new Offer(id, boxes, ticked));
+    button(HtmlPage.OFFER_BUTTON, SUBMIT + index);
+  }
+
+  private void toggle(String where) {
+    String[] parts = where.split(":");
+    Offer offer = offers.get(Integer.parseInt(parts[0]));
+    int i = Integer.parseInt(parts[1]);
+    offer.ticked()[i] = !offer.ticked()[i];
+    text.replaceTextRange(offer.boxes()[i], 3, offer.ticked()[i] ? "[x]" : "[ ]");
+  }
+
+  private void submit(int index) {
+    Offer offer = offers.get(index);
+    List<String> picked = new ArrayList<>();
+    for (int i = 0; i < offer.ticked().length; i++) {
+      if (offer.ticked()[i]) {
+        picked.add(String.valueOf(i));
+      }
+    }
+    actions.command("offer:" + offer.id() + ":" + String.join(",", picked));
   }
 
   // Returns the offset where the body starts.

@@ -2,35 +2,57 @@ package com.mulesoftforge.studio.ai.llm;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
+import com.mulesoftforge.studio.ai.settings.Provider;
 
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.http.client.jdk.JdkHttpClient;
 import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
+import dev.langchain4j.model.azure.AzureOpenAiChatModel;
+import dev.langchain4j.model.bedrock.BedrockChatModel;
+import dev.langchain4j.model.bedrock.BedrockChatRequestParameters;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.token.credentials.SdkToken;
+import software.amazon.awssdk.auth.token.credentials.StaticTokenProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
+import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClientBuilder;
 
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
   private static final int MAX_OUTPUT_TOKENS = 8192;
+  private static final String AZURE_API_VERSION = "2024-10-21";
 
   private ChatModels() {}
 
   public static ChatModel create(Connection connection) {
     validate(connection);
-    String apiKey = connection.apiKey().isBlank() ? null : connection.apiKey();
+    String apiKey = connection.provider().needsClientCredentials() || connection.apiKey().isBlank()
+        ? null
+        : connection.apiKey();
     return switch (connection.provider().api) {
-      case OPENAI_COMPATIBLE -> OpenAiChatModel.builder()
-          .httpClientBuilder(http())
-          .baseUrl(connection.baseUrl())
-          .apiKey(apiKey)
-          .modelName(connection.model())
-          .maxCompletionTokens(MAX_OUTPUT_TOKENS)
-          .timeout(TIMEOUT)
-          .build();
+      case OPENAI_COMPATIBLE -> {
+        OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
+            .httpClientBuilder(http())
+            .baseUrl(connection.baseUrl())
+            .apiKey(apiKey)
+            .modelName(connection.model())
+            .maxCompletionTokens(MAX_OUTPUT_TOKENS)
+            .timeout(TIMEOUT);
+        Map<String, String> headers = gatewayHeaders(connection);
+        if (!headers.isEmpty()) {
+          builder.customHeaders(headers);
+        }
+        yield builder.build();
+      }
       case ANTHROPIC -> AnthropicChatModel.builder()
           .httpClientBuilder(http())
           .baseUrl(connection.baseUrl())
@@ -39,6 +61,23 @@ public final class ChatModels {
           .maxTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
           .build();
+      case GOOGLE_AI_GEMINI -> GoogleAiGeminiChatModel.builder()
+          .httpClientBuilder(http())
+          .baseUrl(connection.baseUrl())
+          .apiKey(apiKey)
+          .modelName(connection.model())
+          .maxOutputTokens(MAX_OUTPUT_TOKENS)
+          .timeout(TIMEOUT)
+          .build();
+      case AZURE_OPENAI -> AzureOpenAiChatModel.builder()
+          .endpoint(trimSlash(connection.baseUrl()))
+          .apiKey(apiKey)
+          .deploymentName(connection.model())
+          .serviceVersion(AZURE_API_VERSION)
+          .maxTokens(MAX_OUTPUT_TOKENS)
+          .timeout(TIMEOUT)
+          .build();
+      case BEDROCK -> bedrock(connection);
       case OLLAMA -> OllamaChatModel.builder()
           .httpClientBuilder(http())
           .baseUrl(connection.baseUrl())
@@ -46,6 +85,62 @@ public final class ChatModels {
           .timeout(TIMEOUT)
           .build();
     };
+  }
+
+  private static ChatModel bedrock(Connection connection) {
+    Region region = Region.of(bedrockRegion(connection.baseUrl()));
+    BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(region);
+    String key = connection.apiKey() == null ? "" : connection.apiKey().trim();
+    if (!key.isEmpty()) {
+      SdkToken token = () -> key;
+      client.tokenProvider(StaticTokenProvider.create(token));
+    } else {
+      client.credentialsProvider(DefaultCredentialsProvider.create());
+    }
+    return BedrockChatModel.builder()
+        .client(client.build())
+        .region(region)
+        .modelId(connection.model())
+        .timeout(TIMEOUT)
+        .defaultRequestParameters(BedrockChatRequestParameters.builder()
+            .maxOutputTokens(MAX_OUTPUT_TOKENS)
+            .build())
+        .build();
+  }
+
+  // Preferences "Base URL" holds the region for Bedrock (us-east-1), or a full bedrock-runtime URL.
+  public static String bedrockRegion(String baseUrl) {
+    String value = baseUrl == null ? "" : baseUrl.trim();
+    if (value.isEmpty()) {
+      return Region.US_EAST_1.id();
+    }
+    if (!value.contains("://")) {
+      return value;
+    }
+    // https://bedrock-runtime.us-west-2.amazonaws.com
+    String host = value.replaceFirst("^https?://", "").replaceFirst("/.*$", "");
+    String[] parts = host.split("\\.");
+    if (parts.length >= 3 && parts[0].startsWith("bedrock")) {
+      return parts[1];
+    }
+    return value;
+  }
+
+  // Flex Gateway Client ID Enforcement expects these header names (docs.mulesoft.com LLM Proxy requests).
+  public static Map<String, String> gatewayHeaders(Connection connection) {
+    Map<String, String> headers = new LinkedHashMap<>();
+    if (connection.provider() != Provider.MULESOFT_AI_GATEWAY) {
+      return headers;
+    }
+    String id = connection.clientId() == null ? "" : connection.clientId().trim();
+    String secret = connection.clientSecret() == null ? "" : connection.clientSecret().trim();
+    if (!id.isEmpty()) {
+      headers.put("client_id", id);
+    }
+    if (!secret.isEmpty()) {
+      headers.put("client_secret", secret);
+    }
+    return headers;
   }
 
   // Sync calls use DiagnosingHttpClient so failures keep HTTP status, body and response headers.
@@ -97,8 +192,18 @@ public final class ChatModels {
     if (connection.model().isBlank()) {
       throw new IllegalStateException("Set the model for " + name + " in Preferences > MuleSoftForge AI.");
     }
-    if (connection.provider().needsApiKey() && connection.apiKey().isBlank()) {
-      throw new IllegalStateException("Set the API key for " + name + " in Preferences > MuleSoftForge AI.");
+    String credentials = connection.provider().credentialsProblem(connection.apiKey(), connection.clientId(),
+        connection.clientSecret());
+    if (credentials != null) {
+      throw new IllegalStateException(credentials);
     }
+  }
+
+  private static String trimSlash(String url) {
+    String value = url.trim();
+    while (value.endsWith("/")) {
+      value = value.substring(0, value.length() - 1);
+    }
+    return value;
   }
 }

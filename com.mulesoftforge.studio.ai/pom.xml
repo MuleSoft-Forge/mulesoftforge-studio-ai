@@ -6,7 +6,7 @@
   <parent>
     <groupId>com.mulesoftforge.studio</groupId>
     <artifactId>studio-ai-parent</artifactId>
-    <version>0.4.6-SNAPSHOT</version>
+    <version>0.4.7-SNAPSHOT</version>
   </parent>
   <artifactId>com.mulesoftforge.studio.ai</artifactId>
   <packaging>eclipse-plugin</packaging>
@@ -27,6 +27,21 @@
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-ollama</artifactId>
+      <version>${langchain4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-google-ai-gemini</artifactId>
+      <version>${langchain4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-bedrock</artifactId>
+      <version>${langchain4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-azure-open-ai</artifactId>
       <version>${langchain4j.version}</version>
     </dependency>
     <dependency>
@@ -66,15 +81,53 @@
               <outputDirectory>${project.basedir}/lib</outputDirectory>
               <stripVersion>true</stripVersion>
               <overWriteReleases>true</overWriteReleases>
+              <!-- Skip platform-native Netty transports; OSGi hosts vary. -->
+              <excludeArtifactIds>
+                netty-resolver-dns-native-macos,
+                netty-transport-native-epoll,
+                netty-transport-native-kqueue,
+                netty-tcnative-boringssl-static
+              </excludeArtifactIds>
               <!-- Tycho adds the Eclipse target platform to the Maven dependency list; copy only our libraries. -->
               <includeGroupIds>
                 dev.langchain4j,
                 com.fasterxml.jackson.core,
+                com.fasterxml.jackson.datatype,
                 com.knuddels,
                 org.jspecify,
                 org.slf4j,
-                io.smallrye.reactive
+                io.smallrye.reactive,
+                software.amazon.awssdk,
+                com.azure,
+                io.netty,
+                io.projectreactor,
+                io.projectreactor.netty,
+                org.reactivestreams,
+                org.apache.httpcomponents,
+                commons-codec,
+                commons-logging
               </includeGroupIds>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <id>update-bundle-classpath</id>
+            <phase>process-resources</phase>
+            <goals>
+              <goal>exec</goal>
+            </goals>
+            <configuration>
+              <executable>python3</executable>
+              <workingDirectory>${project.basedir}</workingDirectory>
+              <arguments>
+                <argument>${project.basedir}/update-bundle-classpath.py</argument>
+              </arguments>
             </configuration>
           </execution>
         </executions>

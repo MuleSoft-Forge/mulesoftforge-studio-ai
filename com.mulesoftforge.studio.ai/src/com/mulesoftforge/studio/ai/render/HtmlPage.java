@@ -3,6 +3,8 @@ package com.mulesoftforge.studio.ai.render;
 // The rich transcript page. Content arrives through msfMessage/msfStep/msfAction calls with HTML that
 // HtmlRenderer has already escaped; clicks go back to Studio through the msfClick browser function.
 public final class HtmlPage {
+  public static final String OFFER_BUTTON = "Make selected changes";
+
   public record Theme(Palette palette, Palette.Rgb background, Palette.Rgb foreground, String font, int fontPt,
       String mono, int monoPt) {}
 
@@ -79,7 +81,11 @@ public final class HtmlPage {
         + """
         .ai .body { background: %s; border: 1px solid %s; border-radius: 8px; padding: 6px 10px; }
         .ai .body pre { background: %s; }
-        """.formatted(p.panel().css(), border, theme.background().css());
+        .offer { margin: 6px 0; padding: 6px 10px; border: 1px solid %s; border-radius: 8px; }
+        .offer .title { font-weight: 600; font-size: 0.9em; margin-bottom: 3px; }
+        .offer label { display: block; margin: 2px 0; cursor: pointer; }
+        .offer .button { margin-top: 5px; }
+        """.formatted(p.panel().css(), border, theme.background().css(), border);
     return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
@@ -145,8 +151,43 @@ public final class HtmlPage {
           log.appendChild(div);
           scrollIfNeeded(was);
         }
+        function msfOffer(id, items, label) {
+          var was = nearBottom();
+          closeSteps();
+          var div = document.createElement('div');
+          div.className = 'offer';
+          var title = document.createElement('div');
+          title.className = 'title';
+          title.textContent = 'Changes it can make';
+          div.appendChild(title);
+          items.forEach(function (text, i) {
+            var row = document.createElement('label');
+            var box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = true;
+            box.value = String(i);
+            row.appendChild(box);
+            row.appendChild(document.createTextNode(' ' + text));
+            div.appendChild(row);
+          });
+          var a = document.createElement('a');
+          a.className = 'button';
+          a.setAttribute('data-offer', id);
+          a.textContent = label;
+          div.appendChild(a);
+          log.appendChild(div);
+          scrollIfNeeded(was);
+        }
         function msfClear() { log.innerHTML = ''; steps = null; }
         document.addEventListener('click', function (e) {
+          var offer = e.target.closest('[data-offer]');
+          if (offer) {
+            e.preventDefault();
+            var ticked = [];
+            offer.parentNode.querySelectorAll('input:checked').forEach(function (box) { ticked.push(box.value); });
+            msfClick('cmd:offer:' + offer.getAttribute('data-offer') + ':' + ticked.join(','));
+            return;
+          }
           var a = e.target.closest('[data-a]');
           if (a) { e.preventDefault(); msfClick(a.getAttribute('data-a')); }
         });

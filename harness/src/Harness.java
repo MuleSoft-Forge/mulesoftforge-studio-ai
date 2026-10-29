@@ -24,6 +24,7 @@ import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 import com.mulesoftforge.studio.ai.edit.AttachmentReader;
+import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
@@ -238,7 +239,7 @@ public class Harness {
     Provider provider = parseProvider(name);
     Connection connection = connectionFor(env, provider);
     if (modelOverride != null) {
-      connection = new Connection(provider, connection.baseUrl(), modelOverride, connection.apiKey());
+      connection = connection.withModel(modelOverride);
     }
     DiskProject project = projectDir == null ? null : new DiskProject(projectDir, models(workspace));
     List<Attachment> attachments = new ArrayList<>();
@@ -299,6 +300,9 @@ public class Harness {
       return;
     }
     System.out.println("\nDID  " + turn.activity());
+    for (ChangeOffer offer : turn.offers()) {
+      System.out.println("OFFERED  " + offer.label());
+    }
     if (!turn.problems().isEmpty()) {
       System.out.print("\nCHECKS  still failing:\n" + MuleChecks.describe(turn.problems()));
     }
@@ -332,11 +336,26 @@ public class Harness {
     failed += expect(tools, "write_file", "{\"path\":\"target/x.xml\",\"content\":\"x\"}", "ERROR: Refusing to write");
     failed += expect(tools, "list_files", "{\"directory\":\"\"}", "src/main/mule/api.xml");
     ProjectTools readOnly = new ProjectTools(new DiskProject(root), new ChangeSet(), false);
-    failed += check("Ask/Plan offer only read tools", readOnly.specifications().stream()
+    failed += check("Ask/Plan offer only read tools and offer_changes", readOnly.specifications().stream()
         .map(spec -> spec.name()).toList()
-        .equals(List.of("list_files", "read_file", "connector_reference", "check_project")));
+        .equals(List.of("list_files", "read_file", "connector_reference", "check_project", "offer_changes")));
     failed += expect(readOnly, "write_file", "{\"path\":\"src/x.xml\",\"content\":\"x\"}",
         "ERROR: this mode cannot change files");
+    failed += expect(readOnly, "offer_changes", "{\"items\":[]}", "ERROR: items must be");
+    failed += expect(readOnly, "offer_changes", "{\"items\":[{\"files\":[\"pom.xml\"]}]}", "ERROR: every item");
+    failed += expect(readOnly, "offer_changes", "{\"items\":[{\"title\":\"Fix the classifier\",\"files\":[\"pom.xml\"]},"
+        + "{\"title\":\"Remove the unused sockets connector\"}]}", "Offered 2 changes");
+    List<ChangeOffer> offered = readOnly.offers();
+    failed += check("offers are recorded, with files", offered.size() == 2
+        && offered.get(0).label().equals("Fix the classifier (pom.xml)")
+        && offered.get(1).label().equals("Remove the unused sockets connector"));
+    failed += check("offering changes writes nothing", Files.readString(root.resolve("src/main/mule/api.xml"))
+        .contains("name=\"a\""));
+    failed += expect(readOnly, "offer_changes", "{\"items\":[\"Use secure properties\"]}", "Offered 1 change");
+    failed += check("a later offer replaces the earlier one", readOnly.offers().size() == 1);
+    String picked = ChangeOffer.prompt(offered.subList(1, 2));
+    failed += check("the request names only the ticked changes", picked.contains("1. Remove the unused sockets")
+        && !picked.contains("classifier"));
     failed += expect(tools, "edit_file",
         "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"<logger/>\",\"new_text\":\"<x/>\"}", "ERROR: old_text occurs");
     failed += expect(tools, "edit_file",
@@ -364,8 +383,28 @@ public class Harness {
         Provider.ANTHROPIC.keyProblem("sk-ant-abc\ndef").startsWith("The key contains spaces"));
     failed += check("a missing key is caught only where one is needed",
         Provider.OPENROUTER.keyProblem("") != null && Provider.OLLAMA.keyProblem("") == null);
+    failed += check("a Google AI key fits Gemini",
+        Provider.GEMINI.keyProblem("AIza" + "x".repeat(35)) == null
+            && Provider.GEMINI.keyProblem("AQ." + "x".repeat(40)) == null);
+    failed += check("an OpenAI key under Gemini is named",
+        Provider.GEMINI.keyProblem("sk-proj-" + "a".repeat(20)).contains("OpenAI"));
     failed += check("describeKey shows only the start and end",
         Provider.describeKey(openRouterKey).equals("sk-or-…cdef, 73 characters"));
+    failed += check("gateway needs client credentials, not an API key",
+        Provider.MULESOFT_AI_GATEWAY.needsClientCredentials() && !Provider.MULESOFT_AI_GATEWAY.needsApiKey());
+    failed += check("gateway missing client credentials is caught",
+        Provider.MULESOFT_AI_GATEWAY.credentialsProblem("", "", "") != null
+            && Provider.MULESOFT_AI_GATEWAY.credentialsProblem("", "id", "secret") == null);
+    failed += check("gateway headers are client_id and client_secret",
+        ChatModels.gatewayHeaders(new Connection(Provider.MULESOFT_AI_GATEWAY, "https://gw.example/v1", "m", "", "cid",
+            "csecret")).equals(Map.of("client_id", "cid", "client_secret", "csecret")));
+    failed += check("non-gateway has no client headers",
+        ChatModels.gatewayHeaders(new Connection(Provider.OPENAI, "https://api.openai.com/v1", "gpt-5-mini", "sk"))
+            .isEmpty());
+    failed += check("bedrock region from plain id",
+        "us-west-2".equals(ChatModels.bedrockRegion("us-west-2")));
+    failed += check("bedrock region from runtime URL",
+        "eu-west-1".equals(ChatModels.bedrockRegion("https://bedrock-runtime.eu-west-1.amazonaws.com")));
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -918,6 +957,8 @@ public class Harness {
     failed += check("page has a content security policy", page.contains("Content-Security-Policy")
         && page.contains("default-src 'none'"));
     failed += check("page colours filled in", page.contains(".t-tag { color: #3f7f7f; }") && !page.contains("%s"));
+    failed += check("offer checklist sends the ticked items", page.contains("function msfOffer(")
+        && page.contains("'cmd:offer:'") && page.contains("box.checked = true"));
     if (preview != null) {
       String demo = page.replace("</script></body>", """
           msfMessage('you', 'You', %s, 'Agent, open file src/main/mule/app.xml, project employees-app');
@@ -925,6 +966,8 @@ public class Harness {
           msfMessage('ai', 'AI', %s, null);
           msfStep('Done in 5 s · read 1 file · this answer $0.0012');
           msfAction('Build this plan in Agent mode', 'build-plan');
+          msfOffer('0', ['Move the OAuth credentials to secure properties (src/main/mule/app.xml, pom.xml)',
+              'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Make selected changes');
           function msfClick(a) { console.log(a); }
           </script></body>""".formatted(jsString("How do I log the payload?"), jsString(h)));
       Files.writeString(preview, demo);
@@ -1223,6 +1266,9 @@ public class Harness {
       case OPENROUTER -> "OPENROUTER";
       case OPENAI -> "OPENAI";
       case ANTHROPIC -> "ANTHROPIC";
+      case GEMINI -> "GEMINI";
+      case AZURE_OPENAI -> "AZURE_OPENAI";
+      case BEDROCK -> "BEDROCK";
       case MULESOFT_AI_GATEWAY -> "MULESOFT_AI_GATEWAY";
       case OLLAMA -> "OLLAMA";
       case CUSTOM -> "CUSTOM";
@@ -1230,6 +1276,8 @@ public class Harness {
     String baseUrl = firstNonBlank(env.get(prefix + "_BASE_URL"), provider.defaultBaseUrl);
     String model = firstNonBlank(env.get(prefix + "_MODEL"), provider.defaultModel);
     String apiKey = env.getOrDefault(prefix + "_API_KEY", "");
+    String clientId = env.getOrDefault(prefix + "_CLIENT_ID", "");
+    String clientSecret = env.getOrDefault(prefix + "_CLIENT_SECRET", "");
     if (baseUrl.isBlank()) {
       throw new IllegalStateException(prefix + "_BASE_URL is empty");
     }
@@ -1239,7 +1287,10 @@ public class Harness {
     if (provider.needsApiKey() && apiKey.isBlank()) {
       throw new IllegalStateException(prefix + "_API_KEY is empty");
     }
-    return new Connection(provider, baseUrl, model, apiKey);
+    if (provider.needsClientCredentials() && (clientId.isBlank() || clientSecret.isBlank())) {
+      throw new IllegalStateException(prefix + "_CLIENT_ID / " + prefix + "_CLIENT_SECRET are empty");
+    }
+    return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret);
   }
 
   private static Provider parseProvider(String name) {
@@ -1248,6 +1299,9 @@ public class Harness {
       case "openrouter" -> Provider.OPENROUTER;
       case "openai" -> Provider.OPENAI;
       case "anthropic" -> Provider.ANTHROPIC;
+      case "gemini", "google", "google_ai_gemini" -> Provider.GEMINI;
+      case "azure", "azure_openai", "azureopenai" -> Provider.AZURE_OPENAI;
+      case "bedrock", "amazon_bedrock", "amazon" -> Provider.BEDROCK;
       case "mulesoft", "mulesoft_ai_gateway", "gateway" -> Provider.MULESOFT_AI_GATEWAY;
       case "ollama" -> Provider.OLLAMA;
       case "custom" -> Provider.CUSTOM;
@@ -1297,7 +1351,7 @@ public class Harness {
           java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-html [preview.html]
           java Harness check-updates [latest.json URL]
-        Providers: openrouter openai anthropic mulesoft ollama custom
+        Providers: openrouter openai anthropic gemini azure bedrock mulesoft ollama custom
         Reads ../.env — never prints key values.
         """);
   }

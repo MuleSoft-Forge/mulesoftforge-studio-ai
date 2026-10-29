@@ -23,6 +23,8 @@ public final class AiSettings {
   private static final String MODEL = "model.";
   private static final String FETCHED_MODELS = "fetchedModels.";
   private static final String API_KEY = "apiKey.";
+  private static final String CLIENT_ID = "clientId.";
+  private static final String CLIENT_SECRET = "clientSecret.";
   private static final String CHAT_MODE = "chat.mode";
   private static final String PLAIN_TRANSCRIPT = "chat.plainTranscript";
   private static final String TLS_SYSTEM_DISABLED = "tls.systemDisabled";
@@ -36,7 +38,17 @@ public final class AiSettings {
 
   private AiSettings() {}
 
-  public record Connection(Provider provider, String baseUrl, String model, String apiKey) {}
+  // clientId / clientSecret are for MuleSoft AI Gateway (client_id / client_secret headers). Empty for others.
+  public record Connection(Provider provider, String baseUrl, String model, String apiKey, String clientId,
+      String clientSecret) {
+    public Connection(Provider provider, String baseUrl, String model, String apiKey) {
+      this(provider, baseUrl, model, apiKey, "", "");
+    }
+
+    public Connection withModel(String model) {
+      return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret);
+    }
+  }
 
   private static synchronized IPreferenceStore store() {
     if (store == null) {
@@ -46,7 +58,9 @@ public final class AiSettings {
   }
 
   public static Provider provider() {
-    return Provider.fromName(store().getString(PROVIDER));
+    Provider provider = Provider.fromName(store().getString(PROVIDER));
+    // Prefer a visible provider if a hidden one was previously saved.
+    return provider.shownInUi() ? provider : Provider.OPENROUTER;
   }
 
   public static String baseUrl(Provider provider) {
@@ -157,9 +171,18 @@ public final class AiSettings {
     return secure().get(API_KEY + provider.name(), "");
   }
 
+  public static String clientId(Provider provider) throws StorageException {
+    return secure().get(CLIENT_ID + provider.name(), "");
+  }
+
+  public static String clientSecret(Provider provider) throws StorageException {
+    return secure().get(CLIENT_SECRET + provider.name(), "");
+  }
+
   public static Connection current() throws StorageException {
     Provider provider = provider();
-    return new Connection(provider, baseUrl(provider), model(provider), apiKey(provider));
+    return new Connection(provider, baseUrl(provider), model(provider), apiKey(provider), clientId(provider),
+        clientSecret(provider));
   }
 
   public static void save(Connection connection) throws Exception {
@@ -172,6 +195,8 @@ public final class AiSettings {
 
     ISecurePreferences secure = secure();
     secure.put(API_KEY + provider.name(), connection.apiKey().trim(), true);
+    secure.put(CLIENT_ID + provider.name(), connection.clientId().trim(), true);
+    secure.put(CLIENT_SECRET + provider.name(), connection.clientSecret().trim(), true);
     secure.flush();
   }
 

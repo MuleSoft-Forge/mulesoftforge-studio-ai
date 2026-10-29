@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,6 +35,9 @@ public final class ModelLists {
     return switch (connection.provider().api) {
       case OPENAI_COMPATIBLE -> openAiCompatible(connection);
       case ANTHROPIC -> anthropic(connection);
+      case GOOGLE_AI_GEMINI -> gemini(connection);
+      case AZURE_OPENAI -> azureOpenAi(connection);
+      case BEDROCK -> List.of(); // Bedrock has no simple OpenAI-style /models; use the curated list.
       case OLLAMA -> ollama(connection);
     };
   }
@@ -106,14 +110,23 @@ public final class ModelLists {
           || lower.startsWith("meta-llama/") || lower.startsWith("qwen/") || lower.startsWith("mistralai/")
           || lower.startsWith("deepseek/") || lower.startsWith("x-ai/") || lower.startsWith("openrouter/"));
     }
+    if (provider == Provider.GEMINI) {
+      return !(lower.startsWith("gemini-") || lower.startsWith("models/gemini-"));
+    }
     return false;
   }
 
   private static List<String> openAiCompatible(Connection connection) throws Exception {
-    JsonNode root = getJson(trimSlash(connection.baseUrl()) + "/models",
-        HttpRequest.newBuilder()
-            .header("Accept", "application/json")
-            .header("Authorization", "Bearer " + connection.apiKey()));
+    HttpRequest.Builder builder = HttpRequest.newBuilder().header("Accept", "application/json");
+    Map<String, String> gateway = ChatModels.gatewayHeaders(connection);
+    if (!gateway.isEmpty()) {
+      for (Map.Entry<String, String> header : gateway.entrySet()) {
+        builder.header(header.getKey(), header.getValue());
+      }
+    } else if (!connection.apiKey().isBlank()) {
+      builder.header("Authorization", "Bearer " + connection.apiKey());
+    }
+    JsonNode root = getJson(trimSlash(connection.baseUrl()) + "/models", builder);
     List<String> ids = new ArrayList<>();
     JsonNode data = root.get("data");
     if (data != null && data.isArray()) {
@@ -136,6 +149,70 @@ public final class ModelLists {
             .header("Accept", "application/json")
             .header("x-api-key", connection.apiKey())
             .header("anthropic-version", "2023-06-01"));
+    List<String> ids = new ArrayList<>();
+    JsonNode data = root.get("data");
+    if (data != null && data.isArray()) {
+      for (JsonNode item : data) {
+        JsonNode id = item.get("id");
+        if (id != null && id.isTextual() && !id.asText().isBlank()) {
+          ids.add(id.asText());
+        }
+      }
+    }
+    if (ids.isEmpty()) {
+      ids.addAll(fallbackIds(root.toString()));
+    }
+    return uniqueSorted(ids);
+  }
+
+  private static List<String> gemini(Connection connection) throws Exception {
+    // Same auth as LangChain4j's Gemini client (x-goog-api-key). Query ?key= fails on some proxies.
+    String url = trimSlash(connection.baseUrl()) + "/models?pageSize=1000";
+    JsonNode root = getJson(url, HttpRequest.newBuilder()
+        .header("Accept", "application/json")
+        .header("x-goog-api-key", connection.apiKey().trim()));
+    List<String> ids = new ArrayList<>();
+    JsonNode models = root.get("models");
+    if (models != null && models.isArray()) {
+      for (JsonNode item : models) {
+        if (!supportsGenerateContent(item)) {
+          continue;
+        }
+        JsonNode name = item.get("name");
+        if (name != null && name.isTextual() && !name.asText().isBlank()) {
+          ids.add(stripModelsPrefix(name.asText()));
+        }
+      }
+    }
+    return uniqueSorted(ids);
+  }
+
+  private static boolean supportsGenerateContent(JsonNode model) {
+    JsonNode methods = model.get("supportedGenerationMethods");
+    if (methods == null || !methods.isArray()) {
+      methods = model.get("supportedActions");
+    }
+    if (methods == null || !methods.isArray()) {
+      return true;
+    }
+    for (JsonNode method : methods) {
+      if (method.isTextual() && "generateContent".equals(method.asText())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String stripModelsPrefix(String name) {
+    String value = name.trim();
+    return value.startsWith("models/") ? value.substring("models/".length()) : value;
+  }
+
+  private static List<String> azureOpenAi(Connection connection) throws Exception {
+    String url = trimSlash(connection.baseUrl()) + "/openai/deployments?api-version=2024-10-21";
+    JsonNode root = getJson(url, HttpRequest.newBuilder()
+        .header("Accept", "application/json")
+        .header("api-key", connection.apiKey().trim()));
     List<String> ids = new ArrayList<>();
     JsonNode data = root.get("data");
     if (data != null && data.isArray()) {
@@ -214,9 +291,10 @@ public final class ModelLists {
       throw new IllegalStateException("Set the base URL for " + provider.label
           + " in Preferences > MuleSoftForge AI.");
     }
-    if (provider.needsApiKey() && connection.apiKey().isBlank()) {
-      throw new IllegalStateException("Set the API key for " + provider.label
-          + " in Preferences > MuleSoftForge AI.");
+    String credentials = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
+        connection.clientSecret());
+    if (credentials != null) {
+      throw new IllegalStateException(credentials);
     }
   }
 
@@ -229,6 +307,10 @@ public final class ModelLists {
   }
 
   public static String summarize(Provider provider, int rawCount, List<String> picker) {
+    if (provider == Provider.BEDROCK) {
+      return "Amazon Bedrock has no Refresh models catalog here; showing " + picker.size()
+          + " curated model ids. Type any Bedrock model id or inference profile to override.";
+    }
     return "Loaded " + rawCount + " from " + provider.label
         + "; showing " + picker.size() + " in the list (curated + chat-oriented). Type any id to override.";
   }

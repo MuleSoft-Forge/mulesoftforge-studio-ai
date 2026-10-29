@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.edit;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,9 +11,12 @@ import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 
-// Tools the model uses on the project. Reads are immediate; writes only stage proposals in the ChangeSet.
+// Tools the model uses on the project. Reads are immediate; writes only stage proposals in the ChangeSet,
+// and offer_changes only records what to show the user.
 public final class ProjectTools {
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final int LIST_LIMIT = 300;
@@ -74,6 +78,27 @@ public final class ProjectTools {
               .addStringProperty("content", "Complete file content")
               .required("path", "content")
               .build())
+          .build(),
+      ToolSpecification.builder()
+          .name("offer_changes")
+          .description("Offer the user changes you recommend but have not made. They appear as a checklist under"
+              + " your answer, and the user ticks which ones to have you make. Call it once, at the end, with one"
+              + " item per independent change, instead of asking in your reply whether to make them.")
+          .parameters(JsonObjectSchema.builder()
+              .addProperty("items", JsonArraySchema.builder()
+                  .description("The changes, most important first")
+                  .items(JsonObjectSchema.builder()
+                      .addStringProperty("title", "Short imperative title, e.g. Move the OAuth credentials to"
+                          + " secure properties")
+                      .addProperty("files", JsonArraySchema.builder()
+                          .description("Project-relative files the change touches")
+                          .items(new JsonStringSchema())
+                          .build())
+                      .required("title")
+                      .build())
+                  .build())
+              .required("items")
+              .build())
           .build());
 
   public static final List<ToolSpecification> READ_ONLY_SPECIFICATIONS = SPECIFICATIONS.stream()
@@ -84,6 +109,7 @@ public final class ProjectTools {
   private final ChangeSet changes;
   private final boolean canEdit;
   private final ConnectorCatalog connectors;
+  private final List<ChangeOffer> offers = new ArrayList<>();
   private List<Problem> baseline;
 
   public ProjectTools(ProjectFiles files, ChangeSet changes) {
@@ -105,6 +131,11 @@ public final class ProjectTools {
     return tool.equals("edit_file") || tool.equals("write_file");
   }
 
+  // What offer_changes recorded this turn; a later call replaces an earlier one.
+  public List<ChangeOffer> offers() {
+    return List.copyOf(offers);
+  }
+
   // One-line description of a call for the progress display.
   public static String describe(ToolExecutionRequest request) {
     String target;
@@ -124,6 +155,7 @@ public final class ProjectTools {
       case "connector_reference" -> "Looking up " + (target.equals("project root") ? "the project's connectors" : target);
       case "edit_file" -> "Drafting an edit to " + target;
       case "write_file" -> "Drafting " + target;
+      case "offer_changes" -> "Listing the changes it can make";
       default -> request.name() + " " + target;
     };
   }
@@ -143,6 +175,7 @@ public final class ProjectTools {
         case "connector_reference" -> connectorReference(args);
         case "edit_file" -> edit(args);
         case "write_file" -> write(args);
+        case "offer_changes" -> offer(args);
         default -> "ERROR: unknown tool " + request.name();
       };
     } catch (Exception e) {
@@ -205,6 +238,33 @@ public final class ProjectTools {
   private String write(JsonNode args) throws Exception {
     String path = ProjectPaths.requireWritable(text(args, "path", true));
     return stage(path, text(args, "content", true));
+  }
+
+  private String offer(JsonNode args) {
+    JsonNode items = args.get("items");
+    if (items == null || !items.isArray() || items.isEmpty()) {
+      return "ERROR: items must be a non-empty list of {title, files}.";
+    }
+    List<ChangeOffer> parsed = new ArrayList<>();
+    for (JsonNode item : items) {
+      String title = item.isTextual() ? item.asText() : text(item, "title", false);
+      if (title == null || title.isBlank()) {
+        return "ERROR: every item needs a title.";
+      }
+      List<String> paths = new ArrayList<>();
+      JsonNode list = item.get("files");
+      if (list != null && list.isArray()) {
+        list.forEach(p -> paths.add(p.asText()));
+      }
+      parsed.add(new ChangeOffer(title, paths));
+    }
+    if (parsed.size() > ChangeOffer.MAX_ITEMS) {
+      return "ERROR: offer at most " + ChangeOffer.MAX_ITEMS + " changes; group the small ones.";
+    }
+    offers.clear();
+    offers.addAll(parsed);
+    return "Offered " + parsed.size() + (parsed.size() == 1 ? " change" : " changes") + ". The user sees them as"
+        + " a checklist below your answer. Finish now; do not list them again or ask whether to make them.";
   }
 
   private String stage(String path, String content) throws Exception {

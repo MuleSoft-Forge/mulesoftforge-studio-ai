@@ -121,6 +121,16 @@ final class HtmlTranscript implements Transcript {
     run("msfAction(" + js(label) + "," + js(id) + ")");
   }
 
+  @Override
+  public void offer(String id, List<String> items) {
+    try {
+      run("msfOffer(" + js(id) + "," + JSON.writeValueAsString(items).replace("\u2028", "\\u2028")
+          .replace("\u2029", "\\u2029") + "," + js(HtmlPage.OFFER_BUTTON) + ")");
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
   private static String kind(String speaker) {
     return switch (speaker) {
       case "You" -> "you";

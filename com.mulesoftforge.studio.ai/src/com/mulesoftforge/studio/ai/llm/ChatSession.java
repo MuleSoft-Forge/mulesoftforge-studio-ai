@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.mulesoftforge.studio.ai.check.Problem;
+import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
@@ -35,10 +36,12 @@ public class ChatSession {
       """;
 
   private static final int MAX_TOOL_ROUNDS = 12;
+  private static final String EMPTY_REPLY = "(empty reply)";
 
   // problems: what the static checks still find in the proposals when the model stopped.
+  // offers: changes the model recommended but did not make, for the user to pick from.
   public record Turn(String text, ChangeSet changes, int toolCalls, List<CallUsage> calls,
-      Map<String, Integer> toolCounts, List<Problem> problems) {
+      Map<String, Integer> toolCounts, List<Problem> problems, List<ChangeOffer> offers) {
 
     // Plain-language summary for the transcript, e.g. "read 2 files, proposed changes to 1 file".
     public String activity() {
@@ -63,6 +66,9 @@ public class ChatSession {
         parts.add("proposed changes to " + plural(proposed, "file"));
       } else if (edits > 0) {
         parts.add("tried " + plural(edits, "edit") + " that did not apply");
+      }
+      if (!offers.isEmpty()) {
+        parts.add("offered " + plural(offers.size(), "change"));
       }
       return parts.isEmpty() ? "answered directly" : String.join(", ", parts);
     }
@@ -137,6 +143,8 @@ public class ChatSession {
     Map<String, Integer> toolCounts = new LinkedHashMap<>();
 
     String answer = null;
+    // Models often write the whole answer in the message that calls offer_changes, then only a closing line.
+    String offeredWith = null;
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system));
@@ -160,9 +168,13 @@ public class ChatSession {
       turn.add(reply);
       if (tools == null || !reply.hasToolExecutionRequests()) {
         answer = reply.text() == null || reply.text().isBlank()
-            ? (changes.isEmpty() ? "(empty reply)" : "Proposed changes are ready for review.")
+            ? (changes.isEmpty() ? EMPTY_REPLY : "Proposed changes are ready for review.")
             : reply.text();
         break;
+      }
+      if (reply.text() != null && !reply.text().isBlank() && reply.toolExecutionRequests().stream()
+          .anyMatch(call -> call.name().equals("offer_changes"))) {
+        offeredWith = reply.text().strip();
       }
       for (ToolExecutionRequest call : reply.toolExecutionRequests()) {
         toolCalls++;
@@ -175,10 +187,17 @@ public class ChatSession {
       answer = "Stopped after " + MAX_TOOL_ROUNDS + " steps before the model finished."
           + (changes.isEmpty() ? "" : " What it proposed so far is ready to review; ask it to continue if needed.");
     }
+    if (offeredWith != null && !answer.contains(offeredWith)) {
+      answer = answer.equals(EMPTY_REPLY) ? offeredWith : offeredWith + "\n\n" + answer;
+    }
 
     // Tool traffic stays out of history: some providers reject tool messages in a request without tools.
     String remembered = changes.isEmpty() ? answer : answer + "\n\n[Proposed for review: "
         + String.join(", ", changes.all().stream().map(c -> c.path()).toList()) + "]";
+    List<ChangeOffer> offers = tools == null ? List.of() : tools.offers();
+    if (!offers.isEmpty()) {
+      remembered += "\n\n" + ChangeOffer.remembered(offers);
+    }
     // Images are large and billed on every request that carries them, so later turns keep only the text.
     history.add(textOnly);
     history.add(AiMessage.from(remembered));
@@ -187,7 +206,7 @@ public class ChatSession {
     reviewNotes.clear();
     cancelNotes.removeAll(cancelled);
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
-    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems);
+    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers);
   }
 
   // History safe to write to disk: same turns, without the open-file contents.

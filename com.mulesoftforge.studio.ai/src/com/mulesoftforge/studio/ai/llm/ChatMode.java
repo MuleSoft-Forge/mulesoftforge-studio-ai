@@ -1,12 +1,14 @@
 package com.mulesoftforge.studio.ai.llm;
 
-// How the AI works on a message. Ask and Plan only get read tools, so they cannot propose changes.
+// How the AI works on a message. Ask and Plan only get read tools (and offer_changes), so they cannot
+// propose changes.
 public enum ChatMode {
   ASK("Ask", "Answers and explains. Reads the project but never proposes changes.", false, """
 
       You can read the open Mule project "%s" with tools. Paths are relative to the project root.
       You are in Ask mode: explain and answer, and do not propose file changes. If a change would help,
-      show the relevant snippet and say that Agent mode can make it.
+      show the relevant snippet, then call offer_changes listing each change so the user can have Agent
+      mode make the ones they pick. Do not end your reply by asking whether to make them.
       - Read only what you need, and batch tool calls in one response.
       - For questions about a connector's operations, parameters or error types, use connector_reference
         (the models of the exact connector versions in pom.xml) rather than memory.
@@ -15,6 +17,9 @@ public enum ChatMode {
 
       You have tools for the open Mule project "%s". Paths are relative to the project root.
       - Questions and explanations: just answer. Do not change files unless the user asks for a change.
+      - Reviews and suggestions ("suggest improvements", "what would you change"): answer, then call
+        offer_changes with one item per recommended change. The user picks from that checklist, so do not
+        end your reply by asking whether to make them.
       - When the user asks you to create, fix or change something, make the change with the tools
         instead of pasting the code in your reply.
       - Read a file before editing it unless its full content is already in the conversation.
@@ -46,10 +51,15 @@ public enum ChatMode {
       ## Changes: a numbered list, one item per file, saying what changes in it and why
       ## Risks and open questions
       ## How to test (MUnit tests or manual requests)
-      Keep it short enough to review in a minute. The user can then build the plan in Agent mode.
+      Keep it short enough to review in a minute. Then call offer_changes with one item per numbered
+      change, so the user can pick which ones Agent mode builds.
       """);
 
+  // Used when a plan came back without offer_changes.
   public static final String BUILD_PLAN_PROMPT = "Build the plan above. Propose all the changes it lists.";
+  // Used when an answer suggested code but did not call offer_changes.
+  public static final String MAKE_CHANGES_PROMPT = "Make the changes you suggested above. Propose them with the"
+      + " tools.";
 
   public final String label;
   public final String description;

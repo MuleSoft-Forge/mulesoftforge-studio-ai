@@ -2,12 +2,12 @@
 <feature
       id="com.mulesoftforge.studio.ai.feature"
       label="MuleSoftForge Studio AI"
-      version="0.4.6.qualifier"
+      version="0.4.7.qualifier"
       provider-name="MuleSoftForge">
 
    <description>
-      AI chat for Anypoint Studio. Works with OpenRouter, the MuleSoft AI Gateway LLM Proxy,
-      OpenAI, Anthropic, Ollama, and other OpenAI-compatible endpoints. Proof of concept.
+      AI chat for Anypoint Studio. Works with OpenRouter, OpenAI, Anthropic, Google Gemini,
+      Azure OpenAI, Amazon Bedrock, Ollama, and other OpenAI-compatible endpoints. Proof of concept.
    </description>
 
    <url>

@@ -1,5 +1,7 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.util.List;
+
 import org.eclipse.swt.widgets.Control;
 
 // The conversation area. Two implementations: a rich HTML one in Eclipse's browser, and a plain
@@ -29,4 +31,8 @@ interface Transcript {
 
   // A button under the last message, e.g. "Build this plan".
   void action(String label, String id);
+
+  // A checklist of changes under the last message, all ticked, and a button. The button sends
+  // "offer:<id>:<ticked indices, comma-separated>" as a command.
+  void offer(String id, List<String> items);
 }

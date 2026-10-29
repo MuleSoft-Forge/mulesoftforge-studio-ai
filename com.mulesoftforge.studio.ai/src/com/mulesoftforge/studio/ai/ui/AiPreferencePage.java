@@ -41,7 +41,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Label hint;
   private Text baseUrl;
   private Combo model;
+  private Label apiKeyLabel;
   private Text apiKey;
+  private Label clientIdLabel;
+  private Text clientId;
+  private Label clientSecretLabel;
+  private Text clientSecret;
   private Label keyInfo;
   private Label testResult;
   // Edits to providers other than the one on screen, kept until Apply so switching does not lose them.
@@ -66,7 +71,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     label(body, "Provider:");
     provider = new Combo(body, SWT.READ_ONLY);
-    for (Provider p : Provider.values()) {
+    for (Provider p : Provider.shownInUiValues()) {
       provider.add(p.label);
     }
     provider.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
@@ -90,12 +95,18 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     model.setToolTipText(
         "Curated models first. Type any id, or Refresh models for a filtered live list from the provider.");
 
-    label(body, "API key:");
+    apiKeyLabel = label(body, "API key:");
     apiKey = text(body, SWT.BORDER | SWT.PASSWORD);
+    clientIdLabel = label(body, "Client id:");
+    clientId = text(body, SWT.BORDER);
+    clientSecretLabel = label(body, "Client secret:");
+    clientSecret = text(body, SWT.BORDER | SWT.PASSWORD);
     new Label(body, SWT.NONE);
     keyInfo = new Label(body, SWT.WRAP);
     keyInfo.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     apiKey.addListener(SWT.Modify, e -> showKeyInfo());
+    clientId.addListener(SWT.Modify, e -> showKeyInfo());
+    clientSecret.addListener(SWT.Modify, e -> showKeyInfo());
 
     Composite actions = new Composite(body, SWT.NONE);
     actions.setLayout(new GridLayout(2, false));
@@ -125,7 +136,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     createHistoryGroup(body);
 
     Provider current = AiSettings.provider();
-    provider.select(current.ordinal());
+    if (!current.shownInUi()) {
+      current = Provider.OPENROUTER;
+    }
+    provider.select(Provider.shownInUiValues().indexOf(current));
     load(current);
     return body;
   }
@@ -266,10 +280,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       return true;
     } catch (StorageException e) {
       setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD
-          ? "Could not save the API key: Eclipse secure storage has no master password. Press Apply "
+          ? "Could not save credentials: Eclipse secure storage has no master password. Press Apply "
               + "again and accept the password or Keychain prompt, or set one up in "
               + "General > Security > Secure Storage > Password."
-          : "Could not save the API key: " + Errors.describe(e));
+          : "Could not save credentials: " + Errors.describe(e));
       return false;
     } catch (Exception e) {
       setErrorMessage("Could not save settings: " + Errors.describe(e));
@@ -292,12 +306,16 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     baseUrl.setText(draft != null ? draft.baseUrl() : AiSettings.baseUrl(p));
     // Do not keep the previous provider's model text (e.g. openrouter/auto on OpenAI).
     seedSuggestions(p, draft != null ? draft.model() : AiSettings.model(p), false);
-    apiKey.setEnabled(p != Provider.OLLAMA);
+    showCredentialFields(p);
     try {
       apiKey.setText(draft != null ? draft.apiKey() : AiSettings.apiKey(p));
+      clientId.setText(draft != null ? draft.clientId() : AiSettings.clientId(p));
+      clientSecret.setText(draft != null ? draft.clientSecret() : AiSettings.clientSecret(p));
       setErrorMessage(null);
     } catch (Exception e) {
       apiKey.setText("");
+      clientId.setText("");
+      clientSecret.setText("");
       setErrorMessage("Secure storage unavailable: " + Errors.describe(e));
     }
     showKeyInfo();
@@ -305,27 +323,49 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     hint.getParent().layout(true, true);
   }
 
+  private void showCredentialFields(Provider p) {
+    boolean gateway = p.needsClientCredentials();
+    boolean ollama = p == Provider.OLLAMA;
+    setRowVisible(apiKeyLabel, apiKey, !gateway && !ollama);
+    setRowVisible(clientIdLabel, clientId, gateway);
+    setRowVisible(clientSecretLabel, clientSecret, gateway);
+  }
+
+  private static void setRowVisible(Label label, Text field, boolean visible) {
+    label.setVisible(visible);
+    field.setVisible(visible);
+    ((GridData) label.getLayoutData()).exclude = !visible;
+    ((GridData) field.getLayoutData()).exclude = !visible;
+  }
+
   private static String keyHint(Connection connection) {
-    String problem = connection.provider().keyProblem(connection.apiKey());
+    String problem = connection.provider().credentialsProblem(connection.apiKey(), connection.clientId(),
+        connection.clientSecret());
     return problem == null ? "" : problem + "\n\n";
   }
 
   private boolean changed(Connection draft) throws StorageException {
     Provider p = draft.provider();
     return !draft.baseUrl().equals(AiSettings.baseUrl(p)) || !draft.model().equals(AiSettings.model(p))
-        || !draft.apiKey().equals(AiSettings.apiKey(p));
+        || !draft.apiKey().equals(AiSettings.apiKey(p)) || !draft.clientId().equals(AiSettings.clientId(p))
+        || !draft.clientSecret().equals(AiSettings.clientSecret(p));
   }
 
-  // Shows the start and end of the key on screen, so a key saved under the wrong provider is easy to spot.
+  // Shows the start and end of the credentials on screen, so a value saved under the wrong provider is easy to spot.
   private void showKeyInfo() {
     if (shown == null || shown == Provider.OLLAMA) {
       keyInfo.setText("");
       return;
     }
-    String key = apiKey.getText();
-    String problem = shown.keyProblem(key);
-    keyInfo.setText("Key for " + shown.label + ": " + Provider.describeKey(key)
-        + (problem == null ? "" : "\n" + problem));
+    String problem = shown.credentialsProblem(apiKey.getText(), clientId.getText(), clientSecret.getText());
+    if (shown.needsClientCredentials()) {
+      keyInfo.setText("Client id for " + shown.label + ": " + Provider.describeKey(clientId.getText())
+          + "\nClient secret: " + Provider.describeKey(clientSecret.getText())
+          + (problem == null ? "" : "\n" + problem));
+    } else {
+      keyInfo.setText("Key for " + shown.label + ": " + Provider.describeKey(apiKey.getText())
+          + (problem == null ? "" : "\n" + problem));
+    }
     keyInfo.getParent().layout(true, true);
   }
 
@@ -408,12 +448,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   // The fields always show the provider last loaded, which is the selected one except mid-switch.
   private Connection fromFields() {
-    return new Connection(shown, baseUrl.getText().trim(), model.getText().trim(), apiKey.getText().trim());
+    return new Connection(shown, baseUrl.getText().trim(), model.getText().trim(), apiKey.getText().trim(),
+        clientId.getText().trim(), clientSecret.getText().trim());
   }
 
   private Provider selected() {
+    List<Provider> choices = Provider.shownInUiValues();
     int index = provider.getSelectionIndex();
-    return index < 0 ? Provider.OPENROUTER : Provider.values()[index];
+    return index < 0 || index >= choices.size() ? Provider.OPENROUTER : choices.get(index);
   }
 
   private static String shorten(String value) {
@@ -421,8 +463,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     return text.length() > 80 ? text.substring(0, 80) + "…" : text;
   }
 
-  private static void label(Composite parent, String text) {
-    new Label(parent, SWT.NONE).setText(text);
+  private static Label label(Composite parent, String text) {
+    Label label = new Label(parent, SWT.NONE);
+    label.setText(text);
+    label.setLayoutData(new GridData(SWT.BEGINNING, SWT.CENTER, false, false));
+    return label;
   }
 
   private static Text text(Composite parent, int style) {

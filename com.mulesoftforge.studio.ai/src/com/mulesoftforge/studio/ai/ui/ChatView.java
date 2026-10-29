@@ -35,6 +35,7 @@ import org.eclipse.ui.texteditor.ITextEditor;
 
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
@@ -49,6 +50,7 @@ import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.render.HtmlPage;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -65,11 +67,15 @@ public class ChatView extends ViewPart {
   private record DataWeaveProposal(DataWeaveScript script, String fixed) {}
 
   private static final String BUILD_PLAN = "build-plan";
+  private static final String MAKE_CHANGES = "make-changes";
+  private static final String OFFER = "offer:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
+  // Checklists of changes the AI offered to make, by the index in their Make selected changes button.
+  private final List<List<ChangeOffer>> offers = new ArrayList<>();
 
   private final ChatSession session = new ChatSession();
   private final CostMeter chatCost = new CostMeter();
@@ -264,10 +270,15 @@ public class ChatView extends ViewPart {
 
     @Override
     public void command(String id) {
-      if (BUILD_PLAN.equals(id) && running == null) {
-        composer.setMode(ChatMode.AGENT);
-        composer.setPrompt(ChatMode.BUILD_PLAN_PROMPT);
-        send();
+      if (BUILD_PLAN.equals(id)) {
+        sendInAgentMode(ChatMode.BUILD_PLAN_PROMPT);
+      } else if (MAKE_CHANGES.equals(id)) {
+        sendInAgentMode(ChatMode.MAKE_CHANGES_PROMPT);
+      } else if (id.startsWith(OFFER)) {
+        List<ChangeOffer> picked = pickedOffers(id.substring(OFFER.length()));
+        if (picked != null) {
+          sendInAgentMode(ChangeOffer.prompt(picked));
+        }
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
         if (proposal != null) {
@@ -329,6 +340,7 @@ public class ChatView extends ViewPart {
     session.clear();
     changes.clear();
     dataWeaveFixes.clear();
+    offers.clear();
     chatCost.reset();
     chatCounted = false;
     entries.clear();
@@ -436,7 +448,8 @@ public class ChatView extends ViewPart {
     try {
       Connection connection = AiSettings.current();
       provider = connection.provider();
-      keyProblem = provider.keyProblem(connection.apiKey());
+      keyProblem = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
+          connection.clientSecret());
       model = ChatModels.create(connection);
       List<Attachment> attached = composer.attached();
       Attachment open = composer.includeOpenFile() ? ActiveFile.capture(getSite().getPage()) : null;
@@ -525,7 +538,7 @@ public class ChatView extends ViewPart {
       } catch (Exception e) {
         if (!cancelled.get()) {
           Activator.logError("MuleSoftForge AI request failed", e);
-          error = (keyProblem == null ? "" : keyProblem + " Check the key in Settings.\n\n") + Errors.describe(e);
+          error = (keyProblem == null ? "" : keyProblem + " Check Settings.\n\n") + Errors.describe(e);
           if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
             error += "\n\nThis message included an image. If the model " + model.defaultRequestParameters().modelName()
                 + " cannot read images, pick one that can (for example a Claude, GPT-4o/GPT-5 or Gemini model,"
@@ -557,8 +570,15 @@ public class ChatView extends ViewPart {
                 + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
           }
           changes.add(project, result.changes().all());
-          if (mode == ChatMode.PLAN && project != null) {
+          if (project != null && !result.offers().isEmpty()) {
+            transcript.offer(String.valueOf(offers.size()),
+                result.offers().stream().map(ChangeOffer::label).toList());
+            offers.add(result.offers());
+          } else if (mode == ChatMode.PLAN && project != null) {
             transcript.action("Build this plan in Agent mode", BUILD_PLAN);
+          } else if (project != null && fix == null && result.changes().isEmpty()
+              && result.text().contains("```")) {
+            transcript.action("Make these changes", MAKE_CHANGES);
           }
           if (fix != null) {
             offerDataWeaveFix(fix, result.text());
@@ -589,6 +609,39 @@ public class ChatView extends ViewPart {
     dataWeaveFixes.add(new DataWeaveProposal(script, fixed));
     transcript.action("Review diff", DATAWEAVE_DIFF + index);
     transcript.action("Apply to the DataWeave editor", DATAWEAVE_APPLY + index);
+  }
+
+  private void sendInAgentMode(String prompt) {
+    if (running != null) {
+      append("Note", "Wait for the current answer, or cancel it, then click again.");
+      return;
+    }
+    composer.setMode(ChatMode.AGENT);
+    composer.setPrompt(prompt);
+    send();
+  }
+
+  // "<checklist index>:<ticked indices>" from a Make selected changes click.
+  private List<ChangeOffer> pickedOffers(String value) {
+    int colon = value.indexOf(':');
+    List<ChangeOffer> offered;
+    try {
+      offered = offers.get(Integer.parseInt(value.substring(0, colon)));
+    } catch (RuntimeException e) {
+      append("Note", "These changes were offered in an earlier chat. Ask again to get a fresh list.");
+      return null;
+    }
+    List<ChangeOffer> picked = new ArrayList<>();
+    for (String index : value.substring(colon + 1).split(",")) {
+      if (index.matches("\\d+") && Integer.parseInt(index) < offered.size()) {
+        picked.add(offered.get(Integer.parseInt(index)));
+      }
+    }
+    if (picked.isEmpty()) {
+      append("Note", "Tick at least one change, then click " + HtmlPage.OFFER_BUTTON + ".");
+      return null;
+    }
+    return picked;
   }
 
   private DataWeaveProposal dataWeaveFix(String index) {

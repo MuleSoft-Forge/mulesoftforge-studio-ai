@@ -3,8 +3,8 @@
 AI chat inside Anypoint Studio. It uses [LangChain4j](https://docs.langchain4j.dev/) so one plugin can talk to:
 
 - OpenRouter (model `openrouter/auto` lets OpenRouter choose)
-- MuleSoft AI Gateway LLM Proxy (Flex Gateway)
-- OpenAI, Anthropic, Ollama (local)
+- MuleSoft AI Gateway LLM Proxy (implemented, not offered in the UI yet — proxy has no usable model list)
+- OpenAI, Anthropic, Google Gemini, Azure OpenAI, Amazon Bedrock, Ollama (local)
 - any other OpenAI-compatible endpoint (LiteLLM, vLLM, …)
 
 Built for Anypoint Studio 7.28 (Eclipse 4.31, Java 17).
@@ -26,7 +26,7 @@ Users install from the update site on the MuleSoftForge docs site; the install g
 1. **Help > Install New Software… > Add…** and paste `https://docs.mulesoftforge.com/studio-ai/updates/` (or **Local…** and choose `com.mulesoftforge.studio.ai.updatesite/target/repository` for a local build).
 2. Tick **MuleSoftForge Studio AI**, finish, and restart Studio. Installing also adds the site to Available Software Sites (`com.mulesoftforge.studio.ai.feature/p2.inf`), so **Help > Check for Updates** finds new releases.
 3. **Window > Show View > Other… > MuleSoftForge > MuleSoftForge AI**.
-4. Click **Settings** in the view (or **Preferences > MuleSoftForge AI**), pick a provider, enter the API key, and click **Test connection**.
+4. Click **Settings** in the view (or **Preferences > MuleSoftForge AI**), pick a provider, enter the API key (or client id and secret for MuleSoft AI Gateway), and click **Test connection**.
 
 To remove it: **Help > About Anypoint Studio > Installation Details**, select it, **Uninstall**.
 
@@ -48,9 +48,11 @@ The first drop-down picks the mode:
 
 - **Ask**: answers and explains. It can read the project but never proposes changes.
 - **Agent**: reads the project and proposes changes for review (below).
-- **Plan**: reads the project and writes a plan (goal, changes per file, risks, how to test). **Build this plan in Agent mode** under the answer switches to Agent and asks it to propose the changes.
+- **Plan**: reads the project and writes a plan (goal, changes per file, risks, how to test), then lists its changes as a checklist (below).
 
 Ask and Plan only get the read tools, and the tool layer refuses edits in those modes as well.
+
+**Picking which suggestions to make.** When the AI recommends changes without making them (a review such as "study my project and suggest improvements", an Ask answer, or a plan), it lists them under the answer as **Changes it can make**, each ticked, with the files it touches. Untick the ones you don't want and click **Make selected changes**. That switches to Agent and asks for just those changes, which then come back as proposals to review (below). If a model writes code in its answer without listing it, **Make these changes** asks it to propose what it suggested; a plan without a list gets **Build this plan in Agent mode**. The list belongs to the open chat: a chat reopened from History shows the answer but not the checklist.
 
 The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Windows) for message bubbles, code blocks with Copy / Insert at cursor, real tables and collapsible progress steps. If the browser cannot start, or **Preferences > MuleSoftForge AI > Chat view** is turned off, the plain text view is used instead. Model output is escaped, the page cannot navigate, and links open through Studio.
 

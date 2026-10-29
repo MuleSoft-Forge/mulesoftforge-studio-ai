@@ -129,12 +129,33 @@ public final class Pricing {
         ids.add("anthropic/" + model);
         ids.add("anthropic/" + undated.replaceAll("(\\d)-(\\d)", "$1.$2"));
       }
+      case GEMINI -> {
+        ids.add("google/" + model);
+        ids.add("google/" + undated);
+      }
+      case AZURE_OPENAI -> {
+        ids.add("openai/" + model);
+        ids.add("openai/" + undated);
+        ids.add(model);
+      }
+      case BEDROCK -> {
+        ids.add(model);
+        ids.add(undated);
+        // OpenRouter-style ids when the Bedrock id embeds the vendor.
+        if (model.startsWith("anthropic.")) {
+          ids.add("anthropic/" + undated.replace("anthropic.", "").replaceAll("(\\d)-(\\d)", "$1.$2"));
+        }
+        if (model.startsWith("amazon.")) {
+          ids.add("amazon/" + undated.replace("amazon.", ""));
+        }
+      }
       case OPENROUTER, MULESOFT_AI_GATEWAY, CUSTOM, OLLAMA -> {
         ids.add(model);
         ids.add(undated);
         if (!model.contains("/")) {
           ids.add("openai/" + undated);
           ids.add("anthropic/" + undated.replaceAll("(\\d)-(\\d)", "$1.$2"));
+          ids.add("google/" + undated);
         }
       }
       default -> throw new IllegalStateException("Unhandled provider " + provider);
