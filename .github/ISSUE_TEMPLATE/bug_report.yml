@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in MuleSoftForge Studio AI does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never paste API keys, client secrets or tokens.** Error dumps from the plugin
+        show HTTP headers and bodies; check them before pasting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open …
+        2. Ask …
+        3. See error …
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message or log
+      description: The error shown in the chat view, or the relevant part of Studio's Error Log.
+      render: text
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Shown in the MuleSoftForge AI view header, for example v0.4.6.
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - OpenRouter
+        - OpenAI
+        - Anthropic
+        - Google Gemini
+        - Azure OpenAI
+        - Amazon Bedrock
+        - Ollama
+        - Other OpenAI-compatible
+        - Not provider related
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: gpt-5-mini
+  - type: input
+    id: studio
+    attributes:
+      label: Anypoint Studio version and OS
+      placeholder: Studio 7.28, macOS 15
+    validations:
+      required: true
