@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
+import com.mulesoftforge.studio.ai.llm.SecretMask;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -108,6 +109,7 @@ public final class ProjectTools {
   private final ProjectFiles files;
   private final ChangeSet changes;
   private final boolean canEdit;
+  private final SecretMask secrets;
   private final ConnectorCatalog connectors;
   private final List<ChangeOffer> offers = new ArrayList<>();
   private List<Problem> baseline;
@@ -117,9 +119,15 @@ public final class ProjectTools {
   }
 
   public ProjectTools(ProjectFiles files, ChangeSet changes, boolean canEdit) {
+    this(files, changes, canEdit, new SecretMask());
+  }
+
+  // secrets hides values in what the model reads and restores them in what it writes.
+  public ProjectTools(ProjectFiles files, ChangeSet changes, boolean canEdit, SecretMask secrets) {
     this.files = files;
     this.changes = changes;
     this.canEdit = canEdit;
+    this.secrets = secrets;
     this.connectors = ConnectorCatalog.of(files);
   }
 
@@ -203,20 +211,24 @@ public final class ProjectTools {
     if (ProjectPaths.isSkipped(path)) {
       return "ERROR: " + path + " is in a build or tooling folder.";
     }
+    if (SecretMask.isBlocked(path)) {
+      return SecretMask.withheld(path);
+    }
     String content = current(path);
     if (content == null) {
       return "ERROR: file not found: " + path;
     }
-    if (content.length() > READ_LIMIT) {
-      return content.substring(0, READ_LIMIT) + "\n(truncated at " + READ_LIMIT + " characters)";
+    String shown = secrets.mask(path, content).text();
+    if (shown.length() > READ_LIMIT) {
+      return shown.substring(0, READ_LIMIT) + "\n(truncated at " + READ_LIMIT + " characters)";
     }
-    return content;
+    return shown;
   }
 
   private String edit(JsonNode args) throws Exception {
     String path = ProjectPaths.requireWritable(text(args, "path", true));
-    String oldText = text(args, "old_text", true);
-    String newText = text(args, "new_text", true);
+    String oldText = restored(text(args, "old_text", true));
+    String newText = restored(text(args, "new_text", true));
     String content = current(path);
     if (content == null) {
       return "ERROR: file not found: " + path + ". Use write_file to create it.";
@@ -237,7 +249,17 @@ public final class ProjectTools {
 
   private String write(JsonNode args) throws Exception {
     String path = ProjectPaths.requireWritable(text(args, "path", true));
-    return stage(path, text(args, "content", true));
+    return stage(path, restored(text(args, "content", true)));
+  }
+
+  // The model's text with real values back in place of the placeholders it was shown.
+  private String restored(String text) {
+    String real = secrets.unmask(text);
+    if (SecretMask.hasPlaceholder(real)) {
+      throw new IllegalArgumentException("a «masked-N» placeholder in your text was not one you were shown."
+          + " Read the file again and copy the placeholders exactly.");
+    }
+    return real;
   }
 
   private String offer(JsonNode args) {
@@ -282,7 +304,7 @@ public final class ProjectTools {
     }
     return result + "\n\nCHECKS: with your proposals applied, the project has " + problems.size()
         + (problems.size() == 1 ? " problem" : " problems") + " that it did not have before:\n"
-        + MuleChecks.describe(problems)
+        + secrets.mask(null, MuleChecks.describe(problems)).text()
         + "Fix them with another edit before you finish, or tell the user why they are fine.";
   }
 
@@ -314,7 +336,7 @@ public final class ProjectTools {
       return "No problems found" + scope + ". These are static checks of the files; they do not run the app.";
     }
     return problems.size() + (problems.size() == 1 ? " problem" : " problems") + " found" + scope + ":\n"
-        + MuleChecks.describe(problems)
+        + secrets.mask(null, MuleChecks.describe(problems)).text()
         + "These are static checks of the files; they do not run the app.";
   }
 

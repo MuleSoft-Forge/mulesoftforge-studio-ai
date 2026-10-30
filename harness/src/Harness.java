@@ -46,6 +46,7 @@ import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.llm.SecretMask;
 import com.mulesoftforge.studio.ai.llm.Updates;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.render.Highlighter;
@@ -169,6 +170,7 @@ public class Harness {
             .build()));
       }
       case "check-attach" -> checkAttach();
+      case "check-secrets" -> checkSecrets();
       case "check-html" -> checkHtml(args.length > 1 ? Path.of(args[1]) : null);
       case "check-render" -> checkRender();
       case "check-history" -> checkHistory();
@@ -885,6 +887,125 @@ public class Harness {
     System.exit(failed == 0 ? 0 : 1);
   }
 
+  // Offline: what is hidden from the model, what is kept so it can still help, and that edits get the real values.
+  private static void checkSecrets() throws Exception {
+    int failed = 0;
+    SecretMask mask = new SecretMask();
+
+    String props = mask.mask("src/main/resources/config.properties", "db.host=localhost\ndb.password=Sup3r!Pass\n"
+        + "client_secret = abcDEF123456\nhttp.port=8081\napi.key=${secure::api.key}\nsecure.key=k3yMaterial99\n"
+        + "other.password=Sup3r!Pass\n").text();
+    failed += check("properties: password hidden", !props.contains("Sup3r!Pass") && props.contains("db.password=«masked-"));
+    failed += check("properties: client secret hidden", !props.contains("abcDEF123456"));
+    failed += check("properties: secure.key hidden", !props.contains("k3yMaterial99"));
+    failed += check("properties: host and port kept", props.contains("db.host=localhost") && props.contains("http.port=8081"));
+    failed += check("properties: secure reference kept", props.contains("api.key=${secure::api.key}"));
+    failed += check("same value, same placeholder", props.split("«masked-1»", -1).length == 3);
+
+    String yaml = mask.mask("src/main/resources/dev.yaml", "db:\n  host: \"db.example.com\"\n  user: app\n"
+        + "  password: hunter2pass\nsalesforce:\n  token: 'tok_9f8e7d6c5b'\n"
+        + "  tokenUrl: https://login.salesforce.com/services/oauth2/token\n").text();
+    failed += check("yaml: nested password hidden", !yaml.contains("hunter2pass"));
+    failed += check("yaml: quoted token hidden", !yaml.contains("tok_9f8e7d6c5b"));
+    failed += check("yaml: host, user and token URL kept", yaml.contains("db.example.com") && yaml.contains("user: app")
+        && yaml.contains("login.salesforce.com"));
+
+    String xml = mask.mask("src/main/mule/api.xml",
+        "<db:my-sql-connection host=\"${db.host}\" user=\"app\" password=\"Plain0ldPass\"/>\n"
+            + "<oauth:client-credentials-grant-type clientId=\"3MVG9abc\" clientSecret=\"S3cr3tValue\""
+            + " tokenUrl=\"https://x/token\"/>\n"
+            + "<http:header key=\"Authorization\" value=\"Basic dXNlcjpwYXNzd29yZA==\"/>\n"
+            + "<tls:key-store path=\"keystore.jks\" keyPassword=\"kp4ssw0rd\" password=\"${secure::ks.password}\"/>\n"
+            + "<logger doc:name=\"Log token\" message=\"#[vars.token]\"/>\n"
+            + "<db:generic-connection url=\"jdbc:sqlserver://h;user=sa;password=SqlP4ss\"/>").text();
+    for (String secret : List.of("Plain0ldPass", "3MVG9abc", "S3cr3tValue", "dXNlcjpwYXNzd29yZA==", "kp4ssw0rd",
+        "SqlP4ss")) {
+      failed += check("mule xml: " + secret + " hidden", !xml.contains(secret));
+    }
+    for (String kept : List.of("${db.host}", "user=\"app\"", "tokenUrl=\"https://x/token\"", "${secure::ks.password}",
+        "#[vars.token]", "doc:name=\"Log token\"", "key=\"Authorization\"", "path=\"keystore.jks\"", "user=sa")) {
+      failed += check("mule xml: " + kept + " kept", xml.contains(kept));
+    }
+
+    String dw = mask.mask("src/main/resources/dwl/auth.dwl", "%dw 2.0\noutput application/json\n---\n{ username: \"svc\","
+        + " password: \"DwP4ss!\", token: vars.token, \"Authorization\": \"Bearer \" ++ vars.jwt }").text();
+    failed += check("dataweave: password literal hidden", !dw.contains("DwP4ss!"));
+    failed += check("dataweave: expressions and the Bearer prefix kept", dw.contains("token: vars.token")
+        && dw.contains("\"Bearer \" ++ vars.jwt"));
+
+    String json = mask.mask("src/test/resources/token-request.json",
+        "{\"client_id\":\"cid-123456\",\"client_secret\":\"cs-abcdef\",\"grant_type\":\"client_credentials\"}").text();
+    failed += check("json: client id and secret hidden", !json.contains("cid-123456") && !json.contains("cs-abcdef"));
+    failed += check("json: grant type kept", json.contains("\"grant_type\":\"client_credentials\""));
+
+    String launch = mask.mask("my-app.launch", "<stringAttribute key=\"org.eclipse.jdt.launching.VM_ARGUMENTS\""
+        + " value=\"-M-Dsecure.key=MyEncKey123 -M-Dmule.env=dev\"/>").text();
+    failed += check("launch file: secure properties key hidden", !launch.contains("MyEncKey123"));
+    failed += check("launch file: mule.env kept", launch.contains("-Dmule.env=dev"));
+
+    String console = mask.mask(null, "INFO Request Authorization=Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+        + ".dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\nconnecting with password=ConsoleP4ss to db\n"
+        + "Caused by: java.net.ConnectException").text();
+    failed += check("console: JWT and password hidden", !console.contains("eyJhbGci") && !console.contains("ConsoleP4ss"));
+    failed += check("console: the error kept", console.contains("Caused by: java.net.ConnectException"));
+
+    String keys = mask.mask(null, "keys sk-ant-api03-abcdefghijklmnopqrstuvwxyz and AKIAIOSFODNN7EXAMPLE, broker"
+        + " amqp://guest:GuestP4ss@rabbit:5672\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----").text();
+    failed += check("API keys, URL password and private key hidden", !keys.contains("abcdefghijklmnop")
+        && !keys.contains("AKIAIOSFODNN7EXAMPLE") && !keys.contains("GuestP4ss") && !keys.contains("MIIEow"));
+    String prose = "Why does the token: refresh fail, and Basic authentication break?";
+    failed += check("ordinary prose left alone", mask.mask(null, prose).text().equals(prose));
+
+    failed += check("secret-only files are blocked", SecretMask.isBlocked(".env") && SecretMask.isBlocked("src/main/resources/server.pem")
+        && SecretMask.isBlocked("src/main/resources/keystore.jks") && SecretMask.isBlocked("credentials.json")
+        && !SecretMask.isBlocked("src/main/resources/config.properties"));
+    failed += check("blocked file content withheld", mask.mask(".env", "TOKEN=abc").text().startsWith("WITHHELD"));
+    SecretMask off = new SecretMask();
+    off.setEnabled(false);
+    failed += check("masking off sends values", off.mask("a.properties", "db.password=x1y2z3").text().contains("x1y2z3"));
+    failed += check("masking off still withholds .env", off.mask(".env", "TOKEN=abc").text().startsWith("WITHHELD"));
+
+    Path root = Files.createTempDirectory("studio-ai-secrets");
+    Files.createDirectories(root.resolve("src/main/mule"));
+    Files.writeString(root.resolve("src/main/mule/api.xml"),
+        "<db:my-sql-connection user=\"app\" password=\"Plain0ldPass\"/>\n");
+    Files.writeString(root.resolve(".env"), "TOKEN=abc\n");
+    ChangeSet changes = new ChangeSet();
+    ProjectTools tools = new ProjectTools(new DiskProject(root), changes, true, new SecretMask());
+    String read = tools.execute(ToolExecutionRequest.builder().id("t").name("read_file")
+        .arguments("{\"path\":\"src/main/mule/api.xml\"}").build());
+    failed += check("read_file hides the password", read.contains("password=\"«masked-1»\"") && !read.contains("Plain0ldPass"));
+    failed += expect(tools, "read_file", "{\"path\":\".env\"}", "WITHHELD");
+    failed += expect(tools, "edit_file", "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"user=\\\"app\\\""
+        + " password=\\\"«masked-1»\\\"\",\"new_text\":\"user=\\\"svc\\\" password=\\\"«masked-1»\\\"\"}", "Proposed change");
+    failed += check("an edit around a placeholder keeps the real value", changes.staged("src/main/mule/api.xml")
+        .contains("user=\"svc\" password=\"Plain0ldPass\""));
+    failed += expect(tools, "edit_file", "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"password=\\\"«masked-1»\\\"\","
+        + "\"new_text\":\"password=\\\"${secure::db.password}\\\"\"}", "Proposed change");
+    failed += check("moving to secure properties removes the value", changes.staged("src/main/mule/api.xml")
+        .contains("${secure::db.password}") && !changes.staged("src/main/mule/api.xml").contains("Plain0ldPass"));
+    failed += expect(tools, "edit_file", "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"«masked-99»\","
+        + "\"new_text\":\"x\"}", "ERROR: a «masked-N» placeholder");
+
+    List<String> prompts = new ArrayList<>();
+    ChatModel recorder = new ChatModel() {
+      @Override
+      public ChatResponse doChat(ChatRequest request) {
+        prompts.add(((UserMessage) request.messages().get(request.messages().size() - 1)).singleText());
+        return ChatResponse.builder().aiMessage(AiMessage.from("Use «masked-1» here")).build();
+      }
+    };
+    ChatSession session = new ChatSession();
+    ChatSession.Turn turn = session.send(recorder, "my password=PromptP4ss is wrong",
+        List.of(Attachment.openFile("p", "src/main/resources/config.properties", "db.password=Sup3r!Pass")), null);
+    failed += check("sent message hides the file and typed secrets", !prompts.get(0).contains("Sup3r!Pass")
+        && !prompts.get(0).contains("PromptP4ss"));
+    failed += check("saved chat hides the typed secret", !session.savedHistory().get(0).text().contains("PromptP4ss"));
+    failed += check("turn reports what was hidden", turn.masked() == 2 && turn.activity().contains("hid 2 secret values"));
+    failed += check("answer unmasks for copy and insert", session.unmask(turn.text()).equals("Use PromptP4ss here"));
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
   // Offline: version comparison and latest.json parsing. With a URL, also fetches that latest.json.
   private static void checkUpdates(String url) throws Exception {
     int failed = 0;
@@ -1349,7 +1470,7 @@ public class Harness {
           java Harness test-connection [provider...]
           java Harness list-models [provider...]
           java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
-          java Harness check-tools | check-render | check-history | check-attach | check-html [preview.html]
+          java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
         Providers: openrouter openai anthropic gemini azure bedrock mulesoft ollama custom
         Reads ../.env — never prints key values.

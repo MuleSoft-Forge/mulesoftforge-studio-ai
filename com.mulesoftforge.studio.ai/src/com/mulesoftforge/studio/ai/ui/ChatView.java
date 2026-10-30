@@ -249,7 +249,8 @@ public class ChatView extends ViewPart {
 
   private final class TranscriptActions implements Transcript.Actions {
     @Override
-    public void copy(String code) {
+    public void copy(String shown) {
+      String code = session.unmask(shown);
       Clipboard clipboard = new Clipboard(transcript.control().getDisplay());
       try {
         clipboard.setContents(new Object[] {code}, new Transfer[] {TextTransfer.getInstance()});
@@ -261,7 +262,7 @@ public class ChatView extends ViewPart {
 
     @Override
     public void insert(String code) {
-      insertAtCursor(code);
+      insertAtCursor(session.unmask(code));
     }
 
     @Override
@@ -535,6 +536,7 @@ public class ChatView extends ViewPart {
       ChatSession.Turn turn = null;
       String error = null;
       try {
+        session.maskSecrets(AiSettings.maskSecrets());
         turn = session.send(model, mode, prompt, attachments, project, progress);
       } catch (Exception e) {
         if (!cancelled.get()) {
@@ -597,7 +599,7 @@ public class ChatView extends ViewPart {
   }
 
   private void offerDataWeaveFix(DataWeaveScript script, String answer) {
-    String fixed = DataWeaveFix.script(answer);
+    String fixed = session.unmask(DataWeaveFix.script(answer));
     if (fixed == null) {
       append("Note", "The answer has no DataWeave code block, so there is nothing to apply to the editor.");
       return;

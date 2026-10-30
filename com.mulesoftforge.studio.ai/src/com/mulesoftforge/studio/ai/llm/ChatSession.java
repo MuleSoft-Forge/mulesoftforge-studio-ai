@@ -33,6 +33,10 @@ public class ChatSession {
       connector configuration, and Mule project structure (pom.xml, mule-artifact.json, properties).
       Be concise and practical. Put Mule XML, DataWeave and specs in fenced code blocks.
       Never invent connector operations, attributes or namespaces; say so when you are unsure.
+      Passwords, keys, tokens and client ids are hidden from you as «masked-N». That is deliberate: never ask
+      for the real values. When an edit touches a masked value, copy the placeholder exactly; the real value is
+      restored when the change is applied. A masked literal in a Mule file is a hardcoded secret, so recommend
+      moving it to secure properties.
       """;
 
   private static final int MAX_TOOL_ROUNDS = 12;
@@ -40,12 +44,16 @@ public class ChatSession {
 
   // problems: what the static checks still find in the proposals when the model stopped.
   // offers: changes the model recommended but did not make, for the user to pick from.
+  // masked: secret values hidden from the model this turn.
   public record Turn(String text, ChangeSet changes, int toolCalls, List<CallUsage> calls,
-      Map<String, Integer> toolCounts, List<Problem> problems, List<ChangeOffer> offers) {
+      Map<String, Integer> toolCounts, List<Problem> problems, List<ChangeOffer> offers, int masked) {
 
     // Plain-language summary for the transcript, e.g. "read 2 files, proposed changes to 1 file".
     public String activity() {
       List<String> parts = new ArrayList<>();
+      if (masked > 0) {
+        parts.add("hid " + plural(masked, "secret value") + " from the model");
+      }
       int listed = toolCounts.getOrDefault("list_files", 0);
       int read = toolCounts.getOrDefault("read_file", 0);
       int edits = toolCounts.getOrDefault("edit_file", 0) + toolCounts.getOrDefault("write_file", 0);
@@ -82,6 +90,17 @@ public class ChatSession {
   private final List<String> reviewNotes = new ArrayList<>();
   private final List<String> cancelNotes = Collections.synchronizedList(new ArrayList<>());
   private final List<ChatRecord.Message> saved = new ArrayList<>();
+  private final SecretMask secrets = new SecretMask();
+
+  // Off sends values as they are; files that only hold secrets are withheld either way.
+  public void maskSecrets(boolean on) {
+    secrets.setEnabled(on);
+  }
+
+  // The real values for placeholders in text the model wrote, for copying or applying it in Studio.
+  public String unmask(String text) {
+    return secrets.unmask(text);
+  }
 
   public synchronized Turn send(ChatModel model, String prompt, List<Attachment> attachments, ProjectFiles project) {
     return send(model, ChatMode.AGENT, prompt, attachments, project, Progress.NONE);
@@ -89,11 +108,14 @@ public class ChatSession {
 
   public synchronized Turn send(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
       ProjectFiles project, Progress progress) {
+    int maskedBefore = secrets.total();
+    prompt = secrets.mask(null, prompt).text();
     StringBuilder context = new StringBuilder();
     List<String> sent = new ArrayList<>();
     List<String> dropped = new ArrayList<>();
     List<ImageContent> images = new ArrayList<>();
-    for (Attachment attachment : attachments) {
+    for (Attachment original : attachments) {
+      Attachment attachment = secrets.protect(original);
       String block = attachment.toPrompt();
       if (attachment.kind() == Attachment.Kind.IMAGE) {
         images.add(attachment.toImage());
@@ -133,9 +155,14 @@ public class ChatSession {
       message = UserMessage.from(parts);
     }
     String system = project == null ? SYSTEM_PROMPT : SYSTEM_PROMPT + mode.projectPrompt(project.name());
+    int maskedInMessage = secrets.total() - maskedBefore;
+    if (maskedInMessage > 0) {
+      progress.step("Hid " + maskedInMessage + (maskedInMessage == 1 ? " secret value" : " secret values")
+          + " in your message and attachments before sending");
+    }
 
     ChangeSet changes = new ChangeSet();
-    ProjectTools tools = project == null ? null : new ProjectTools(project, changes, mode.canEdit);
+    ProjectTools tools = project == null ? null : new ProjectTools(project, changes, mode.canEdit, secrets);
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
     int toolCalls = 0;
@@ -180,7 +207,13 @@ public class ChatSession {
         toolCalls++;
         toolCounts.merge(call.name(), 1, Integer::sum);
         progress.step(ProjectTools.describe(call));
-        turn.add(ToolExecutionResultMessage.from(call, tools.execute(call)));
+        int before = secrets.total();
+        String result = tools.execute(call);
+        int hidden = secrets.total() - before;
+        if (hidden > 0) {
+          progress.step("Hid " + hidden + (hidden == 1 ? " secret value" : " secret values") + " before sending");
+        }
+        turn.add(ToolExecutionResultMessage.from(call, result));
       }
     }
     if (answer == null) {
@@ -206,7 +239,7 @@ public class ChatSession {
     reviewNotes.clear();
     cancelNotes.removeAll(cancelled);
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
-    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers);
+    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
   }
 
   // History safe to write to disk: same turns, without the open-file contents.
@@ -235,7 +268,8 @@ public class ChatSession {
 
   // Cancelled turns leave no history, so the model is told the request was dropped rather than answered.
   public void noteCancelled(String prompt) {
-    String shown = prompt.length() > 200 ? prompt.substring(0, 200) + "…" : prompt;
+    String masked = secrets.mask(null, prompt).text();
+    String shown = masked.length() > 200 ? masked.substring(0, 200) + "…" : masked;
     synchronized (cancelNotes) {
       cancelNotes.add("NOTE: The user cancelled an earlier request before you answered (\"" + shown
           + "\"). Nothing from it was kept; do not assume it was done.");
@@ -245,6 +279,7 @@ public class ChatSession {
   public synchronized void clear() {
     history.clear();
     saved.clear();
+    secrets.clear();
     reviewNotes.clear();
     cancelNotes.clear();
   }

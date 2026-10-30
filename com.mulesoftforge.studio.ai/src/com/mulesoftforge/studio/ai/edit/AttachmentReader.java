@@ -4,6 +4,7 @@ import java.nio.charset.CharacterCodingException;
 import java.util.List;
 
 import com.mulesoftforge.studio.ai.llm.Attachment;
+import com.mulesoftforge.studio.ai.llm.SecretMask;
 
 // Turns a project path into an attachment: a file's text, or a folder's file list.
 public final class AttachmentReader {
@@ -16,6 +17,9 @@ public final class AttachmentReader {
     String normalized = path.isBlank() || path.equals("/") ? "" : ProjectPaths.normalize(path);
     if (!normalized.isEmpty() && ProjectPaths.isSkipped(normalized)) {
       throw new IllegalArgumentException(normalized + " is build output or tool settings, so it is not attached.");
+    }
+    if (SecretMask.isBlocked(normalized)) {
+      throw new IllegalArgumentException(normalized + " usually holds only secrets, so it is never sent.");
     }
     String content;
     try {

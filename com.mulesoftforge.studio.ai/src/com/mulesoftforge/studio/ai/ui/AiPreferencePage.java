@@ -55,6 +55,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button saveChats;
   private Button richTranscript;
   private Button checkUpdates;
+  private Button maskSecrets;
   private Button useSystemCerts;
   private Text caPem;
   private Text retentionDays;
@@ -160,6 +161,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     checkUpdates.setText("Check for updates (reads " + Updates.LATEST_URL + " once per Studio session)");
     checkUpdates.setSelection(AiSettings.checkForUpdates());
     label(group, "Installed version " + Activator.getDefault().getBundle().getVersion() + ".");
+    maskSecrets = new Button(group, SWT.CHECK);
+    maskSecrets.setText("Hide passwords, keys and tokens from the model (recommended)");
+    maskSecrets.setSelection(AiSettings.maskSecrets());
+    label(group, "Values in properties and YAML files, Mule XML, URLs, console output and your messages are sent"
+        + " as «masked-N». Edits the AI proposes get the real values back. Files such as .env and private keys are"
+        + " never sent, whatever this is set to. Screenshots are sent as they are.");
   }
 
   private void createNetworkGroup(Composite body) {
@@ -277,6 +284,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveTrust(trustFromFields());
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
+      AiSettings.saveMaskSecrets(maskSecrets.getSelection());
       return true;
     } catch (StorageException e) {
       setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD

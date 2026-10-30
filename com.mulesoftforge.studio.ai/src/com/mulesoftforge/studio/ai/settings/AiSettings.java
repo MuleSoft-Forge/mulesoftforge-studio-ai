@@ -32,6 +32,7 @@ public final class AiSettings {
   private static final String HISTORY_DISABLED = "history.disabled";
   private static final String RETENTION_DAYS = "history.retentionDays";
   private static final String UPDATE_CHECK_DISABLED = "updates.checkDisabled";
+  private static final String MASK_SECRETS_DISABLED = "privacy.maskSecretsDisabled";
   public static final int DEFAULT_RETENTION_DAYS = 90;
 
   private static IPreferenceStore store;
@@ -131,6 +132,17 @@ public final class AiSettings {
   public static void saveCheckForUpdates(boolean check) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(UPDATE_CHECK_DISABLED, !check);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Whether passwords, keys and tokens are replaced with placeholders before anything is sent to the model.
+  public static boolean maskSecrets() {
+    return !store().getBoolean(MASK_SECRETS_DISABLED);
+  }
+
+  public static void saveMaskSecrets(boolean mask) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(MASK_SECRETS_DISABLED, !mask);
     ((ScopedPreferenceStore) prefs).save();
   }
 
