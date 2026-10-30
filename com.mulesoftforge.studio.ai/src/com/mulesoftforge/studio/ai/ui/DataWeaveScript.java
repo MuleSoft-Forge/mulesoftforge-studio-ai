@@ -1,11 +1,13 @@
 package com.mulesoftforge.studio.ai.ui;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.Adapters;
@@ -19,6 +21,7 @@ import org.eclipse.jface.text.source.Annotation;
 import org.eclipse.jface.text.source.IAnnotationModel;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.swt.custom.StyledText;
+import org.eclipse.ui.IEditorInput;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
 
@@ -30,7 +33,13 @@ import com.mulesoftforge.studio.ai.llm.Attachment;
 final class DataWeaveScript {
   static final String PROBLEMS_SCOPE = "the DataWeave script";
 
+  // Every DataWeave viewer Studio has built. Transform Message disposes its viewer when another editor becomes
+  // active and builds a new one when the Mule editor is back, so apply looks here for the new one.
+  private static final Set<ISourceViewer> VIEWERS = Collections.newSetFromMap(new WeakHashMap<>());
+
   private final ISourceViewer viewer;
+  private final IWorkbenchPage page;
+  private final IEditorInput input;
   private final String text;
   private final String project;
   private final String where;
@@ -38,9 +47,11 @@ final class DataWeaveScript {
   private final Integer lastLine;
   private final String selected;
 
-  private DataWeaveScript(ISourceViewer viewer, String text, String project, String where, Integer firstLine,
-      Integer lastLine, String selected) {
+  private DataWeaveScript(ISourceViewer viewer, IWorkbenchPage page, IEditorInput input, String text,
+      String project, String where, Integer firstLine, Integer lastLine, String selected) {
     this.viewer = viewer;
+    this.page = page;
+    this.input = input;
     this.text = text;
     this.project = project;
     this.where = where;
@@ -69,10 +80,18 @@ final class DataWeaveScript {
       selected = selection.getText();
     }
     IEditorPart editor = page == null ? null : page.getActiveEditor();
-    IFile file = editor == null ? null : Adapters.adapt(editor.getEditorInput(), IFile.class);
+    IEditorInput input = editor == null ? null : editor.getEditorInput();
+    IFile file = input == null ? null : Adapters.adapt(input, IFile.class);
     String project = file == null ? null : file.getProject().getName();
     String where = file == null ? "the open Mule configuration" : file.getProjectRelativePath().toString();
-    return new DataWeaveScript(viewer, text, project, where, first, last, selected);
+    return new DataWeaveScript(viewer, page, input, text, project, where, first, last, selected);
+  }
+
+  // Called with each viewer Studio passes to DataWeaveAction, which it does as it builds the editor.
+  static void track(ISourceViewer viewer) {
+    if (viewer != null) {
+      VIEWERS.add(viewer);
+    }
   }
 
   String text() {
@@ -131,22 +150,54 @@ final class DataWeaveScript {
 
   // Replaces the script with fixed. Returns why it could not, or null when it was applied.
   String apply(String fixed) throws BadLocationException {
-    StyledText widget = viewer.getTextWidget();
-    IDocument document = viewer.getDocument();
-    if (widget == null || widget.isDisposed() || document == null) {
-      return "The DataWeave editor this fix was for has been closed. Open the component again and choose Fix with"
-          + " MuleSoftForge AI again.";
+    ISourceViewer target = viewer;
+    if (!live(viewer)) {
+      IEditorPart active = page == null ? null : page.getActiveEditor();
+      if (input == null || active == null || !input.equals(active.getEditorInput())) {
+        return "The DataWeave editor this fix was for has been closed. Go back to " + where + ", select the"
+            + " component so its script shows in Transform Message, then click Apply again.";
+      }
+      List<ISourceViewer> showing = new ArrayList<>();
+      for (ISourceViewer candidate : List.copyOf(VIEWERS)) {
+        if (!live(candidate)) {
+          VIEWERS.remove(candidate);
+        } else if (candidate != viewer && script(candidate).equals(text)) {
+          showing.add(candidate);
+        }
+      }
+      if (showing.size() > 1) {
+        return "More than one open DataWeave editor shows this script, so the fix was not applied. Choose Fix with"
+            + " MuleSoftForge AI again in the one to change.";
+      }
+      if (showing.isEmpty()) {
+        return "No open DataWeave editor shows the script this fix was for. Select the component so its script shows"
+            + " in Transform Message, then click Apply again. If the script has changed, choose Fix with"
+            + " MuleSoftForge AI again.";
+      }
+      target = showing.get(0);
     }
-    IRegion region = region(viewer, document);
-    if (!document.get(region.getOffset(), region.getLength()).equals(text)) {
+    if (!script(target).equals(text)) {
       return "The script has changed since it was sent, so the fix was not applied. Choose Fix with MuleSoftForge AI"
           + " again on the current script.";
     }
+    IDocument document = target.getDocument();
+    IRegion region = region(target, document);
     document.replace(region.getOffset(), region.getLength(), fixed);
-    viewer.setSelectedRange(region.getOffset(), 0);
-    viewer.revealRange(region.getOffset(), 0);
-    widget.setFocus();
+    target.setSelectedRange(region.getOffset(), 0);
+    target.revealRange(region.getOffset(), 0);
+    target.getTextWidget().setFocus();
     return null;
+  }
+
+  private static boolean live(ISourceViewer viewer) {
+    StyledText widget = viewer.getTextWidget();
+    return widget != null && !widget.isDisposed() && viewer.getDocument() != null;
+  }
+
+  private static String script(ISourceViewer viewer) throws BadLocationException {
+    IDocument document = viewer.getDocument();
+    IRegion region = region(viewer, document);
+    return document.get(region.getOffset(), region.getLength());
   }
 
   private static IRegion region(ISourceViewer viewer, IDocument document) {

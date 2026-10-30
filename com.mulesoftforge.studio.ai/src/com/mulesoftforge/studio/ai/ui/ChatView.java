@@ -334,7 +334,7 @@ public class ChatView extends ViewPart {
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
         if (proposal != null) {
-          CompareUI.openCompareEditor(ChangeCompareInput.dataWeave(proposal.script().where(),
+          CompareUI.openCompareDialog(ChangeCompareInput.dataWeave(proposal.script().where(),
               proposal.script().text(), proposal.fixed()));
         }
       } else if (OPEN_RAW.equals(id) && chatId != null) {

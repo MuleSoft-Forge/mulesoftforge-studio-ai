@@ -43,6 +43,7 @@ public class DataWeaveAction extends Action implements ISourceViewerAware, IExec
   @Override
   public void setSourceViewer(ISourceViewer sourceViewer) {
     viewer = sourceViewer;
+    DataWeaveScript.track(sourceViewer);
   }
 
   @Override
