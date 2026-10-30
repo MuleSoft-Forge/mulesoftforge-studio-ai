@@ -48,6 +48,7 @@ public final class ModelLists {
    */
   public static List<String> forPicker(Provider provider, List<String> fromApi, String current) {
     LinkedHashSet<String> out = new LinkedHashSet<>();
+    out.add(AutoRouter.AUTO);
     for (String id : provider.suggestedModels) {
       if (id != null && !id.isBlank()) {
         out.add(id.trim());

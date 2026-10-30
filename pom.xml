@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.mulesoftforge.studio</groupId>
   <artifactId>studio-ai-parent</artifactId>
-  <version>0.5.1-SNAPSHOT</version>
+  <version>0.5.2-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>MuleSoftForge Studio AI Parent</name>
 

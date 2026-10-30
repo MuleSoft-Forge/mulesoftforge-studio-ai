@@ -207,6 +207,10 @@ public final class ChatModels {
     if (connection.model().isBlank()) {
       throw new IllegalStateException("Set the model for " + name + " in Preferences > MuleSoftForge AI.");
     }
+    if (AutoRouter.isAuto(connection.model())) {
+      throw new IllegalStateException("Auto picks a model per message in the chat view. Choose a model here,"
+          + " or set Auto's fast and strong models in Preferences > MuleSoftForge AI.");
+    }
     String credentials = connection.provider().credentialsProblem(connection.apiKey(), connection.clientId(),
         connection.clientSecret());
     if (credentials != null) {

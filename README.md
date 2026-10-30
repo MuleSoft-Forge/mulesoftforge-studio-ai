@@ -46,7 +46,7 @@ Open a Mule file, type a question, press Enter. **Include open file** sends the 
 
 The first drop-down picks the mode:
 
-- **Ask**: answers and explains. It can read the project but never proposes changes.
+- **Ask**: answers and explains. It can read the project but never changes files. When you ask for a review or a fix, it lists possible fixes, collapsed and unticked, for Agent mode to make.
 - **Agent**: reads the project and proposes changes for review (below).
 - **Plan**: reads the project and writes a plan (goal, changes per file, risks, how to test), then lists its changes as a checklist (below).
 
@@ -125,6 +125,8 @@ If the company proxy re-signs HTTPS, calls fail with "certificate is not trusted
 
 Test connection and Refresh models use the settings on screen, before you click Apply.
 
+**Auto** (first in every model list) picks per message between **Auto fast model** and **Auto strong model**, set per provider below Model (defaults in `AutoRouter.defaults`). Rules in `AutoRouter.choose`: Agent and Plan, DataWeave fixes, images, attachments over 24k characters, messages over 1,500 characters, and wording such as review, fix, error, write, test go to the strong model; other Ask questions go to the fast one. The chat shows "Auto picked … : reason". If the chosen model fails with 408, 429, 5xx, a timeout or a dropped connection before any call answered, the turn runs once on the other model (`AutoRouter.send`); 4xx errors such as a bad key are not retried. A turn never switches model between tool rounds. Test connection on Auto tests the strong model. `openrouter/auto` stays available for OpenRouter, and with either Auto the step under each answer names the model that replied.
+
 Each provider keeps its own base URL, model and key. Switching provider on the page keeps what you typed for the others, and Apply saves them all. Under the key, the page shows its start and end (`sk-or-…a1b2, 73 characters`) and warns when it looks like another provider's key, the usual cause of a 401. The models Refresh models finds are saved for that provider and offered in the chat view's model picker, and the chat view updates when settings change, however Preferences was opened.
 
 **Preferences > MuleSoftForge AI > Chat history**: turn saving off, set how many days to keep chats (default 90, 0 = forever), or delete all chats.
@@ -145,6 +147,7 @@ cd harness
 ./run.sh check-render                                  # offline: Markdown and code colouring
 ./run.sh check-history                                 # offline: save, reload, export, prune, cost ledger
 ./run.sh check-raw-log                                 # offline: chat via a local stub; exact HTTP bodies captured, masked, no API key
+./run.sh check-auto                                    # offline: Auto routing rules and failover via a local stub
 ./run.sh check-attach                                  # offline: attachments, size caps, cancel note
 ./run.sh check-html /tmp/preview.html                  # offline: rich chat HTML and escaping; writes a preview page
 ./run.sh check-updates [latest.json URL]               # offline: version compare and latest.json; with a URL, fetches it

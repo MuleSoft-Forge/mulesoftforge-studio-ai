@@ -47,6 +47,7 @@ import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
+import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -391,12 +392,13 @@ final class Composer {
       if (refetch) {
         Pricing.refresh();
       }
-      String price = Pricing.priceText(provider, current);
+      String price = AutoRouter.isAuto(current) ? autoPrice(provider) : Pricing.priceText(provider, current);
       StringBuilder table = new StringBuilder("List prices per 1M tokens (input · output):");
       List<String> found = new ArrayList<>();
       for (String model : models) {
-        table.append("\n").append(model).append("   ").append(Pricing.priceText(provider, model));
-        found.add(Pricing.shortPriceText(provider, model));
+        boolean auto = AutoRouter.isAuto(model);
+        table.append("\n").append(model).append("   ").append(auto ? autoPrice(provider) : Pricing.priceText(provider, model));
+        found.add(auto ? "fast or strong model, per message" : Pricing.shortPriceText(provider, model));
       }
       table.append("\n\nType any other model id and press Enter.");
       StatusPanel.PriceList prices = priceList(provider, current, models, found);
@@ -411,6 +413,12 @@ final class Composer {
     });
     job.setSystem(true);
     job.schedule();
+  }
+
+  private static String autoPrice(Provider provider) {
+    AutoRouter.Models auto = AiSettings.autoModels(provider);
+    return "Picks per message: fast " + auto.fast() + " (" + Pricing.priceText(provider, auto.fast()) + "), strong "
+        + auto.strong() + " (" + Pricing.priceText(provider, auto.strong()) + ")";
   }
 
   // found holds each model's short price text, null where the price list has no entry for it.

@@ -84,7 +84,9 @@ public final class ProjectTools {
           .name("offer_changes")
           .description("Offer the user changes you recommend but have not made. They appear as a checklist under"
               + " your answer, and the user ticks which ones to have you make. Call it once, at the end, with one"
-              + " item per independent change, instead of asking in your reply whether to make them.")
+              + " item per independent change, instead of asking in your reply whether to make them. Only when"
+              + " the user asked for a review, problems, suggestions or a change; not for questions and"
+              + " explanations.")
           .parameters(JsonObjectSchema.builder()
               .addProperty("items", JsonArraySchema.builder()
                   .description("The changes, most important first")

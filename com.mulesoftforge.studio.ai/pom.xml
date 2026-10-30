@@ -6,7 +6,7 @@
   <parent>
     <groupId>com.mulesoftforge.studio</groupId>
     <artifactId>studio-ai-parent</artifactId>
-    <version>0.5.1-SNAPSHOT</version>
+    <version>0.5.2-SNAPSHOT</version>
   </parent>
   <artifactId>com.mulesoftforge.studio.ai</artifactId>
   <packaging>eclipse-plugin</packaging>

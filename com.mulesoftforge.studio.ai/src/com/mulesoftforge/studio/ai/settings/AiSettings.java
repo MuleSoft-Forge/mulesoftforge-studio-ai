@@ -12,6 +12,7 @@ import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Network;
 
@@ -22,6 +23,8 @@ public final class AiSettings {
   private static final String BASE_URL = "baseUrl.";
   private static final String MODEL = "model.";
   private static final String FETCHED_MODELS = "fetchedModels.";
+  private static final String AUTO_FAST = "auto.fast.";
+  private static final String AUTO_STRONG = "auto.strong.";
   private static final String API_KEY = "apiKey.";
   private static final String CLIENT_ID = "clientId.";
   private static final String CLIENT_SECRET = "clientSecret.";
@@ -95,7 +98,8 @@ public final class AiSettings {
   }
 
   public static boolean affectsModels(String key) {
-    return key == null || key.equals(PROVIDER) || key.startsWith(MODEL) || key.startsWith(FETCHED_MODELS);
+    return key == null || key.equals(PROVIDER) || key.startsWith(MODEL) || key.startsWith(FETCHED_MODELS)
+        || key.startsWith(AUTO_FAST) || key.startsWith(AUTO_STRONG);
   }
 
   public static boolean affectsRawLog(String key) {
@@ -105,6 +109,21 @@ public final class AiSettings {
   public static void saveModel(Provider provider, String model) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(MODEL + provider.name(), model.trim());
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // The two models Auto picks between for this provider.
+  public static AutoRouter.Models autoModels(Provider provider) {
+    AutoRouter.Models defaults = AutoRouter.defaults(provider);
+    String fast = store().getString(AUTO_FAST + provider.name()).trim();
+    String strong = store().getString(AUTO_STRONG + provider.name()).trim();
+    return new AutoRouter.Models(fast.isEmpty() ? defaults.fast() : fast, strong.isEmpty() ? defaults.strong() : strong);
+  }
+
+  public static void saveAutoModels(Provider provider, AutoRouter.Models models) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(AUTO_FAST + provider.name(), models.fast().trim());
+    prefs.setValue(AUTO_STRONG + provider.name(), models.strong().trim());
     ((ScopedPreferenceStore) prefs).save();
   }
 

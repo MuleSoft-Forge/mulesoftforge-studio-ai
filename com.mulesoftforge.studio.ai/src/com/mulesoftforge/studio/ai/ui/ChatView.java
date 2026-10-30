@@ -44,6 +44,7 @@ import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.llm.Attachment;
+import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
@@ -58,8 +59,6 @@ import com.mulesoftforge.studio.ai.render.HtmlPage;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
-
-import dev.langchain4j.model.chat.ChatModel;
 
 // The MuleSoftForge AI view: runs each message, records the chat for saving, and tracks its cost.
 // Layout pieces live in Composer, ChangesPanel, ChatHistoryMenu and the Transcript implementations.
@@ -520,7 +519,8 @@ public class ChatView extends ViewPart {
     }
     refreshHeader();
     String id = chatId != null ? chatId : ChatStore.newId();
-    ChatModel model;
+    List<AutoRouter.Option> models = new ArrayList<>();
+    AutoRouter.Choice auto = null;
     RawCapture capture;
     List<Attachment> attachments = new ArrayList<>();
     EclipseProject project;
@@ -538,7 +538,6 @@ public class ChatView extends ViewPart {
           Activator.logError("Could not write the MuleSoftForge AI raw log", e);
         }
       }) : null;
-      model = ChatModels.create(connection, capture);
       List<Attachment> attached = composer.attached();
       Attachment open = composer.includeOpenFile() ? ActiveFile.capture(getSite().getPage()) : null;
       if (open != null && attached.stream().noneMatch(a -> a.kind() == Attachment.Kind.FILE
@@ -547,6 +546,16 @@ public class ChatView extends ViewPart {
       }
       attachments.addAll(attached);
       project = EclipseProject.find(getSite().getPage());
+      if (AutoRouter.isAuto(connection.model())) {
+        auto = AutoRouter.choose(mode, prompt, attachments, fix != null, AiSettings.autoModels(provider));
+        models.add(new AutoRouter.Option(auto.model(), ChatModels.create(connection.withModel(auto.model()), capture)));
+        if (auto.fallback() != null) {
+          models.add(new AutoRouter.Option(auto.fallback(),
+              ChatModels.create(connection.withModel(auto.fallback()), capture)));
+        }
+      } else {
+        models.add(new AutoRouter.Option(connection.model(), ChatModels.create(connection, capture)));
+      }
     } catch (Exception e) {
       append("Error", Errors.describe(e));
       return;
@@ -569,6 +578,10 @@ public class ChatView extends ViewPart {
     }
     context.add(project == null ? "no project open, so no file access" : "project " + project.name());
     appendYou(prompt, String.join(", ", context));
+    if (auto != null) {
+      appendStep("Auto picked " + auto.model() + ": " + auto.reason());
+    }
+    boolean showModel = auto != null || models.get(0).name().endsWith("/auto");
     composer.setPrompt("");
     composer.clearAttached();
     composer.setBusy(true);
@@ -608,7 +621,8 @@ public class ChatView extends ViewPart {
             CostMeter.SESSION.countChat();
           }
           if (!cancelled.get()) {
-            appendStep("Model answered in " + seconds + " s · " + CostMeter.describe(cost));
+            appendStep("Model answered in " + seconds + " s" + (showModel ? " · " + usage.model() : "") + " · "
+                + CostMeter.describe(cost));
           }
           refreshCost();
         });
@@ -624,13 +638,13 @@ public class ChatView extends ViewPart {
       String error = null;
       try {
         session.maskSecrets(AiSettings.maskSecrets());
-        turn = session.send(model, mode, prompt, attachments, project, progress);
+        turn = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
       } catch (Exception e) {
         if (!cancelled.get()) {
           Activator.logError("MuleSoftForge AI request failed", e);
           error = (keyProblem == null ? "" : keyProblem + " Check Settings.\n\n") + Errors.describe(e);
           if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
-            error += "\n\nThis message included an image. If the model " + model.defaultRequestParameters().modelName()
+            error += "\n\nThis message included an image. If the model " + models.get(models.size() - 1).name()
                 + " cannot read images, pick one that can (for example a Claude, GPT-4o/GPT-5 or Gemini model,"
                 + " or a vision model such as llava in Ollama), or remove the image and send again.";
           }
@@ -662,7 +676,7 @@ public class ChatView extends ViewPart {
           changes.add(project, result.changes().all());
           if (project != null && !result.offers().isEmpty()) {
             transcript.offer(String.valueOf(offers.size()),
-                result.offers().stream().map(ChangeOffer::label).toList());
+                result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
             offers.add(result.offers());
           } else if (mode == ChatMode.PLAN && project != null) {
             transcript.action("Build this plan in Agent mode", BUILD_PLAN);

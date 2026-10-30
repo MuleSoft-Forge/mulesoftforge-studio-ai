@@ -25,6 +25,7 @@ import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
@@ -41,6 +42,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Label hint;
   private Text baseUrl;
   private Combo model;
+  private Combo autoFast;
+  private Combo autoStrong;
   private Label apiKeyLabel;
   private Text apiKey;
   private Label clientIdLabel;
@@ -51,6 +54,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Label testResult;
   // Edits to providers other than the one on screen, kept until Apply so switching does not lose them.
   private final Map<Provider, Connection> drafts = new EnumMap<>(Provider.class);
+  private final Map<Provider, AutoRouter.Models> autoDrafts = new EnumMap<>(Provider.class);
   private Provider shown;
   private Button saveChats;
   private Button rawLog;
@@ -79,6 +83,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     provider.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     provider.addListener(SWT.Selection, e -> {
       drafts.put(shown, fromFields());
+      autoDrafts.put(shown, autoFromFields());
       load(selected());
     });
 
@@ -95,7 +100,19 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     model = new Combo(body, SWT.DROP_DOWN);
     model.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     model.setToolTipText(
-        "Curated models first. Type any id, or Refresh models for a filtered live list from the provider.");
+        "Curated models first. Type any id, or Refresh models for a filtered live list from the provider."
+            + " Auto picks the fast or strong model below for each message.");
+
+    label(body, "Auto fast model:");
+    autoFast = new Combo(body, SWT.DROP_DOWN);
+    autoFast.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+    autoFast.setToolTipText("When Model is Auto: used for Ask-mode questions with little context.");
+    label(body, "Auto strong model:");
+    autoStrong = new Combo(body, SWT.DROP_DOWN);
+    autoStrong.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+    autoStrong.setToolTipText("When Model is Auto: used in Agent and Plan mode, and for reviews, fixes, new code,"
+        + " images and large context. If the chosen model fails with a rate limit, server error or timeout"
+        + " before answering, Auto runs the message once on the other model.");
 
     apiKeyLabel = label(body, "API key:");
     apiKey = text(body, SWT.BORDER | SWT.PASSWORD);
@@ -289,6 +306,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       }
       AiSettings.save(fromFields());
       drafts.clear();
+      autoDrafts.put(shown, autoFromFields());
+      for (Map.Entry<Provider, AutoRouter.Models> auto : autoDrafts.entrySet()) {
+        AiSettings.saveAutoModels(auto.getKey(), auto.getValue());
+      }
+      autoDrafts.clear();
       int days;
       try {
         days = Integer.parseInt(retentionDays.getText().trim());
@@ -320,6 +342,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Provider p = selected();
     baseUrl.setText(p.defaultBaseUrl);
     seedSuggestions(p, p.defaultModel, false);
+    seedAuto(p, AutoRouter.defaults(p), List.of());
     super.performDefaults();
   }
 
@@ -330,6 +353,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     baseUrl.setText(draft != null ? draft.baseUrl() : AiSettings.baseUrl(p));
     // Do not keep the previous provider's model text (e.g. openrouter/auto on OpenAI).
     seedSuggestions(p, draft != null ? draft.model() : AiSettings.model(p), false);
+    seedAuto(p, autoDrafts.getOrDefault(p, AiSettings.autoModels(p)), AiSettings.fetchedModels(p));
     showCredentialFields(p);
     try {
       apiKey.setText(draft != null ? draft.apiKey() : AiSettings.apiKey(p));
@@ -394,7 +418,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   }
 
   private void testConnection() {
-    Connection connection = fromFields();
+    Connection fields = fromFields();
+    // Auto is not a model id; test the strong model, which Auto uses for most work.
+    Connection connection = AutoRouter.isAuto(fields.model()) ? fields.withModel(autoStrong.getText().trim()) : fields;
     Network.configure(trustFromFields());
     testResult.setText("Testing…");
     Display display = testResult.getDisplay();
@@ -402,7 +428,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       String result;
       try {
         String reply = ChatModels.create(connection).chat("Reply with the single word: ok");
-        result = "Connected. Model replied: " + shorten(reply)
+        result = "Connected. " + (connection == fields ? "Model" : "Auto strong model " + connection.model())
+            + " replied: " + shorten(reply)
             + "\nUse Refresh models to update the dropdown.";
       } catch (Exception e) {
         result = "Failed:\n" + keyHint(connection) + Errors.describe(e);
@@ -442,12 +469,28 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         }
         if (!choices.isEmpty()) {
           applyChoices(choices, connection.model(), true);
+          seedAuto(connection.provider(), autoFromFields(), choices);
         }
         testResult.setText(text);
         testResult.getParent().layout(true, true);
       });
       return Status.OK_STATUS;
     }).schedule();
+  }
+
+  // Both Auto pickers offer the same models as Model, without Auto itself.
+  private void seedAuto(Provider p, AutoRouter.Models selected, List<String> fetched) {
+    List<String> choices = ModelLists.forPicker(p, fetched, null).stream().filter(m -> !AutoRouter.isAuto(m)).toList();
+    for (Combo combo : List.of(autoFast, autoStrong)) {
+      combo.removeAll();
+      choices.forEach(combo::add);
+    }
+    autoFast.setText(selected.fast());
+    autoStrong.setText(selected.strong());
+  }
+
+  private AutoRouter.Models autoFromFields() {
+    return new AutoRouter.Models(autoFast.getText().trim(), autoStrong.getText().trim());
   }
 
   private void seedSuggestions(Provider p, String selected, boolean keepTyped) {

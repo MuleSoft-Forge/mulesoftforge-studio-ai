@@ -150,18 +150,20 @@ final class PlainTranscript implements Transcript {
   }
 
   @Override
-  public void offer(String id, List<String> items) {
-    muted("\n\nChanges it can make (click a box to untick it):");
+  public void offer(String id, List<String> items, boolean suggested) {
+    muted(suggested
+        ? "\n\nPossible fixes Agent mode can make (click a box to tick it):"
+        : "\n\nChanges it can make (click a box to untick it):");
     int[] boxes = new int[items.size()];
     int index = offers.size();
     for (int i = 0; i < items.size(); i++) {
       text.append("\n  ");
       boxes[i] = text.getCharCount();
-      text.append("[x] " + items.get(i));
+      text.append((suggested ? "[ ] " : "[x] ") + items.get(i));
       clickables.add(new Clickable(boxes[i], 3, BOX + index + ":" + i));
     }
     boolean[] ticked = new boolean[items.size()];
-    Arrays.fill(ticked, true);
+    Arrays.fill(ticked, !suggested);
     offers.add(new Offer(id, boxes, ticked));
     button(HtmlPage.OFFER_BUTTON, SUBMIT + index);
   }

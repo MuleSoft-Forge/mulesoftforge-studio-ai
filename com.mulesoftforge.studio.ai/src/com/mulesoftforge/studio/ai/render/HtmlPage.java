@@ -83,6 +83,8 @@ public final class HtmlPage {
         .ai .body pre { background: %s; }
         .offer { margin: 6px 0; padding: 6px 10px; border: 1px solid %s; border-radius: 8px; }
         .offer .title { font-weight: 600; font-size: 0.9em; margin-bottom: 3px; }
+        .offer.suggested .title { cursor: pointer; font-weight: normal; }
+        .offer.suggested:not([open]) .title { margin-bottom: 0; }
         .offer label { display: block; margin: 2px 0; cursor: pointer; }
         .offer .button { margin-top: 5px; }
         .raw { margin: 4px 0 8px; font-size: 0.85em; color: %s; }
@@ -159,20 +161,22 @@ public final class HtmlPage {
           log.appendChild(div);
           scrollIfNeeded(was);
         }
-        function msfOffer(id, items, label) {
+        function msfOffer(id, items, label, suggested) {
           var was = nearBottom();
           closeSteps();
-          var div = document.createElement('div');
-          div.className = 'offer';
-          var title = document.createElement('div');
+          var div = document.createElement(suggested ? 'details' : 'div');
+          div.className = 'offer' + (suggested ? ' suggested' : '');
+          var title = document.createElement(suggested ? 'summary' : 'div');
           title.className = 'title';
-          title.textContent = 'Changes it can make';
+          title.textContent = suggested
+              ? items.length + (items.length === 1 ? ' possible fix' : ' possible fixes') + ' (Agent mode can make them)'
+              : 'Changes it can make';
           div.appendChild(title);
           items.forEach(function (text, i) {
             var row = document.createElement('label');
             var box = document.createElement('input');
             box.type = 'checkbox';
-            box.checked = true;
+            box.checked = !suggested;
             box.value = String(i);
             row.appendChild(box);
             row.appendChild(document.createTextNode(' ' + text));

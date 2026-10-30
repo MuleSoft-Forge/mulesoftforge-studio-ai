@@ -122,8 +122,8 @@ final class HtmlTranscript implements Transcript {
   }
 
   @Override
-  public void offer(String id, List<String> items) {
-    run("msfOffer(" + js(id) + "," + jsValue(items) + "," + js(HtmlPage.OFFER_BUTTON) + ")");
+  public void offer(String id, List<String> items, boolean suggested) {
+    run("msfOffer(" + js(id) + "," + jsValue(items) + "," + js(HtmlPage.OFFER_BUTTON) + "," + suggested + ")");
   }
 
   @Override

@@ -1,3 +1,5 @@
+import java.net.http.HttpTimeoutException;
+import java.util.concurrent.CancellationException;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -38,6 +40,7 @@ import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.RawLog;
 import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.llm.Attachment;
+import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
@@ -65,6 +68,7 @@ import com.mulesoftforge.studio.ai.settings.Provider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 
+import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ImageContent;
@@ -180,6 +184,7 @@ public class Harness {
       case "check-render" -> checkRender();
       case "check-history" -> checkHistory();
       case "check-raw-log" -> checkRawLog();
+      case "check-auto" -> checkAuto();
       case "check-tls" -> checkTls();
       case "check-updates" -> checkUpdates(args.length > 1 ? args[1] : null);
       case "prices" -> prices(Arrays.copyOfRange(args, 1, args.length));
@@ -1085,7 +1090,11 @@ public class Harness {
         && page.contains("default-src 'none'"));
     failed += check("page colours filled in", page.contains(".t-tag { color: #3f7f7f; }") && !page.contains("%s"));
     failed += check("offer checklist sends the ticked items", page.contains("function msfOffer(")
-        && page.contains("'cmd:offer:'") && page.contains("box.checked = true"));
+        && page.contains("'cmd:offer:'") && page.contains("box.checked = !suggested"));
+    failed += check("Ask-mode offers are collapsed and unticked", page.contains("createElement(suggested ? 'details'")
+        && page.contains("possible fixes"));
+    failed += check("Ask mode says it can suggest fixes", ChatMode.ASK.description.contains("Never changes files")
+        && ChatMode.ASK.description.contains("suggest fixes"));
     failed += check("raw blocks are text, collapsed and hideable", page.contains("function msfRaw(")
         && page.contains("pre.textContent = part[1]") && page.contains("function msfShowRaw(")
         && page.contains(".raw.hidden { display: none; }"));
@@ -1097,7 +1106,9 @@ public class Harness {
           msfStep('Done in 5 s · read 1 file · this answer $0.0012');
           msfAction('Build this plan in Agent mode', 'build-plan');
           msfOffer('0', ['Move the OAuth credentials to secure properties (src/main/mule/app.xml, pom.xml)',
-              'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Make selected changes');
+              'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Make selected changes', false);
+          msfOffer('1', ['Set mule-maven-plugin classifier to mule-application (pom.xml)',
+              'Move API keys to Mule secure properties (src/main/resources/local.properties)'], 'Make selected changes', true);
           msfRaw('Raw · 2 calls', [
             {heading: 'Step 1 · POST https://openrouter.ai/api/v1/chat/completions · HTTP 200 · openai/gpt-5-mini · 3.1 s',
              request: '{\\n  "model" : "openai/gpt-5-mini",\\n  "messages" : [ {\\n    "role" : "user",\\n    "content" : "How do I log the payload? <b>not bold</b>"\\n  } ]\\n}',
@@ -1335,6 +1346,120 @@ public class Harness {
       server.stop(0);
     }
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // Auto: which model each kind of message gets, which failures move to the other model, and a real failover
+  // against a local stub where the fast model is overloaded.
+  private static void checkAuto() throws Exception {
+    int failed = 0;
+    AutoRouter.Models pair = new AutoRouter.Models("fast-model", "strong-model");
+    List<Attachment> none = List.of();
+    failed += check("plain question goes fast", AutoRouter.choose(ChatMode.ASK, "tell me about this project", none,
+        false, pair).model().equals("fast-model"));
+    failed += check("fast has strong as fallback", "strong-model".equals(AutoRouter.choose(ChatMode.ASK, "what is a flow",
+        none, false, pair).fallback()));
+    failed += check("agent mode goes strong", AutoRouter.choose(ChatMode.AGENT, "hi", none, false, pair).model()
+        .equals("strong-model"));
+    failed += check("plan mode goes strong", AutoRouter.choose(ChatMode.PLAN, "hi", none, false, pair).model()
+        .equals("strong-model"));
+    failed += check("review question goes strong", AutoRouter.choose(ChatMode.ASK, "Review this flow please", none,
+        false, pair).model().equals("strong-model"));
+    failed += check("error question goes strong", AutoRouter.choose(ChatMode.ASK, "why do I get this error?", none,
+        false, pair).model().equals("strong-model"));
+    failed += check("DataWeave fix goes strong", AutoRouter.choose(ChatMode.ASK, "hello", none, true, pair).model()
+        .equals("strong-model"));
+    failed += check("image goes strong", AutoRouter.choose(ChatMode.ASK, "what is this",
+        List.of(Attachment.image("shot.png", 10, 10, "image/png", new byte[] {1, 2, 3})), false, pair).model()
+        .equals("strong-model"));
+    failed += check("large context goes strong", AutoRouter.choose(ChatMode.ASK, "what does it do",
+        List.of(Attachment.file("p", "big.xml", "x".repeat(30_000))), false, pair).reason().contains("context"));
+    failed += check("same model twice has no fallback", AutoRouter.choose(ChatMode.ASK, "hi", none, false,
+        new AutoRouter.Models("m", "m")).fallback() == null);
+    failed += check("unset models are explained", rejectsState(() -> AutoRouter.choose(ChatMode.ASK, "hi", none, false,
+        new AutoRouter.Models("", "strong-model"))));
+    failed += check("Auto is first-class in the picker", ModelLists.suggestionsOnly(Provider.ANTHROPIC, "claude-sonnet-4-6")
+        .contains(AutoRouter.AUTO));
+    failed += check("defaults for every provider", Arrays.stream(Provider.values())
+        .allMatch(p -> p == Provider.CUSTOM || !AutoRouter.defaults(p).fast().isBlank()));
+    failed += check("Auto never sent as a model id", rejectsState(() -> ChatModels.create(new Connection(Provider.CUSTOM,
+        "http://127.0.0.1:1/v1", "Auto", ""))));
+
+    failed += check("429 is retryable", AutoRouter.retryable(new HttpException(429, "slow down")));
+    failed += check("503 is retryable", AutoRouter.retryable(new RuntimeException("wrapped",
+        new HttpException(503, "overloaded"))));
+    failed += check("401 is not retryable", !AutoRouter.retryable(new HttpException(401, "bad key")));
+    failed += check("400 is not retryable", !AutoRouter.retryable(new HttpException(400, "bad")));
+    failed += check("timeout is retryable", AutoRouter.retryable(new RuntimeException(new HttpTimeoutException("t"))));
+    failed += check("cancel is not retryable", !AutoRouter.retryable(new CancellationException("c")));
+
+    List<String> asked = new ArrayList<>();
+    int[] badRequest = {0};
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      String model = body.contains("\"fast-model\"") ? "fast-model" : "strong-model";
+      asked.add(model);
+      int status = badRequest[0] == 1 ? 400 : model.equals("fast-model") ? 503 : 200;
+      byte[] reply = (status != 200 ? "{\"error\":{\"message\":\"nope\"}}"
+          : "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"strong-model\","
+              + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"from strong\"},"
+              + "\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,"
+              + "\"total_tokens\":7}}").getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(status, reply.length);
+      exchange.getResponseBody().write(reply);
+      exchange.close();
+    });
+    server.start();
+    try {
+      Connection base = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+          "fast-model", "");
+      List<AutoRouter.Option> options = List.of(
+          new AutoRouter.Option("fast-model", ChatModels.create(base, null)),
+          new AutoRouter.Option("strong-model", ChatModels.create(base.withModel("strong-model"), null)));
+      List<String> steps = new ArrayList<>();
+      Progress progress = new Progress() {
+        @Override
+        public void step(String message) {
+          steps.add(message);
+        }
+
+        @Override
+        public boolean isCancelled() {
+          return false;
+        }
+      };
+      ChatSession session = new ChatSession();
+      ChatSession.Turn turn = AutoRouter.send(session, options, ChatMode.ASK, "what is a flow", List.of(), null, progress);
+      failed += check("failover answered from strong", turn.text().contains("from strong"));
+      failed += check("fast was tried first", asked.get(0).equals("fast-model") && asked.contains("strong-model"));
+      failed += check("switch shown as a step", steps.stream().anyMatch(s -> s.startsWith("fast-model failed (HTTP 503")
+          && s.endsWith("trying strong-model")));
+      failed += check("history kept once", session.savedHistory().size() == 2);
+
+      badRequest[0] = 1;
+      asked.clear();
+      boolean threw = false;
+      try {
+        AutoRouter.send(new ChatSession(), options, ChatMode.ASK, "what is a flow", List.of(), null, progress);
+      } catch (RuntimeException e) {
+        threw = true;
+      }
+      failed += check("400 does not move to the other model", threw && !asked.isEmpty()
+          && asked.stream().allMatch("fast-model"::equals));
+    } finally {
+      server.stop(0);
+    }
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
+  private static boolean rejectsState(ThrowingRunnable action) {
+    try {
+      action.run();
+      return false;
+    } catch (Exception e) {
+      return e instanceof IllegalStateException;
+    }
   }
 
   private static boolean rejects(ThrowingRunnable action) {

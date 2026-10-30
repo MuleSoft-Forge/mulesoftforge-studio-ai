@@ -32,9 +32,10 @@ interface Transcript {
   // A button under the last message, e.g. "Build this plan".
   void action(String label, String id);
 
-  // A checklist of changes under the last message, all ticked, and a button. The button sends
-  // "offer:<id>:<ticked indices, comma-separated>" as a command.
-  void offer(String id, List<String> items);
+  // A checklist of changes under the last message, and a button. The button sends
+  // "offer:<id>:<ticked indices, comma-separated>" as a command. suggested (Ask mode): collapsed and nothing
+  // ticked, since the user asked a question rather than for changes; otherwise all ticked.
+  void offer(String id, List<String> items, boolean suggested);
 
   // One model call of a turn, as shown in a raw block.
   record RawCall(String heading, String request, String response) {}
