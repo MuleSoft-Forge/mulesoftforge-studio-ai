@@ -26,11 +26,15 @@ final class DiagnosingHttpClient implements HttpClient {
   private final java.net.http.HttpClient jdk;
   private final Duration readTimeout;
   private final HttpClient streaming;
+  private final RawCapture capture;
 
-  DiagnosingHttpClient(java.net.http.HttpClient jdk, Duration readTimeout, HttpClient streaming) {
+  // capture, when not null, receives each sync exchange without headers.
+  DiagnosingHttpClient(java.net.http.HttpClient jdk, Duration readTimeout, HttpClient streaming,
+      RawCapture capture) {
     this.jdk = jdk;
     this.readTimeout = readTimeout == null ? Duration.ofSeconds(180) : readTimeout;
     this.streaming = streaming;
+    this.capture = capture;
   }
 
   @Override
@@ -60,14 +64,17 @@ final class DiagnosingHttpClient implements HttpClient {
       response = jdk.send(builder.build(), BodyHandlers.ofString());
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
+      captured(request, null, null);
       throw new RuntimeException("Interrupted calling " + request.method() + " " + request.url(), e);
     } catch (Exception e) {
+      captured(request, null, null);
       throw new RuntimeException("Transport failure calling " + request.method() + " " + request.url()
           + ": " + Errors.describe(e), e);
     }
 
     int status = response.statusCode();
     String body = response.body() == null ? "" : response.body();
+    captured(request, status, body);
     Map<String, List<String>> headers = response.headers().map();
     if (status >= 400) {
       throw new ProviderHttpException(request.method().name(), request.url(), status, headers, body);
@@ -93,6 +100,12 @@ final class DiagnosingHttpClient implements HttpClient {
   @Override
   public Flow.Publisher<HttpStreamingEvent> stream(HttpRequest request, ServerSentEventParser parser) {
     return streaming.stream(request, parser);
+  }
+
+  private void captured(HttpRequest request, Integer status, String body) {
+    if (capture != null) {
+      capture.http(request.method().name(), request.url(), status, request.body(), body);
+    }
   }
 
   private static boolean hasFormData(HttpRequest request) {

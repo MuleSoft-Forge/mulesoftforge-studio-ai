@@ -85,7 +85,15 @@ public final class HtmlPage {
         .offer .title { font-weight: 600; font-size: 0.9em; margin-bottom: 3px; }
         .offer label { display: block; margin: 2px 0; cursor: pointer; }
         .offer .button { margin-top: 5px; }
-        """.formatted(p.panel().css(), border, theme.background().css(), border);
+        .raw { margin: 4px 0 8px; font-size: 0.85em; color: %s; }
+        .raw.hidden { display: none; }
+        .raw summary { cursor: pointer; }
+        .raw .open { margin-left: 10px; }
+        .raw details { margin: 3px 0 3px 14px; }
+        .raw pre { white-space: pre-wrap; word-break: break-all; max-height: 420px; overflow: auto;
+          border: 1px solid %s; border-radius: 4px; color: %s; }
+        """.formatted(p.panel().css(), border, theme.background().css(), border, p.muted().css(), border,
+            theme.foreground().css());
     return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
@@ -177,6 +185,44 @@ public final class HtmlPage {
           div.appendChild(a);
           log.appendChild(div);
           scrollIfNeeded(was);
+        }
+        var showRaw = true;
+        function details(title) {
+          var d = document.createElement('details');
+          var s = document.createElement('summary');
+          s.textContent = title;
+          d.appendChild(s);
+          return d;
+        }
+        function msfRaw(title, calls, open) {
+          var was = nearBottom();
+          closeSteps();
+          var block = details(title);
+          block.className = 'raw' + (showRaw ? '' : ' hidden');
+          if (open) {
+            var a = document.createElement('a');
+            a.className = 'open';
+            a.setAttribute('data-a', 'cmd:' + open);
+            a.textContent = 'Open raw log';
+            block.querySelector('summary').appendChild(a);
+          }
+          calls.forEach(function (call) {
+            var one = details(call.heading);
+            [['Request', call.request], ['Response', call.response]].forEach(function (part) {
+              var d = details(part[0]);
+              var pre = document.createElement('pre');
+              pre.textContent = part[1] || '(empty)';
+              d.appendChild(pre);
+              one.appendChild(d);
+            });
+            block.appendChild(one);
+          });
+          log.appendChild(block);
+          scrollIfNeeded(was);
+        }
+        function msfShowRaw(on) {
+          showRaw = on;
+          document.querySelectorAll('.raw').forEach(function (b) { b.classList.toggle('hidden', !on); });
         }
         function msfClear() { log.innerHTML = ''; steps = null; }
         document.addEventListener('click', function (e) {

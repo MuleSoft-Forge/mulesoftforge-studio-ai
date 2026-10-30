@@ -8,6 +8,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
+import org.eclipse.core.filesystem.EFS;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.window.Window;
@@ -18,6 +19,9 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.ide.IDE;
 
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
@@ -25,7 +29,7 @@ import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 
-// "History ▾": recent saved chats, each with Open, Rename, Export as Markdown and Delete.
+// "History ▾": recent saved chats, each with Open, Rename, Export as Markdown, Open raw log and Delete.
 final class ChatHistoryMenu {
   interface Host {
     // Id of the chat on screen, or null before its first message.
@@ -66,6 +70,9 @@ final class ChatHistoryMenu {
     boolean busy = host.busy();
     Menu menu = new Menu(anchor);
     action(menu, "New chat", !busy, host::newChat);
+    if (current != null && Stores.raw().exists(current)) {
+      action(menu, "Open raw log of this chat", true, () -> openRaw(current));
+    }
     new MenuItem(menu, SWT.SEPARATOR);
     if (chats.isEmpty()) {
       action(menu, AiSettings.saveChats() ? "No saved chats yet" : "Saving chats is off (Settings)", false, null);
@@ -84,6 +91,8 @@ final class ChatHistoryMenu {
       action(actions, "Open", !busy, () -> host.open(chat.id()));
       action(actions, "Rename…", true, () -> rename(chat));
       action(actions, "Export as Markdown…", true, () -> export(chat));
+      action(actions, Stores.raw().exists(chat.id()) ? "Open raw log" : "No raw log (Raw was off)",
+          Stores.raw().exists(chat.id()), () -> openRaw(chat.id()));
       new MenuItem(actions, SWT.SEPARATOR);
       action(actions, "Delete", !busy || !isCurrent, () -> delete(chat));
     }
@@ -136,6 +145,21 @@ final class ChatHistoryMenu {
     }
   }
 
+  private void openRaw(String id) {
+    try {
+      openRawLog(id);
+    } catch (Exception e) {
+      host.note("Error", "Could not open the raw log: " + Errors.describe(e));
+    }
+  }
+
+  // A readable copy in Studio's text editor; the file is outside the workspace projects.
+  static void openRawLog(String id) throws Exception {
+    Path readable = Stores.raw().writeReadable(id);
+    IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
+    IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(readable.toUri()));
+  }
+
   private void delete(ChatRecord.Summary chat) {
     if (!MessageDialog.openConfirm(shell, "Delete chat", "Delete \"" + chat.title() + "\"?"
         + "\nIts cost stays in the spending totals.")) {
@@ -143,6 +167,7 @@ final class ChatHistoryMenu {
     }
     try {
       Stores.chats().delete(chat.id());
+      Stores.raw().delete(chat.id());
       host.deleted(chat.id());
     } catch (Exception e) {
       host.note("Error", "Could not delete chat: " + Errors.describe(e));

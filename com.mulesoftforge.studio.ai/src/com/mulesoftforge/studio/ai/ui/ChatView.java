@@ -3,7 +3,9 @@ package com.mulesoftforge.studio.ai.ui;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.compare.CompareUI;
@@ -21,6 +23,7 @@ import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.program.Program;
+import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
@@ -50,6 +53,7 @@ import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.render.HtmlPage;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
@@ -71,6 +75,7 @@ public class ChatView extends ViewPart {
   private static final String OFFER = "offer:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
+  private static final String OPEN_RAW = "raw-log";
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
@@ -89,8 +94,11 @@ public class ChatView extends ViewPart {
   private String chatProject;
   private final List<ChatRecord.Entry> entries = new ArrayList<>();
   private boolean replaying;
+  // Messages sent in this chat; raw log calls carry the number of the turn they belong to.
+  private int turns;
 
   private Label header;
+  private Button rawToggle;
   private StatusPanel status;
   private Transcript transcript;
   private ChangesPanel changes;
@@ -103,9 +111,9 @@ public class ChatView extends ViewPart {
     parent.setLayout(new GridLayout(1, false));
     IWorkbenchPage page = getSite().getPage();
 
-    // Provider and Settings on the left; version and History on the right.
+    // Provider and Settings on the left; version, Raw and History on the right.
     Composite top = new Composite(parent, SWT.NONE);
-    GridLayout topLayout = new GridLayout(5, false);
+    GridLayout topLayout = new GridLayout(6, false);
     topLayout.marginHeight = 2;
     top.setLayout(topLayout);
     top.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
@@ -117,6 +125,12 @@ public class ChatView extends ViewPart {
     settings.addListener(SWT.Selection, e -> openSettings());
     new Label(top, SWT.NONE).setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     new VersionLink(top, page);
+    rawToggle = new Button(top, SWT.CHECK);
+    rawToggle.setText("Raw");
+    rawToggle.setToolTipText("Record every request and response from now on, and show them under each answer."
+        + " Exact HTTP bodies, URL and status; never headers, so API keys stay out.");
+    rawToggle.setSelection(AiSettings.rawLog());
+    rawToggle.addListener(SWT.Selection, e -> toggleRaw(rawToggle.getSelection()));
     Link history = new Link(top, SWT.NONE);
     history.setText("<a>History ▾</a>");
     history.setToolTipText("Saved chats in this workspace");
@@ -127,6 +141,7 @@ public class ChatView extends ViewPart {
     SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
     middle.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
+    transcript.showRaw(AiSettings.rawLog());
     status = new StatusPanel(middle, () -> composer.refreshPrices());
     middle.setWeights(78, 22);
     // After the children exist: the transcript takes its theme from its parent's background.
@@ -194,6 +209,9 @@ public class ChatView extends ViewPart {
       if (AiSettings.affectsModels(key) && settingsRefreshPending.compareAndSet(false, true)) {
         display.asyncExec(this::settingsChanged);
       }
+      if (AiSettings.affectsRawLog(key)) {
+        display.asyncExec(this::rawSettingChanged);
+      }
     });
 
     refreshHeader();
@@ -209,6 +227,39 @@ public class ChatView extends ViewPart {
     }
     refreshHeader();
     composer.refreshModels();
+  }
+
+  private void rawSettingChanged() {
+    if (rawToggle.isDisposed()) {
+      return;
+    }
+    boolean on = AiSettings.rawLog();
+    rawToggle.setSelection(on);
+    transcript.showRaw(on);
+  }
+
+  private void toggleRaw(boolean on) {
+    try {
+      AiSettings.saveRawLog(on);
+    } catch (Exception e) {
+      append("Error", "Could not save the Raw setting: " + Errors.describe(e));
+    }
+    transcript.showRaw(on);
+    if (on) {
+      transcript.step("Raw is on: each request and response is recorded from the next message, without headers");
+    }
+  }
+
+  // The calls of one turn, collapsed under its answer.
+  private void showRawTurn(List<RawCapture.Call> calls) {
+    if (calls == null || calls.isEmpty()) {
+      return;
+    }
+    List<Transcript.RawCall> shown = calls.stream()
+        .map(c -> new Transcript.RawCall(c.heading(), c.requestText(), c.responseText()))
+        .toList();
+    transcript.raw("Raw · " + calls.size() + (calls.size() == 1 ? " call" : " calls"), shown,
+        chatId == null ? null : OPEN_RAW);
   }
 
   @Override
@@ -287,6 +338,12 @@ public class ChatView extends ViewPart {
           CompareUI.openCompareEditor(ChangeCompareInput.dataWeave(proposal.script().where(),
               proposal.script().text(), proposal.fixed()));
         }
+      } else if (OPEN_RAW.equals(id) && chatId != null) {
+        try {
+          ChatHistoryMenu.openRawLog(chatId);
+        } catch (Exception e) {
+          append("Error", "Could not open the raw log: " + Errors.describe(e));
+        }
       } else if (id.startsWith(DATAWEAVE_APPLY)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_APPLY.length()));
         if (proposal != null) {
@@ -346,6 +403,7 @@ public class ChatView extends ViewPart {
     chatCost.reset();
     chatCounted = false;
     entries.clear();
+    turns = 0;
     chatId = null;
     chatTitle = null;
     chatCreated = null;
@@ -359,6 +417,7 @@ public class ChatView extends ViewPart {
     Job job = Job.create("Prune MuleSoftForge AI chats", monitor -> {
       try {
         Stores.chats().prune(days, Instant.now());
+        Stores.raw().prune(days, Instant.now());
       } catch (Exception e) {
         Activator.logError("Could not prune saved chats", e);
       }
@@ -400,12 +459,17 @@ public class ChatView extends ViewPart {
     chatTitle = record.title();
     chatCreated = record.created();
     chatProject = record.project();
+    Map<Integer, List<RawCapture.Call>> raw = rawCalls(record.id());
     replaying = true;
     try {
       for (ChatRecord.Entry entry : record.entries()) {
         switch (entry.speaker()) {
           case "AI" -> appendMarkdown("AI", entry.text());
           case "You" -> {
+            if (turns > 0) {
+              showRawTurn(raw.get(turns));
+            }
+            turns++;
             String text = entry.text();
             int split = text.lastIndexOf("\n[");
             if (split >= 0 && text.endsWith("]")) {
@@ -418,6 +482,7 @@ public class ChatView extends ViewPart {
           default -> append(entry.speaker(), entry.text());
         }
       }
+      showRawTurn(raw.get(turns));
     } finally {
       replaying = false;
     }
@@ -431,6 +496,18 @@ public class ChatView extends ViewPart {
     refreshCost();
   }
 
+  private Map<Integer, List<RawCapture.Call>> rawCalls(String id) {
+    Map<Integer, List<RawCapture.Call>> byTurn = new TreeMap<>();
+    try {
+      for (RawCapture.Call call : Stores.raw().load(id)) {
+        byTurn.computeIfAbsent(call.turn(), t -> new ArrayList<>()).add(call);
+      }
+    } catch (Exception e) {
+      Activator.logError("Could not read the raw log of chat " + id, e);
+    }
+    return byTurn;
+  }
+
   private void send() {
     send(composer.mode(), null);
   }
@@ -442,7 +519,9 @@ public class ChatView extends ViewPart {
       return;
     }
     refreshHeader();
+    String id = chatId != null ? chatId : ChatStore.newId();
     ChatModel model;
+    RawCapture capture;
     List<Attachment> attachments = new ArrayList<>();
     EclipseProject project;
     Provider provider;
@@ -452,7 +531,14 @@ public class ChatView extends ViewPart {
       provider = connection.provider();
       keyProblem = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
           connection.clientSecret());
-      model = ChatModels.create(connection);
+      capture = AiSettings.rawLog() ? new RawCapture(turns + 1, provider.label, call -> {
+        try {
+          Stores.raw().append(id, call);
+        } catch (Exception e) {
+          Activator.logError("Could not write the MuleSoftForge AI raw log", e);
+        }
+      }) : null;
+      model = ChatModels.create(connection, capture);
       List<Attachment> attached = composer.attached();
       Attachment open = composer.includeOpenFile() ? ActiveFile.capture(getSite().getPage()) : null;
       if (open != null && attached.stream().noneMatch(a -> a.kind() == Attachment.Kind.FILE
@@ -466,8 +552,9 @@ public class ChatView extends ViewPart {
       return;
     }
 
+    turns++;
     if (chatId == null) {
-      chatId = ChatStore.newId();
+      chatId = id;
       chatTitle = ChatStore.titleFrom(prompt);
       chatCreated = Instant.now().toString();
       chatProject = project == null ? null : project.name();
@@ -586,6 +673,9 @@ public class ChatView extends ViewPart {
           if (fix != null) {
             offerDataWeaveFix(fix, result.text());
           }
+        }
+        if (capture != null) {
+          showRawTurn(capture.calls());
         }
         running = null;
         composer.setBusy(false);

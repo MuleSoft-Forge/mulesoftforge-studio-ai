@@ -33,6 +33,7 @@ public final class AiSettings {
   private static final String RETENTION_DAYS = "history.retentionDays";
   private static final String UPDATE_CHECK_DISABLED = "updates.checkDisabled";
   private static final String MASK_SECRETS_DISABLED = "privacy.maskSecretsDisabled";
+  private static final String RAW_LOG = "history.rawLog";
   public static final int DEFAULT_RETENTION_DAYS = 90;
 
   private static IPreferenceStore store;
@@ -95,6 +96,10 @@ public final class AiSettings {
 
   public static boolean affectsModels(String key) {
     return key == null || key.equals(PROVIDER) || key.startsWith(MODEL) || key.startsWith(FETCHED_MODELS);
+  }
+
+  public static boolean affectsRawLog(String key) {
+    return key == null || key.equals(RAW_LOG);
   }
 
   public static void saveModel(Provider provider, String model) throws Exception {
@@ -172,10 +177,23 @@ public final class AiSettings {
     }
   }
 
-  public static void saveHistorySettings(boolean saveChats, int retentionDays) throws Exception {
+  // Whether every request and response is written to a per-chat raw log. Off unless turned on.
+  public static boolean rawLog() {
+    return store().getBoolean(RAW_LOG);
+  }
+
+  public static void saveHistorySettings(boolean saveChats, int retentionDays, boolean rawLog) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(HISTORY_DISABLED, !saveChats);
     prefs.setValue(RETENTION_DAYS, Integer.toString(Math.max(0, retentionDays)));
+    prefs.setValue(RAW_LOG, rawLog);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // The Raw toggle in the chat view.
+  public static void saveRawLog(boolean rawLog) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(RAW_LOG, rawLog);
     ((ScopedPreferenceStore) prefs).save();
   }
 

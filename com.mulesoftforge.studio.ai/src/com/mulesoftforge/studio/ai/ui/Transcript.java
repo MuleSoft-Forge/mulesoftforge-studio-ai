@@ -35,4 +35,13 @@ interface Transcript {
   // A checklist of changes under the last message, all ticked, and a button. The button sends
   // "offer:<id>:<ticked indices, comma-separated>" as a command.
   void offer(String id, List<String> items);
+
+  // One model call of a turn, as shown in a raw block.
+  record RawCall(String heading, String request, String response) {}
+
+  // The model calls of a turn, collapsed under its answer. open is a command that opens the whole raw log.
+  void raw(String title, List<RawCall> calls, String open);
+
+  // Hides or shows every raw block, including ones added later.
+  void showRaw(boolean show);
 }

@@ -3,6 +3,7 @@ package com.mulesoftforge.studio.ai.llm;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
@@ -16,6 +17,7 @@ import dev.langchain4j.model.azure.AzureOpenAiChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatRequestParameters;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
@@ -34,19 +36,27 @@ public final class ChatModels {
   private ChatModels() {}
 
   public static ChatModel create(Connection connection) {
+    return create(connection, null);
+  }
+
+  // capture, when not null, records every call: the HTTP exchange where this client makes it, otherwise the
+  // request and response LangChain4j sees.
+  public static ChatModel create(Connection connection, RawCapture capture) {
     validate(connection);
+    List<ChatModelListener> listeners = capture == null ? List.of() : List.of(capture.listener());
     String apiKey = connection.provider().needsClientCredentials() || connection.apiKey().isBlank()
         ? null
         : connection.apiKey();
     return switch (connection.provider().api) {
       case OPENAI_COMPATIBLE -> {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
-            .httpClientBuilder(http())
+            .httpClientBuilder(http(capture))
             .baseUrl(connection.baseUrl())
             .apiKey(apiKey)
             .modelName(connection.model())
             .maxCompletionTokens(MAX_OUTPUT_TOKENS)
-            .timeout(TIMEOUT);
+            .timeout(TIMEOUT)
+            .listeners(listeners);
         Map<String, String> headers = gatewayHeaders(connection);
         if (!headers.isEmpty()) {
           builder.customHeaders(headers);
@@ -54,20 +64,22 @@ public final class ChatModels {
         yield builder.build();
       }
       case ANTHROPIC -> AnthropicChatModel.builder()
-          .httpClientBuilder(http())
+          .httpClientBuilder(http(capture))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .listeners(listeners)
           .build();
       case GOOGLE_AI_GEMINI -> GoogleAiGeminiChatModel.builder()
-          .httpClientBuilder(http())
+          .httpClientBuilder(http(capture))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxOutputTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .listeners(listeners)
           .build();
       case AZURE_OPENAI -> AzureOpenAiChatModel.builder()
           .endpoint(trimSlash(connection.baseUrl()))
@@ -76,18 +88,20 @@ public final class ChatModels {
           .serviceVersion(AZURE_API_VERSION)
           .maxTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .listeners(listeners)
           .build();
-      case BEDROCK -> bedrock(connection);
+      case BEDROCK -> bedrock(connection, listeners);
       case OLLAMA -> OllamaChatModel.builder()
-          .httpClientBuilder(http())
+          .httpClientBuilder(http(capture))
           .baseUrl(connection.baseUrl())
           .modelName(connection.model())
           .timeout(TIMEOUT)
+          .listeners(listeners)
           .build();
     };
   }
 
-  private static ChatModel bedrock(Connection connection) {
+  private static ChatModel bedrock(Connection connection, List<ChatModelListener> listeners) {
     Region region = Region.of(bedrockRegion(connection.baseUrl()));
     BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(region);
     String key = connection.apiKey() == null ? "" : connection.apiKey().trim();
@@ -105,6 +119,7 @@ public final class ChatModels {
         .defaultRequestParameters(BedrockChatRequestParameters.builder()
             .maxOutputTokens(MAX_OUTPUT_TOKENS)
             .build())
+        .listeners(listeners)
         .build();
   }
 
@@ -145,7 +160,7 @@ public final class ChatModels {
 
   // Sync calls use DiagnosingHttpClient so failures keep HTTP status, body and response headers.
   // LangChain4j's ServiceLoader cannot see jars embedded in an OSGi bundle, so the client is passed in.
-  private static HttpClientBuilder http() {
+  private static HttpClientBuilder http(RawCapture capture) {
     HttpClient.Builder jdkBuilder = Network.builder();
     JdkHttpClientBuilder streamingBuilder = JdkHttpClient.builder().httpClientBuilder(jdkBuilder);
     return new HttpClientBuilder() {
@@ -179,7 +194,7 @@ public final class ChatModels {
 
       @Override
       public dev.langchain4j.http.client.HttpClient build() {
-        return new DiagnosingHttpClient(jdkBuilder.build(), readTimeout, streamingBuilder.build());
+        return new DiagnosingHttpClient(jdkBuilder.build(), readTimeout, streamingBuilder.build(), capture);
       }
     };
   }

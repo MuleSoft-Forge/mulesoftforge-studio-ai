@@ -1,9 +1,11 @@
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -33,6 +35,7 @@ import com.mulesoftforge.studio.ai.edit.ProjectPaths;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
+import com.mulesoftforge.studio.ai.history.RawLog;
 import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
@@ -46,6 +49,7 @@ import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 import com.mulesoftforge.studio.ai.llm.Updates;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
@@ -59,6 +63,7 @@ import com.mulesoftforge.studio.ai.render.Span;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
@@ -174,6 +179,7 @@ public class Harness {
       case "check-html" -> checkHtml(args.length > 1 ? Path.of(args[1]) : null);
       case "check-render" -> checkRender();
       case "check-history" -> checkHistory();
+      case "check-raw-log" -> checkRawLog();
       case "check-tls" -> checkTls();
       case "check-updates" -> checkUpdates(args.length > 1 ? args[1] : null);
       case "prices" -> prices(Arrays.copyOfRange(args, 1, args.length));
@@ -1080,6 +1086,9 @@ public class Harness {
     failed += check("page colours filled in", page.contains(".t-tag { color: #3f7f7f; }") && !page.contains("%s"));
     failed += check("offer checklist sends the ticked items", page.contains("function msfOffer(")
         && page.contains("'cmd:offer:'") && page.contains("box.checked = true"));
+    failed += check("raw blocks are text, collapsed and hideable", page.contains("function msfRaw(")
+        && page.contains("pre.textContent = part[1]") && page.contains("function msfShowRaw(")
+        && page.contains(".raw.hidden { display: none; }"));
     if (preview != null) {
       String demo = page.replace("</script></body>", """
           msfMessage('you', 'You', %s, 'Agent, open file src/main/mule/app.xml, project employees-app');
@@ -1089,6 +1098,13 @@ public class Harness {
           msfAction('Build this plan in Agent mode', 'build-plan');
           msfOffer('0', ['Move the OAuth credentials to secure properties (src/main/mule/app.xml, pom.xml)',
               'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Make selected changes');
+          msfRaw('Raw · 2 calls', [
+            {heading: 'Step 1 · POST https://openrouter.ai/api/v1/chat/completions · HTTP 200 · openai/gpt-5-mini · 3.1 s',
+             request: '{\\n  "model" : "openai/gpt-5-mini",\\n  "messages" : [ {\\n    "role" : "user",\\n    "content" : "How do I log the payload? <b>not bold</b>"\\n  } ]\\n}',
+             response: '{\\n  "id" : "gen-1",\\n  "choices" : [ ]\\n}'},
+            {heading: 'Step 2 · POST https://openrouter.ai/api/v1/chat/completions · HTTP 200 · openai/gpt-5-mini · 1.2 s',
+             request: '{ }', response: '{ }'}], 'raw-log');
+          document.querySelectorAll('.raw, .raw details').forEach(function (d) { d.open = true; });
           function msfClick(a) { console.log(a); }
           </script></body>""".formatted(jsString("How do I log the payload?"), jsString(h)));
       Files.writeString(preview, demo);
@@ -1205,6 +1221,119 @@ public class Harness {
     failed += check("prune removes old", store.prune(90, Instant.now().plusSeconds(91L * 86_400)) == 1
         && store.list().isEmpty());
     failed += check("ledger kept after chats deleted", ledger.allTime().calls() == 1);
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // A real chat through the OpenAI-compatible client against a local stub, with raw capture on: the HTTP exchange
+  // is recorded exactly, without headers, and stored per chat.
+  private static void checkRawLog() throws Exception {
+    int failed = 0;
+    Path dir = Files.createTempDirectory("studio-ai-raw");
+    RawLog raw = new RawLog(dir.resolve("raw"));
+    List<String> bodies = new ArrayList<>();
+    List<String> authorizations = new ArrayList<>();
+    String okReply = "{\"id\":\"chatcmpl-stub\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"stub-model\","
+        + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"pong from stub\"},"
+        + "\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":3,"
+        + "\"total_tokens\":45}}";
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      authorizations.add(String.valueOf(exchange.getRequestHeaders().getFirst("Authorization")));
+      boolean fail = bodies.size() > 1;
+      byte[] reply = (fail ? "{\"error\":{\"message\":\"stub overloaded\"}}" : okReply)
+          .getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(fail ? 500 : 200, reply.length);
+      exchange.getResponseBody().write(reply);
+      exchange.close();
+    });
+    server.start();
+    try {
+      String id = ChatStore.newId();
+      List<Exception> writeErrors = new ArrayList<>();
+      String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1";
+      Connection connection = new Connection(Provider.CUSTOM, base, "stub-model", "sk-harness-NEVER-LOGGED-123");
+      RawCapture first = new RawCapture(1, "Stub", call -> {
+        try {
+          raw.append(id, call);
+        } catch (Exception e) {
+          writeErrors.add(e);
+        }
+      });
+      ChatSession session = new ChatSession();
+      session.maskSecrets(true);
+      ChatSession.Turn turn = session.send(ChatModels.create(connection, first), ChatMode.ASK,
+          "Why does this fail?\ndb.password=Sup3r!Pass", List.of(), null, Progress.NONE);
+
+      failed += check("chat answered through stub", turn.text().contains("pong from stub"));
+      failed += check("one call captured", first.calls().size() == 1);
+      RawCapture.Call call = first.calls().get(0);
+      failed += check("http exchange captured", call.http() != null);
+      failed += check("exact request body", call.http().request().equals(bodies.get(0)));
+      failed += check("exact response body", call.http().response().equals(okReply));
+      failed += check("url and method", call.http().url().equals(base + "/chat/completions")
+          && call.http().method().equals("POST"));
+      failed += check("status", call.http().status() == 200);
+      failed += check("heading", call.heading().startsWith("Step 1 · POST " + base + "/chat/completions · HTTP 200")
+          && call.heading().contains("stub-model"));
+      failed += check("turn and step", call.turn() == 1 && call.step() == 1);
+      failed += check("langchain4j view kept", call.request().contains("\"SYSTEM\"") && call.response().contains("STOP"));
+      failed += check("secret masked in body", call.http().request().contains("db.password=«masked-1»")
+          && !call.http().request().contains("Sup3r!Pass"));
+      failed += check("api key sent on the wire", authorizations.get(0).contains("sk-harness-NEVER-LOGGED-123"));
+      failed += check("no write errors", writeErrors.isEmpty());
+      failed += check("log file created", raw.exists(id));
+      String stored = Files.readString(raw.file(id));
+      failed += check("api key not stored", !stored.contains("sk-harness-NEVER-LOGGED-123") && !stored.contains("Bearer"));
+      failed += check("secret not stored", !stored.contains("Sup3r!Pass"));
+
+      RawCapture second = new RawCapture(2, "Stub", call2 -> {
+        try {
+          raw.append(id, call2);
+        } catch (Exception e) {
+          writeErrors.add(e);
+        }
+      });
+      try {
+        session.send(ChatModels.create(connection, second), ChatMode.ASK, "again", List.of(), null, Progress.NONE);
+      } catch (Exception expected) {
+        // The stub fails the second call so the error path can be checked.
+      }
+      RawCapture.Call failedCall = second.calls().isEmpty() ? null : second.calls().get(0);
+      failed += check("failed call captured", failedCall != null && failedCall.http() != null
+          && failedCall.http().status() == 500 && failedCall.http().response().contains("stub overloaded")
+          && failedCall.error() != null && failedCall.heading().contains("HTTP 500 ") );
+
+      List<RawCapture.Call> loaded = raw.load(id);
+      failed += check("jsonl round trip", loaded.size() == 2 && loaded.get(0).equals(call)
+          && loaded.get(1).turn() == 2);
+      String readable = Files.readString(raw.writeReadable(id));
+      failed += check("readable view", readable.contains("===== Turn 1 · Step 1 · POST ")
+          && readable.contains("===== Turn 2 · Step 1 · POST ") && readable.contains("\"content\" : \"pong from stub\""));
+      failed += check("readable view has no key", !readable.contains("sk-harness-NEVER-LOGGED-123"));
+
+      RawCapture.Call sdkOnly = new RawCapture.Call(3, 1, "now", "Amazon Bedrock", "claude", 1.0, null,
+          "{\"messages\":[]}", "{\"message\":{}}", null);
+      failed += check("sdk provider falls back", sdkOnly.heading().contains("HTTP not visible")
+          && sdkOnly.requestText().contains("\"messages\""));
+      String image = "A".repeat(5_000);
+      RawCapture.Call withImage = new RawCapture.Call(1, 1, "now", "Stub", "m", 1.0,
+          new RawCapture.Http("POST", base + "/chat/completions?key=abc", 200,
+              "{\"url\":\"data:image/png;base64," + image + "\",\"text\":\"" + "word ".repeat(1_000) + "\"}", "{}"),
+          "{}", "{}", null);
+      failed += check("image data shortened for reading", !withImage.requestText().contains(image)
+          && withImage.requestText().contains("characters of encoded data") && withImage.requestText().contains("word word"));
+
+      failed += check("rejects path-like ids", rejects(() -> raw.file("../secret")));
+      failed += check("prune keeps recent", raw.prune(90, Instant.now()) == 0 && raw.exists(id));
+      failed += check("prune removes old", raw.prune(90, Instant.now().plusSeconds(91L * 86_400)) == 1
+          && !raw.exists(id));
+      Files.writeString(raw.file(id), "x");
+      failed += check("delete all", raw.deleteAll() == 1 && !raw.exists(id));
+    } finally {
+      server.stop(0);
+    }
     System.exit(failed == 0 ? 0 : 1);
   }
 

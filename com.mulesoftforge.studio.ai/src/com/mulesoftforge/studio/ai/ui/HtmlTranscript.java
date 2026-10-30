@@ -123,12 +123,17 @@ final class HtmlTranscript implements Transcript {
 
   @Override
   public void offer(String id, List<String> items) {
-    try {
-      run("msfOffer(" + js(id) + "," + JSON.writeValueAsString(items).replace("\u2028", "\\u2028")
-          .replace("\u2029", "\\u2029") + "," + js(HtmlPage.OFFER_BUTTON) + ")");
-    } catch (JsonProcessingException e) {
-      throw new IllegalStateException(e);
-    }
+    run("msfOffer(" + js(id) + "," + jsValue(items) + "," + js(HtmlPage.OFFER_BUTTON) + ")");
+  }
+
+  @Override
+  public void raw(String title, List<RawCall> calls, String open) {
+    run("msfRaw(" + js(title) + "," + jsValue(calls) + "," + js(open) + ")");
+  }
+
+  @Override
+  public void showRaw(boolean show) {
+    run("msfShowRaw(" + show + ")");
   }
 
   private static String kind(String speaker) {
@@ -150,9 +155,12 @@ final class HtmlTranscript implements Transcript {
 
   // A JavaScript string literal; JSON string syntax is valid JavaScript.
   private static String js(String value) {
+    return value == null ? "null" : jsValue(value);
+  }
+
+  private static String jsValue(Object value) {
     try {
-      return value == null ? "null" : JSON.writeValueAsString(value).replace("\u2028", "\\u2028")
-          .replace("\u2029", "\\u2029");
+      return JSON.writeValueAsString(value).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029");
     } catch (JsonProcessingException e) {
       throw new IllegalStateException(e);
     }

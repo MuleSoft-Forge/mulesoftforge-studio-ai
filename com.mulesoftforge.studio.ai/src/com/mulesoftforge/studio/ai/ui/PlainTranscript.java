@@ -34,6 +34,7 @@ final class PlainTranscript implements Transcript {
   private final List<String> codeBlocks = new ArrayList<>();
   private final List<Clickable> clickables = new ArrayList<>();
   private final List<Offer> offers = new ArrayList<>();
+  private boolean showRaw = true;
 
   PlainTranscript(Composite parent, Actions actions) {
     this.actions = actions;
@@ -163,6 +164,33 @@ final class PlainTranscript implements Transcript {
     Arrays.fill(ticked, true);
     offers.add(new Offer(id, boxes, ticked));
     button(HtmlPage.OFFER_BUTTON, SUBMIT + index);
+  }
+
+  // No collapsible sections here: one line per turn, and the full exchange opens in an editor.
+  @Override
+  public void raw(String title, List<RawCall> calls, String open) {
+    if (!showRaw) {
+      return;
+    }
+    muted("\n    · " + title + " ");
+    if (open != null) {
+      int start = text.getCharCount();
+      String label = "Open raw log";
+      text.append(label);
+      StyleRange style = new StyleRange();
+      style.start = start;
+      style.length = label.length();
+      style.foreground = styles.speaker("You");
+      style.underline = true;
+      text.setStyleRange(style);
+      clickables.add(new Clickable(start, label.length(), "cmd:" + open));
+    }
+    scrollToEnd();
+  }
+
+  @Override
+  public void showRaw(boolean show) {
+    showRaw = show;
   }
 
   private void toggle(String where) {

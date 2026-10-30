@@ -53,6 +53,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private final Map<Provider, Connection> drafts = new EnumMap<>(Provider.class);
   private Provider shown;
   private Button saveChats;
+  private Button rawLog;
   private Button richTranscript;
   private Button checkUpdates;
   private Button maskSecrets;
@@ -239,6 +240,20 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     retentionDays.setLayoutData(daysData);
     retentionDays.setText(Integer.toString(AiSettings.retentionDays()));
 
+    rawLog = new Button(group, SWT.CHECK);
+    rawLog.setText("Keep a raw log of every request and response");
+    rawLog.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+    rawLog.setSelection(AiSettings.rawLog());
+    Label rawInfo = new Label(group, SWT.WRAP);
+    GridData rawData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
+    rawData.widthHint = 420;
+    rawInfo.setLayoutData(rawData);
+    rawInfo.setText("Same as the Raw toggle in the chat view. Records the exact HTTP request and response bodies,"
+        + " URL and status of every model call (after secrets are masked), shown under each answer and kept one"
+        + " file per chat. Azure OpenAI and Bedrock use their own clients, so for them it records the request and"
+        + " response as LangChain4j sees them. Headers and API keys are never written. Files can be large; they are"
+        + " deleted with their chat.");
+
     Label where = new Label(group, SWT.WRAP);
     GridData whereData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
     whereData.widthHint = 420;
@@ -251,11 +266,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     deleteAll.setText("Delete all chat history…");
     deleteAll.addListener(SWT.Selection, e -> {
       if (!MessageDialog.openConfirm(getShell(), "Delete all chat history",
-          "Delete every saved MuleSoftForge AI chat in this workspace? This cannot be undone.")) {
+          "Delete every saved MuleSoftForge AI chat and raw log in this workspace? This cannot be undone.")) {
         return;
       }
       try {
         int deleted = Stores.chats().deleteAll();
+        Stores.raw().deleteAll();
         MessageDialog.openInformation(getShell(), "Chat history", "Deleted " + deleted + " chat(s).");
       } catch (Exception ex) {
         setErrorMessage("Could not delete chats: " + Errors.describe(ex));
@@ -280,7 +296,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         setErrorMessage("Keep chats for: enter a number of days (0 = forever).");
         return false;
       }
-      AiSettings.saveHistorySettings(saveChats.getSelection(), days);
+      AiSettings.saveHistorySettings(saveChats.getSelection(), days, rawLog.getSelection());
       AiSettings.saveTrust(trustFromFields());
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
