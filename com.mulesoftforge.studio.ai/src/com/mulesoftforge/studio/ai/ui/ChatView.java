@@ -78,7 +78,7 @@ public class ChatView extends ViewPart {
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
-  // Checklists of changes the AI offered to make, by the index in their Make selected changes button.
+  // Checklists of changes the AI offered to make, by the index in their Draft selected changes button.
   private final List<List<ChangeOffer>> offers = new ArrayList<>();
 
   private final ChatSession session = new ChatSession();
@@ -674,15 +674,20 @@ public class ChatView extends ViewPart {
                 + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
           }
           changes.add(project, result.changes().all());
+          int drafted = result.changes().all().size();
+          if (drafted > 0) {
+            appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
+                + ". Review the diffs below; nothing is written until you accept.");
+          }
           if (project != null && !result.offers().isEmpty()) {
             transcript.offer(String.valueOf(offers.size()),
                 result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
             offers.add(result.offers());
           } else if (mode == ChatMode.PLAN && project != null) {
-            transcript.action("Build this plan in Agent mode", BUILD_PLAN);
+            transcript.action("Draft this plan for review in Agent mode", BUILD_PLAN);
           } else if (project != null && fix == null && result.changes().isEmpty()
               && result.text().contains("```")) {
-            transcript.action("Make these changes", MAKE_CHANGES);
+            transcript.action("Draft these changes as diffs", MAKE_CHANGES);
           }
           if (fix != null) {
             offerDataWeaveFix(fix, result.text());
@@ -728,7 +733,7 @@ public class ChatView extends ViewPart {
     send();
   }
 
-  // "<checklist index>:<ticked indices>" from a Make selected changes click.
+  // "<checklist index>:<ticked indices>" from a Draft selected changes click.
   private List<ChangeOffer> pickedOffers(String value) {
     int colon = value.indexOf(':');
     List<ChangeOffer> offered;

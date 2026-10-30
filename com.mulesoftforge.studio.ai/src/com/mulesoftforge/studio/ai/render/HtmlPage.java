@@ -3,7 +3,7 @@ package com.mulesoftforge.studio.ai.render;
 // The rich transcript page. Content arrives through msfMessage/msfStep/msfAction calls with HTML that
 // HtmlRenderer has already escaped; clicks go back to Studio through the msfClick browser function.
 public final class HtmlPage {
-  public static final String OFFER_BUTTON = "Make selected changes";
+  public static final String OFFER_BUTTON = "Draft selected changes for review";
 
   public record Theme(Palette palette, Palette.Rgb background, Palette.Rgb foreground, String font, int fontPt,
       String mono, int monoPt) {}
@@ -169,7 +169,7 @@ public final class HtmlPage {
           var title = document.createElement(suggested ? 'summary' : 'div');
           title.className = 'title';
           title.textContent = suggested
-              ? items.length + (items.length === 1 ? ' possible fix' : ' possible fixes') + ' (Agent mode can make them)'
+              ? items.length + (items.length === 1 ? ' possible fix' : ' possible fixes') + ' (Agent mode can draft them for review)'
               : 'Changes it can make';
           div.appendChild(title);
           items.forEach(function (text, i) {

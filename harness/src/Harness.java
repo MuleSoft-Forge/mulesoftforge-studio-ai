@@ -185,6 +185,7 @@ public class Harness {
       case "check-history" -> checkHistory();
       case "check-raw-log" -> checkRawLog();
       case "check-auto" -> checkAuto();
+      case "check-draft" -> checkDraft();
       case "check-tls" -> checkTls();
       case "check-updates" -> checkUpdates(args.length > 1 ? args[1] : null);
       case "prices" -> prices(Arrays.copyOfRange(args, 1, args.length));
@@ -1104,11 +1105,11 @@ public class Harness {
           msfStep('Waiting for the model…'); msfStep('Reading src/main/mule/app.xml'); msfStep('Model answered in 4 s · $0.0012');
           msfMessage('ai', 'AI', %s, null);
           msfStep('Done in 5 s · read 1 file · this answer $0.0012');
-          msfAction('Build this plan in Agent mode', 'build-plan');
+          msfAction('Draft this plan for review in Agent mode', 'build-plan');
           msfOffer('0', ['Move the OAuth credentials to secure properties (src/main/mule/app.xml, pom.xml)',
-              'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Make selected changes', false);
+              'Stop logging the Authorization header (src/main/mule/app.xml)'], 'Draft selected changes for review', false);
           msfOffer('1', ['Set mule-maven-plugin classifier to mule-application (pom.xml)',
-              'Move API keys to Mule secure properties (src/main/resources/local.properties)'], 'Make selected changes', true);
+              'Move API keys to Mule secure properties (src/main/resources/local.properties)'], 'Draft selected changes for review', true);
           msfRaw('Raw · 2 calls', [
             {heading: 'Step 1 · POST https://openrouter.ai/api/v1/chat/completions · HTTP 200 · openai/gpt-5-mini · 3.1 s',
              request: '{\\n  "model" : "openai/gpt-5-mini",\\n  "messages" : [ {\\n    "role" : "user",\\n    "content" : "How do I log the payload? <b>not bold</b>"\\n  } ]\\n}',
@@ -1451,6 +1452,84 @@ public class Harness {
       server.stop(0);
     }
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // Agent mode: an answer that pastes code for a change request is drafted as reviewable changes in the same turn;
+  // a question answered with a code example is left alone.
+  private static void checkDraft() throws Exception {
+    int failed = 0;
+    List<String> bodies = new ArrayList<>();
+    String pasted = "Add this file:\\n```properties\\na=1\\n```";
+    String toolCall = "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,"
+        + "\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\","
+        + "\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"src/main/resources/health.properties\\\","
+        + "\\\"content\\\":\\\"a=1\\\\n\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],"
+        + "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}";
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      bodies.add(body);
+      String reply;
+      if (body.contains("tool_call_id")) {
+        reply = textReply("Proposed health.properties.");
+      } else if (body.contains("You put the changes in your reply as code")) {
+        reply = toolCall;
+      } else {
+        reply = textReply(pasted);
+      }
+      byte[] bytes = reply.getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
+    server.start();
+    try {
+      Path root = Files.createTempDirectory("studio-ai-draft");
+      Files.createDirectories(root.resolve("src/main/resources"));
+      Connection connection = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+          "m", "");
+      List<String> steps = new ArrayList<>();
+      Progress progress = new Progress() {
+        @Override
+        public void step(String message) {
+          steps.add(message);
+        }
+
+        @Override
+        public boolean isCancelled() {
+          return false;
+        }
+      };
+      ChatSession.Turn turn = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Add a health properties file", List.of(), new DiskProject(root), progress);
+      failed += check("pasted code drafted as a change", turn.changes().all().size() == 1
+          && turn.changes().all().get(0).path().equals("src/main/resources/health.properties"));
+      failed += check("nudged once, in the same turn", bodies.size() == 3
+          && bodies.stream().filter(b -> b.contains("You put the changes in your reply as code")).count() == 2);
+      failed += check("answer keeps the explanation and the summary", turn.text().contains("Add this file")
+          && turn.text().contains("Proposed health.properties."));
+      failed += check("drafting shown as a step", steps.contains("Drafting the code from the answer as changes to review…"));
+
+      bodies.clear();
+      ChatSession.Turn question = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "How does a properties file look?", List.of(), new DiskProject(root), progress);
+      failed += check("a question with an example is not drafted", bodies.size() == 1 && question.changes().isEmpty());
+
+      bodies.clear();
+      new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Add a health properties file", List.of(),
+          new DiskProject(root), progress);
+      failed += check("Ask mode is not drafted", bodies.size() == 1);
+    } finally {
+      server.stop(0);
+    }
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
+  private static String textReply(String content) {
+    return "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,"
+        + "\"message\":{\"role\":\"assistant\",\"content\":\"" + content + "\"},\"finish_reason\":\"stop\"}],"
+        + "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}";
   }
 
   private static boolean rejectsState(ThrowingRunnable action) {

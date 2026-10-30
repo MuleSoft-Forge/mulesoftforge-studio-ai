@@ -4,7 +4,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
@@ -41,6 +43,12 @@ public class ChatSession {
 
   private static final int MAX_TOOL_ROUNDS = 12;
   private static final String EMPTY_REPLY = "(empty reply)";
+  // Asked once in Agent mode when the answer to a change request pastes code but proposes nothing.
+  static final String DRAFT_NUDGE = "You put the changes in your reply as code instead of proposing them. Propose"
+      + " them now with edit_file or write_file so the user can review the diffs. Do not repeat the explanation;"
+      + " finish with one short line saying what you proposed.";
+  private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
+      + "delete|rename|refactor|implement|write|make|convert|move|migrate|generate|set ?up|configure|apply)\\b");
 
   // problems: what the static checks still find in the proposals when the model stopped.
   // offers: changes the model recommended but did not make, for the user to pick from.
@@ -170,6 +178,8 @@ public class ChatSession {
     Map<String, Integer> toolCounts = new LinkedHashMap<>();
 
     String answer = null;
+    // The first answer when the model was asked to draft its pasted code; the follow-up's summary is added to it.
+    String pastedAnswer = null;
     // Models often write the whole answer in the message that calls offer_changes, then only a closing line.
     String offeredWith = null;
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
@@ -197,6 +207,13 @@ public class ChatSession {
         answer = reply.text() == null || reply.text().isBlank()
             ? (changes.isEmpty() ? EMPTY_REPLY : "Proposed changes are ready for review.")
             : reply.text();
+        if (pastedAnswer == null && pastedInsteadOfProposed(mode, tools, changes, answer, prompt)) {
+          pastedAnswer = answer;
+          answer = null;
+          progress.step("Drafting the code from the answer as changes to review…");
+          turn.add(UserMessage.from(DRAFT_NUDGE));
+          continue;
+        }
         break;
       }
       if (reply.text() != null && !reply.text().isBlank() && reply.toolExecutionRequests().stream()
@@ -220,6 +237,9 @@ public class ChatSession {
       answer = "Stopped after " + MAX_TOOL_ROUNDS + " steps before the model finished."
           + (changes.isEmpty() ? "" : " What it proposed so far is ready to review; ask it to continue if needed.");
     }
+    if (pastedAnswer != null) {
+      answer = changes.isEmpty() ? pastedAnswer : pastedAnswer + "\n\n" + answer;
+    }
     if (offeredWith != null && !answer.contains(offeredWith)) {
       answer = answer.equals(EMPTY_REPLY) ? offeredWith : offeredWith + "\n\n" + answer;
     }
@@ -240,6 +260,12 @@ public class ChatSession {
     cancelNotes.removeAll(cancelled);
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+  }
+
+  static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,
+      String prompt) {
+    return mode.canEdit && tools != null && changes.isEmpty() && tools.offers().isEmpty() && answer.contains("```")
+        && ASKS_FOR_CHANGE.matcher(prompt.toLowerCase(Locale.ROOT)).find();
   }
 
   // History safe to write to disk: same turns, without the open-file contents.

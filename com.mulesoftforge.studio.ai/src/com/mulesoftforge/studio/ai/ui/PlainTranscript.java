@@ -152,7 +152,7 @@ final class PlainTranscript implements Transcript {
   @Override
   public void offer(String id, List<String> items, boolean suggested) {
     muted(suggested
-        ? "\n\nPossible fixes Agent mode can make (click a box to tick it):"
+        ? "\n\nPossible fixes Agent mode can draft for review (click a box to tick it):"
         : "\n\nChanges it can make (click a box to untick it):");
     int[] boxes = new int[items.size()];
     int index = offers.size();
