@@ -52,6 +52,7 @@ import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.llm.Prompts;
 import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 import com.mulesoftforge.studio.ai.llm.Updates;
@@ -186,6 +187,7 @@ public class Harness {
       case "check-raw-log" -> checkRawLog();
       case "check-auto" -> checkAuto();
       case "check-draft" -> checkDraft();
+      case "check-instructions" -> checkInstructions();
       case "check-tls" -> checkTls();
       case "check-updates" -> checkUpdates(args.length > 1 ? args[1] : null);
       case "prices" -> prices(Arrays.copyOfRange(args, 1, args.length));
@@ -1520,6 +1522,104 @@ public class Harness {
       new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Add a health properties file", List.of(),
           new DiskProject(root), progress);
       failed += check("Ask mode is not drafted", bodies.size() == 1);
+    } finally {
+      server.stop(0);
+    }
+    System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // The system prompt: built-in rules always present, AGENTS.md and the user's instructions added masked, labelled
+  // and capped, and announced once per chat.
+  private static void checkInstructions() throws Exception {
+    int failed = 0;
+    for (ChatMode mode : ChatMode.values()) {
+      String system = Prompts.system(mode, "demo", "", "");
+      failed += check(mode.label + " prompt loads from the bundle", system.contains("expert MuleSoft developer")
+          && system.contains("copy the placeholder exactly") && system.contains("\"demo\"")
+          && !system.contains("{project}"));
+    }
+    failed += check("Agent prompt has the Mule guidance",
+        Prompts.system(ChatMode.AGENT, "demo", "", "").contains("Mule rules for changes"));
+    failed += check("Ask prompt has no Mule edit guidance",
+        !Prompts.system(ChatMode.ASK, "demo", "", "").contains("Mule rules for changes"));
+    failed += check("no project: no mode rules", !Prompts.system(ChatMode.AGENT, null, "", "").contains("tools"));
+    String builtIn = Prompts.builtIn();
+    failed += check("Show built-in prompt lists every part", builtIn.contains("Rules (always apply)")
+        && builtIn.contains("Ask mode") && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
+        && builtIn.contains("8,000 characters"));
+
+    List<String> bodies = new ArrayList<>();
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      byte[] bytes = textReply("ok").getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
+    server.start();
+    try {
+      Connection connection = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+          "m", "");
+      List<String> steps = new ArrayList<>();
+      Progress progress = new Progress() {
+        @Override
+        public void step(String message) {
+          steps.add(message);
+        }
+
+        @Override
+        public boolean isCancelled() {
+          return false;
+        }
+      };
+      Path root = Files.createTempDirectory("studio-ai-instructions");
+      Files.writeString(root.resolve("AGENTS.md"), "# Team rules\nLog with the JSON Logger connector.\n"
+          + "Test db: password=\"Sup3rS3cretValue99\"\n");
+      ChatSession session = new ChatSession();
+      session.instructions("Use British English. Authorization: Bearer abcdefghijklmnop1234567890XYZ");
+      ChatSession.Turn turn = session.send(ChatModels.create(connection), ChatMode.ASK, "What does this project do?",
+          List.of(), new DiskProject(root), progress);
+      String body = bodies.get(0);
+      failed += check("fixed rules sent", body.contains("copy the placeholder exactly")
+          && body.contains("You are in Ask mode"));
+      failed += check("AGENTS.md sent as project instructions", body.contains("PROJECT INSTRUCTIONS (AGENTS.md")
+          && body.contains("Log with the JSON Logger connector."));
+      failed += check("your instructions sent", body.contains("THE USER'S INSTRUCTIONS")
+          && body.contains("Use British English."));
+      failed += check("instructions come after the rules", body.indexOf("copy the placeholder exactly")
+          < body.indexOf("PROJECT INSTRUCTIONS") && body.indexOf("PROJECT INSTRUCTIONS")
+          < body.indexOf("THE USER'S INSTRUCTIONS"));
+      failed += check("secret in AGENTS.md masked", !body.contains("Sup3rS3cretValue99"));
+      failed += check("secret in your instructions masked", !body.contains("abcdefghijklmnop1234567890XYZ"));
+      failed += check("instruction secrets not counted as message secrets", turn.masked() == 0);
+      String following = steps.stream().filter(s -> s.startsWith("Following ")).findFirst().orElse("");
+      failed += check("first message says what it follows: " + following,
+          following.startsWith("Following AGENTS.md (") && following.contains("your instructions (")
+              && following.contains("hid 2 secret values"));
+
+      steps.clear();
+      session.send(ChatModels.create(connection), ChatMode.ASK, "And the flows?", List.of(), new DiskProject(root),
+          progress);
+      failed += check("later messages keep the instructions", bodies.get(1).contains("Log with the JSON Logger"));
+      failed += check("later messages do not repeat the step", steps.stream().noneMatch(s -> s.startsWith("Following")));
+
+      Files.writeString(root.resolve("AGENTS.md"), "x".repeat(20_000));
+      steps.clear();
+      bodies.clear();
+      ChatSession capped = new ChatSession();
+      capped.send(ChatModels.create(connection), ChatMode.ASK, "Hi", List.of(), new DiskProject(root), progress);
+      failed += check("long AGENTS.md cut with a note", bodies.get(0).contains("[cut at 8,000 characters]")
+          && !bodies.get(0).contains("x".repeat(Prompts.MAX_INSTRUCTIONS + 1)));
+      failed += check("cut shown in the step", steps.contains("Following AGENTS.md (20,000 characters, cut to 8,000)"));
+
+      bodies.clear();
+      steps.clear();
+      new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Hi", List.of(), null, progress);
+      failed += check("no project, no instructions: built-in prompt only", !bodies.get(0).contains("INSTRUCTIONS")
+          && bodies.get(0).contains("copy the placeholder exactly")
+          && steps.stream().noneMatch(s -> s.startsWith("Following")));
     } finally {
       server.stop(0);
     }

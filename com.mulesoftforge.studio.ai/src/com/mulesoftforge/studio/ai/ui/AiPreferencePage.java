@@ -2,11 +2,14 @@ package com.mulesoftforge.studio.ai.ui;
 
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.equinox.security.storage.StorageException;
+import org.eclipse.jface.dialogs.Dialog;
+import org.eclipse.jface.dialogs.IDialogConstants;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.PreferencePage;
 import org.eclipse.swt.SWT;
@@ -20,6 +23,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
@@ -30,6 +35,7 @@ import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
+import com.mulesoftforge.studio.ai.llm.Prompts;
 import com.mulesoftforge.studio.ai.llm.Updates;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
@@ -61,6 +67,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button richTranscript;
   private Button checkUpdates;
   private Button maskSecrets;
+  private Text instructions;
   private Button useSystemCerts;
   private Text caPem;
   private Text retentionDays;
@@ -151,6 +158,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     testResult.setLayoutData(resultData);
 
     createDisplayGroup(body);
+    createInstructionsGroup(body);
     createNetworkGroup(body);
     createHistoryGroup(body);
 
@@ -185,6 +193,67 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     label(group, "Values in properties and YAML files, Mule XML, URLs, console output and your messages are sent"
         + " as «masked-N». Edits the AI proposes get the real values back. Files such as .env and private keys are"
         + " never sent, whatever this is set to. Screenshots are sent as they are.");
+  }
+
+  private void createInstructionsGroup(Composite body) {
+    Group group = new Group(body, SWT.NONE);
+    group.setText("Instructions");
+    group.setLayout(new GridLayout(1, false));
+    GridData groupData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    groupData.horizontalSpan = 2;
+    groupData.verticalIndent = 10;
+    group.setLayoutData(groupData);
+    label(group, "Your instructions (every chat, every project):");
+    instructions = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+    GridData textData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    textData.widthHint = 420;
+    textData.heightHint = 80;
+    instructions.setLayoutData(textData);
+    instructions.setMessage("For example: Use British English. Log with the JSON Logger connector.");
+    instructions.setText(AiSettings.instructions());
+    Label info = new Label(group, SWT.WRAP);
+    GridData infoData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    infoData.widthHint = 420;
+    info.setLayoutData(infoData);
+    info.setText("Sent with every message, after secrets are masked, up to "
+        + String.format(Locale.ROOT, "%,d", Prompts.MAX_INSTRUCTIONS) + " characters. A project's "
+        + Prompts.AGENTS_FILE + " in its root is sent too, as project instructions. Both override the built-in"
+        + " guidance (style, Mule conventions) but not the rules the plugin relies on (tools, masked values,"
+        + " reviewable proposals).");
+    Link show = new Link(group, SWT.NONE);
+    show.setText("<a>Show built-in prompt</a>");
+    show.addListener(SWT.Selection, e -> new BuiltInPromptDialog(getShell()).open());
+  }
+
+  // Read-only view of the prompts the plugin sends before any instructions.
+  private static final class BuiltInPromptDialog extends Dialog {
+    BuiltInPromptDialog(Shell shell) {
+      super(shell);
+      setShellStyle(getShellStyle() | SWT.RESIZE);
+    }
+
+    @Override
+    protected void configureShell(Shell shell) {
+      super.configureShell(shell);
+      shell.setText("Built-in prompt");
+    }
+
+    @Override
+    protected Control createDialogArea(Composite parent) {
+      Composite area = (Composite) super.createDialogArea(parent);
+      Text text = new Text(area, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
+      GridData data = new GridData(SWT.FILL, SWT.FILL, true, true);
+      data.widthHint = 640;
+      data.heightHint = 460;
+      text.setLayoutData(data);
+      text.setText(Prompts.builtIn());
+      return area;
+    }
+
+    @Override
+    protected void createButtonsForButtonBar(Composite parent) {
+      createButton(parent, IDialogConstants.OK_ID, IDialogConstants.CLOSE_LABEL, true);
+    }
   }
 
   private void createNetworkGroup(Composite body) {
@@ -323,6 +392,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
       AiSettings.saveMaskSecrets(maskSecrets.getSelection());
+      AiSettings.saveInstructions(instructions.getText());
       return true;
     } catch (StorageException e) {
       setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD

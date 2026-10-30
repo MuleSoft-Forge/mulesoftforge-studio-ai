@@ -37,6 +37,7 @@ public final class AiSettings {
   private static final String UPDATE_CHECK_DISABLED = "updates.checkDisabled";
   private static final String MASK_SECRETS_DISABLED = "privacy.maskSecretsDisabled";
   private static final String RAW_LOG = "history.rawLog";
+  private static final String INSTRUCTIONS = "chat.instructions";
   public static final int DEFAULT_RETENTION_DAYS = 90;
 
   private static IPreferenceStore store;
@@ -167,6 +168,17 @@ public final class AiSettings {
   public static void saveMaskSecrets(boolean mask) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(MASK_SECRETS_DISABLED, !mask);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // The user's own instructions, sent with every message in every project.
+  public static String instructions() {
+    return store().getString(INSTRUCTIONS);
+  }
+
+  public static void saveInstructions(String text) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(INSTRUCTIONS, text == null ? "" : text.strip());
     ((ScopedPreferenceStore) prefs).save();
   }
 

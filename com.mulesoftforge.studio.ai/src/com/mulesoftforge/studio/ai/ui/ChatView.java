@@ -638,6 +638,7 @@ public class ChatView extends ViewPart {
       String error = null;
       try {
         session.maskSecrets(AiSettings.maskSecrets());
+        session.instructions(AiSettings.instructions());
         turn = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
       } catch (Exception e) {
         if (!cancelled.get()) {

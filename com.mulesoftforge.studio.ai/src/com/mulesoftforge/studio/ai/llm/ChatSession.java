@@ -29,18 +29,6 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 public class ChatSession {
-  private static final String SYSTEM_PROMPT = """
-      You are an expert MuleSoft developer working inside Anypoint Studio.
-      You help with Mule 4 flows (XML), DataWeave 2.0, RAML and OAS API specs, MUnit tests,
-      connector configuration, and Mule project structure (pom.xml, mule-artifact.json, properties).
-      Be concise and practical. Put Mule XML, DataWeave and specs in fenced code blocks.
-      Never invent connector operations, attributes or namespaces; say so when you are unsure.
-      Passwords, keys, tokens and client ids are hidden from you as «masked-N». That is deliberate: never ask
-      for the real values. When an edit touches a masked value, copy the placeholder exactly; the real value is
-      restored when the change is applied. A masked literal in a Mule file is a hardcoded secret, so recommend
-      moving it to secure properties.
-      """;
-
   private static final int MAX_TOOL_ROUNDS = 12;
   private static final String EMPTY_REPLY = "(empty reply)";
   // Asked once in Agent mode when the answer to a change request pastes code but proposes nothing.
@@ -99,10 +87,50 @@ public class ChatSession {
   private final List<String> cancelNotes = Collections.synchronizedList(new ArrayList<>());
   private final List<ChatRecord.Message> saved = new ArrayList<>();
   private final SecretMask secrets = new SecretMask();
+  private String instructions = "";
 
   // Off sends values as they are; files that only hold secrets are withheld either way.
   public void maskSecrets(boolean on) {
     secrets.setEnabled(on);
+  }
+
+  // The user's own instructions from Preferences, sent with every message.
+  public void instructions(String text) {
+    instructions = text == null ? "" : text;
+  }
+
+  private static String agentsFile(ProjectFiles project) {
+    if (project == null) {
+      return "";
+    }
+    try {
+      String text = project.read(Prompts.AGENTS_FILE);
+      return text == null ? "" : text;
+    } catch (Exception e) {
+      return "";
+    }
+  }
+
+  // The step shown on the first message, or null when there are no instructions to follow.
+  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, int hidden) {
+    List<String> parts = new ArrayList<>();
+    if (!fromProject.isEmpty()) {
+      parts.add(Prompts.AGENTS_FILE + " (" + size(fromProject) + ")");
+    }
+    if (!fromUser.isEmpty()) {
+      parts.add("your instructions (" + size(fromUser) + ")");
+    }
+    if (parts.isEmpty()) {
+      return null;
+    }
+    String step = "Following " + String.join(" and ", parts);
+    return hidden == 0 ? step : step + "; hid " + hidden + (hidden == 1 ? " secret value" : " secret values")
+        + " in them";
+  }
+
+  private static String size(Prompts.Capped text) {
+    String chars = String.format(Locale.ROOT, "%,d characters", text.chars());
+    return text.cut() ? chars + ", cut to " + String.format(Locale.ROOT, "%,d", Prompts.MAX_INSTRUCTIONS) : chars;
   }
 
   // The real values for placeholders in text the model wrote, for copying or applying it in Studio.
@@ -116,6 +144,8 @@ public class ChatSession {
 
   public synchronized Turn send(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
       ProjectFiles project, Progress progress) {
+    SecretMask.Masked projectText = secrets.mask(Prompts.AGENTS_FILE, agentsFile(project));
+    SecretMask.Masked userText = secrets.mask(null, instructions);
     int maskedBefore = secrets.total();
     prompt = secrets.mask(null, prompt).text();
     StringBuilder context = new StringBuilder();
@@ -162,11 +192,20 @@ public class ChatSession {
       parts.add(TextContent.from(text));
       message = UserMessage.from(parts);
     }
-    String system = project == null ? SYSTEM_PROMPT : SYSTEM_PROMPT + mode.projectPrompt(project.name());
     int maskedInMessage = secrets.total() - maskedBefore;
     if (maskedInMessage > 0) {
       progress.step("Hid " + maskedInMessage + (maskedInMessage == 1 ? " secret value" : " secret values")
           + " in your message and attachments before sending");
+    }
+    Prompts.Capped fromProject = Prompts.capped(projectText.text());
+    Prompts.Capped fromUser = Prompts.capped(userText.text());
+    String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
+        fromUser.text());
+    if (history.isEmpty()) {
+      String following = following(fromProject, fromUser, projectText.count() + userText.count());
+      if (following != null) {
+        progress.step(following);
+      }
     }
 
     ChangeSet changes = new ChangeSet();

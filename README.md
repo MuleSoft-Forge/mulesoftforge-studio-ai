@@ -56,6 +56,8 @@ Ask and Plan only get the read tools, and the tool layer refuses edits in those 
 
 **Picking which suggestions to make.** When the AI recommends changes without making them (a review such as "study my project and suggest improvements", an Ask answer, or a plan), it lists them under the answer as **Changes it can make**, each ticked, with the files it touches. Untick the ones you don't want and click **Draft selected changes for review**. That switches to Agent and asks for just those changes, which come back as proposals with diffs to review (below); nothing is written until you accept. In Agent mode, when you ask for a change and the model pastes code instead of proposing it, the plugin asks it once, in the same turn, to propose that code as edits, so the diffs arrive with the answer. If that still produces nothing, **Draft these changes as diffs** asks again; a plan without a list gets **Draft this plan for review in Agent mode**. The list belongs to the open chat: a chat reopened from History shows the answer but not the checklist.
 
+**Instructions.** Put team conventions in `AGENTS.md` at the Mule project's root (the same file other AI tools read); a `## Studio AI` section is a good place for anything only meant for Studio. Put your own preferences in Preferences > MuleSoftForge AI > Instructions > **Your instructions (every chat, every project)**. Both are sent with every message, after secrets are masked, up to 8,000 characters each (longer text is cut with a note), labelled as project and personal instructions below the built-in prompt. They override the built-in guidance (persona, style, Mule conventions) but not the rules the plugin relies on: tools, «masked-N» values, edits as reviewable proposals, fixing CHECKS problems and `offer_changes`. The first message of a chat shows a step such as **Following AGENTS.md (1,240 characters) and your instructions (85 characters)**, and Raw shows the exact text. **Show built-in prompt** under the box shows everything the plugin sends before your instructions; the files are in `llm/prompts/`.
+
 The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Windows) for message bubbles, code blocks with Copy / Insert at cursor, real tables and collapsible progress steps. If the browser cannot start, or **Preferences > MuleSoftForge AI > Chat view** is turned off, the plain text view is used instead. Model output is escaped, the page cannot navigate, and links open through Studio.
 
 **+ Context** attaches more to the next message: files (their content), folders (a list of the files inside), the lines selected in the editor, or the project's whole file list. Attachments show above the input and clear once sent. Large attachments are cut at 40k characters each and 120k in total; anything over the total is named so the AI can read it with its tools.
@@ -149,6 +151,7 @@ cd harness
 ./run.sh check-raw-log                                 # offline: chat via a local stub; exact HTTP bodies captured, masked, no API key
 ./run.sh check-auto                                    # offline: Auto routing rules and failover via a local stub
 ./run.sh check-draft                                   # offline: Agent answers that paste code are drafted as diffs in the same turn
+./run.sh check-instructions                            # offline: built-in rules always sent; AGENTS.md and your instructions added masked and capped
 ./run.sh check-attach                                  # offline: attachments, size caps, cancel note
 ./run.sh check-html /tmp/preview.html                  # offline: rich chat HTML and escaping; writes a preview page
 ./run.sh check-updates [latest.json URL]               # offline: version compare and latest.json; with a URL, fetches it
@@ -175,6 +178,8 @@ CA_PEM=~/corp-root.pem ./run.sh test-connection openai # try a corporate CA (USE
 com.mulesoftforge.studio.ai/            the plugin
   src/.../settings/   providers, saved settings (API keys in Eclipse secure storage)
   src/.../llm/        LangChain4j model creation, chat loop with tool calls
+  src/.../llm/prompts/ built-in system prompt: rules.md and the mode files always apply; guidance.md and
+                      mule-edits.md can be overridden by AGENTS.md and the user's instructions
   src/.../edit/       project tools, path guard, staged changes, line diff (no Eclipse imports)
   src/.../check/      static checks of Mule XML, pom.xml and properties (no Eclipse imports)
   src/.../connector/  connector models Studio generated, lookup for the AI (no Eclipse imports)
