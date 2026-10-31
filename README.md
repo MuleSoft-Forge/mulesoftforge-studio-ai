@@ -77,6 +77,10 @@ The chat uses Eclipse's built-in browser (WebKit on macOS, Edge WebView2 on Wind
 
 These use Studio's `org.mule.tooling.dfl.ui.weaveEmbeddedContextMenuAction` extension point, because the DataWeave editor builds its own menu. Studio does not document that extension point, so check both items after each Studio upgrade.
 
+**DataWeave CLI.** With MuleSoft's [DataWeave CLI](https://github.com/mulesoft/data-weave-cli) the AI gets two tools: `run_dataweave` runs a script on sample input (pasted, attached or a project file) and, given the output you want, says whether it matches and where it differs; `validate_dataweave` checks a script compiles. Proposals are compiled too (see the checks below). Runs use `dw run --untrusted`, so scripts cannot read files or the network, and stop after 20 seconds; Mule-only `p()` and `lookup()` return null. Set it up in **Preferences > MuleSoftForge AI > DataWeave CLI**: leave the path empty to look for `dw` on the PATH, in `~/.dw/bin` and in Homebrew; **Check** shows the version found; **Download 2.12.3** fetches MuleSoft's GitHub release for macOS arm64, Windows x64 or Linux x64, verifies the SHA-256 pinned in `CliDownload`, and installs it under the plugin's state folder. Without the CLI everything else works as before.
+
+**Debug with AI.** When Studio's Mule debugger stops at a breakpoint or an error, a row above the message box says where (**Debugger stopped on an error at Transform Message in get-employees**). **Ask about this event**, the MuleSoftForge button on the **Mule Debugger** view's toolbar, or Cmd/Ctrl+Alt+I in a debugger view attaches the live event: where it stopped, any error with the failing component's XML, the payload, attributes, variables, and the processor's settings as the runtime evaluated them, plus the processor's XML from the project. While the debugger is stopped the AI can run DataWeave on that event in the app's own runtime (`evaluate_at_breakpoint`) and load fields Studio has not sent yet (`expand_field`). Evaluations are read-only: `readUrl`, `lookup`, Java calls and `dw::Runtime` are refused, and so is reading a payload stream that can be read only once. If you step or another event stops while the AI is working, its results say where the debugger is now. Secrets in the event are masked as usual, and email addresses and phone numbers become `«email-N»` and `«phone-N»` unless you clear **Hide email addresses and phone numbers in live debug events**. The view is added beside **Evaluate** in the Mule Debug perspective. Studio's debugger is reached by reflection (`ui/StudioDebugger`), listening on its event bus from startup; closing the Mule Debugger view clears every listener on that bus, so the plugin registers again when the view opens or closes and when a debug launch starts. If Studio's debugger classes change, the feature turns itself off.
+
 **Screenshots and images.** Copy a screenshot or picture, then press Cmd/Ctrl+V in the chat view; it is attached as **pasted image 1 (width×height)** instead of pasting text. + Context > **Clipboard image** does the same. Up to 5 images go with one message. Images larger than 1568 px on their longest side are scaled down, and sent as PNG (JPEG when the PNG would be over 3.5 MB). An image is sent only with the message it was pasted into; later messages and saved chats keep just its label. The model must accept images: Claude, GPT-4o/GPT-5 and Gemini do, and in Ollama a vision model such as llava. Otherwise the error says so.
 
 **Speak instead of typing.** The mic button next to **Send** starts the operating system's dictation in the message box: macOS Dictation (turn it on in System Settings > Keyboard > Dictation), or Windows voice typing (Windows+H). The plugin never records audio itself and sends none to the AI provider; the system turns speech into text and the text is sent like typing. Press Enter, or click Send, when it reads right.
@@ -90,7 +94,7 @@ The box next to **New chat** picks the model for the current provider. Choose a 
 Ask for a change ("add a /health flow", "log the request method"). The AI can list and read files in the project of the active editor (or the one selected in Project Explorer), and proposes edits through tools. Nothing is written until you review it:
 
 - Proposals appear under **Proposed changes**. **Review diff** (or double-click) opens the Eclipse compare editor: current file on the left, proposal on the right.
-- **Accept** writes the file with local history kept. Undo with right-click > **Replace With > Local History**.
+- **Accept** writes the file with local history kept, creating it and any missing folders for a new file. **Accept all** writes every pending proposal in one Studio job, locking only what it writes (`ui/WorkspaceWrites`). If a write fails, the chat says what was not written. Undo with right-click > **Replace With > Local History**.
 - **Reject** discards it. The AI is told what you accepted or rejected with your next message.
 - Accept refuses if the file has unsaved edits or changed on disk since it was proposed.
 - Paths must stay inside the project. Absolute paths, `..`, and `target/`, `.git/`, `.mule/`, `.settings/`, `bin/` are refused.
@@ -104,6 +108,7 @@ Ask for a change ("add a /health flow", "log the request method"). The AI can li
 - `${property}` or `${secure::property}` not defined in a `.properties`/`.yaml` file or a `global-property`, and `configuration-properties` naming a file that is not there.
 - Error types: `MULE:` types that do not exist, and `raise-error` or `error-mapping targetType` using a connector's namespace.
 - Connector elements, checked against the connector version in `pom.xml`: an operation, source or scope that does not exist, an attribute the component does not have, and an error type the connector does not define.
+- DataWeave that does not compile, when the DataWeave CLI is set up: Transform Message scripts, `#[...]` values and `.dwl` files. Only scripts the proposal changed are compiled, and errors are reported at the XML line.
 
 **Connector lookup.** In every mode the AI can look up the connectors in `pom.xml` (`connector_reference`): their configs, connections, operations, sources, parameters (attribute or child element, defaults, allowed values) and error types. The answers come from the models Studio generates for each connector version under `<workspace>/.mule/plugins-tmp/repository/`, so they match the version the project uses. If Studio has not generated a model yet (a new dependency), the AI is told to save `pom.xml` or refresh the project rather than guess, and the connector element checks skip that connector.
 
@@ -127,7 +132,7 @@ If the company proxy re-signs HTTPS, calls fail with "certificate is not trusted
 
 Test connection and Refresh models use the settings on screen, before you click Apply.
 
-**Auto** (first in every model list) picks per message between **Auto fast model** and **Auto strong model**, set per provider below Model (defaults in `AutoRouter.defaults`). Rules in `AutoRouter.choose`: Agent and Plan, DataWeave fixes, images, attachments over 24k characters, messages over 1,500 characters, and wording such as review, fix, error, write, test go to the strong model; other Ask questions go to the fast one. The chat shows "Auto picked … : reason". If the chosen model fails with 408, 429, 5xx, a timeout or a dropped connection before any call answered, the turn runs once on the other model (`AutoRouter.send`); 4xx errors such as a bad key are not retried. A turn never switches model between tool rounds. Test connection on Auto tests the strong model. `openrouter/auto` stays available for OpenRouter, and with either Auto the step under each answer names the model that replied.
+**Auto** (first in every model list) picks per message between **Auto fast model** and **Auto strong model**, set per provider below Model (defaults in `AutoRouter.defaults`). Rules in `AutoRouter.choose`: Agent and Plan, DataWeave fixes, live debug events, DataWeave questions and `.dwl` attachments, images, attachments over 24k characters, messages over 1,500 characters, and wording such as review, fix, error, write, test go to the strong model; other Ask questions go to the fast one. The chat shows "Auto picked … : reason". If the chosen model fails with 408, 429, 5xx, a timeout or a dropped connection before any call answered, the turn runs once on the other model (`AutoRouter.send`); 4xx errors such as a bad key are not retried. A turn never switches model between tool rounds. Test connection on Auto tests the strong model. `openrouter/auto` stays available for OpenRouter, and with either Auto the step under each answer names the model that replied.
 
 Each provider keeps its own base URL, model and key. Switching provider on the page keeps what you typed for the others, and Apply saves them all. Under the key, the page shows its start and end (`sk-or-…a1b2, 73 characters`) and warns when it looks like another provider's key, the usual cause of a 401. The models Refresh models finds are saved for that provider and offered in the chat view's model picker, and the chat view updates when settings change, however Preferences was opened.
 
@@ -155,6 +160,11 @@ cd harness
 ./run.sh check-attach                                  # offline: attachments, size caps, cancel note
 ./run.sh check-html /tmp/preview.html                  # offline: rich chat HTML and escaping; writes a preview page
 ./run.sh check-updates [latest.json URL]               # offline: version compare and latest.json; with a URL, fetches it
+./run.sh check-debug                                   # offline: debug events from captured fixtures, evaluate/expand tools on a fake session
+./run.sh debug-snapshot logger-get.json                # what the AI sees for a captured debugger stop
+./run.sh check-dataweave                               # DataWeave CLI parsing, proposal checks, tools, download (CLI parts skip without dw)
+./run.sh dataweave-download [dir]                      # download and verify the real CLI release (network)
+./run.sh check-workspace                               # Accept's writes in a real Eclipse workspace booted from Studio's plugins (STUDIO_APP)
 ./run-checks.sh                                        # every offline check, as install and publish run them
 ./run.sh chat --mode plan --project /tmp/proj "add a /health endpoint"   # modes: ask, agent, plan
 ./run.sh chat --project /tmp/proj --attach src --lines src/main/mule/app.xml:1-12 "explain this"
@@ -185,10 +195,13 @@ com.mulesoftforge.studio.ai/            the plugin
   src/.../connector/  connector models Studio generated, lookup for the AI (no Eclipse imports)
   src/.../history/    saved chats, cost ledger, Markdown export (no Eclipse imports)
   src/.../render/     Markdown rendering and code highlighting (no Eclipse imports)
-  src/.../ui/         chat view, change review, preferences page, open-file capture
+  src/.../debug/      live debugger event, snapshot text, evaluate/expand tools (no Eclipse imports)
+  src/.../dataweave/  DataWeave CLI: find, download, run, validate, proposal checks (no Eclipse imports)
+  src/.../ui/         chat view, change review, preferences page, open-file capture, Studio debugger adapter
   lib/                LangChain4j jars, copied by Maven at build time (not in git)
 com.mulesoftforge.studio.ai.feature/    installable feature
 com.mulesoftforge.studio.ai.updatesite/ update site for Install New Software
 install-dropins.sh                      build, check, copy into Studio's dropins (development)
 publish-update-site.sh                  build, check, add a release to the website's update site
+harness/                                offline checks; harness/workspace/ runs inside Equinox for check-workspace
 ```
