@@ -1,0 +1,28 @@
+name: Label reports
+# Reports sent from Studio are opened by the user, and GitHub drops labels set by anyone without write access, so
+# the label comes from the title the plugin gives them: "Bug: …" or "Feedback: …".
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    if: startsWith(github.event.issue.title, 'Bug:') || startsWith(github.event.issue.title, 'Feedback:')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the label for the title's prefix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          case "$TITLE" in
+            Bug:*) label=bug ;;
+            *) label=feedback ;;
+          esac
+          gh label create feedback --color 0e8a16 --description "Feedback from users" 2>/dev/null || true
+          gh issue edit "$NUMBER" --add-label "$label"

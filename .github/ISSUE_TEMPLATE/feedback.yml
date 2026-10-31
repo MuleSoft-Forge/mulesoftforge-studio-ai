@@ -1,0 +1,22 @@
+name: Feedback
+description: Ideas, suggestions, and what works or does not in MuleSoftForge Studio AI.
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the feedback. Issues here are public. **Never paste API keys, client secrets or tokens**, and
+        leave out customer data. You can also send feedback from Studio: **Feedback** in the MuleSoftForge AI view.
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback
+      description: What works, what does not, and what you would like it to do.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Filled in when you send feedback from Studio. Remove anything you do not want public.
+      render: text

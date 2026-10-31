@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. **Never paste API keys, client secrets or tokens.** Error dumps from the plugin
-        show HTTP headers and bodies; check them before pasting.
+        Thanks for reporting. Issues here are public. **Never paste API keys, client secrets or tokens**, and
+        leave out customer data. Error dumps from the plugin show HTTP headers and bodies; check them before
+        pasting. You can also report from Studio: **Feedback** in the MuleSoftForge AI view.
   - type: textarea
     id: what-happened
     attributes:
@@ -32,7 +33,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      description: Shown in the MuleSoftForge AI view header, for example v0.4.6.
+      description: Shown in the MuleSoftForge AI view header, for example v0.5.7.
     validations:
       required: true
   - type: dropdown
@@ -63,3 +64,9 @@ body:
       placeholder: Studio 7.28, macOS 15
     validations:
       required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Filled in when you report from Studio. Remove anything you do not want public.
+      render: text
