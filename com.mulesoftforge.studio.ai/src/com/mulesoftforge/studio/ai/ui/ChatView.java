@@ -124,9 +124,9 @@ public class ChatView extends ViewPart {
     IWorkbenchPage page = getSite().getPage();
     ThemeStyles.applyClass(parent, "MsfRoot");
 
-    // Provider and Settings on the left; version, Raw and History on the right.
+    // Provider and Settings on the left; version, Raw, History and Feedback on the right.
     Composite top = new Composite(parent, SWT.NONE);
-    GridLayout topLayout = new GridLayout(6, false);
+    GridLayout topLayout = new GridLayout(7, false);
     topLayout.marginHeight = 2;
     top.setLayout(topLayout);
     top.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
@@ -149,6 +149,10 @@ public class ChatView extends ViewPart {
     history.setToolTipText("Saved chats in this workspace");
     ChatHistoryMenu historyMenu = new ChatHistoryMenu(parent.getShell(), new HistoryHost());
     history.addListener(SWT.Selection, e -> historyMenu.show(history));
+    Link feedback = new Link(top, SWT.NONE);
+    feedback.setText("<a>Feedback</a>");
+    feedback.setToolTipText("Report a bug or send feedback to the MuleSoftForge team, as a public GitHub issue");
+    feedback.addListener(SWT.Selection, e -> new FeedbackDialog(getSite().getShell()).open());
 
     // The transcript and, beside it, the model and cost. Drag the divider to resize.
     SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);

@@ -194,6 +194,7 @@ public class Harness {
       case "debug-snapshot" -> DebugChecks.print(args[1]);
       case "check-dataweave" -> DataWeaveChecks.run();
       case "check-workspace" -> WorkspaceChecks.run();
+      case "check-feedback" -> FeedbackChecks.run();
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
             com.mulesoftforge.studio.ai.dataweave.CliDownload.current();

@@ -40,6 +40,8 @@ public final class AiSettings {
   private static final String DATAWEAVE_CLI = "dataweave.cli";
   private static final String RAW_LOG = "history.rawLog";
   private static final String INSTRUCTIONS = "chat.instructions";
+  private static final String GITHUB_LOGIN = "github.login";
+  private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
 
   private static IPreferenceStore store;
@@ -193,6 +195,34 @@ public final class AiSettings {
     IPreferenceStore prefs = store();
     prefs.setValue(MASK_PERSONAL_DISABLED, !mask);
     ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // The GitHub account bug reports and feedback are sent as. The token is in secure storage; the account name,
+  // shown in the Feedback popup, is not secret.
+  public static String gitHubLogin() {
+    return store().getString(GITHUB_LOGIN);
+  }
+
+  public static String gitHubToken() throws StorageException {
+    return secure().get(GITHUB_TOKEN, "");
+  }
+
+  public static void saveGitHubSignIn(String token, String login) throws Exception {
+    ISecurePreferences secure = secure();
+    secure.put(GITHUB_TOKEN, token, true);
+    secure.flush();
+    IPreferenceStore prefs = store();
+    prefs.setValue(GITHUB_LOGIN, login);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  public static void clearGitHubSignIn() throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setToDefault(GITHUB_LOGIN);
+    ((ScopedPreferenceStore) prefs).save();
+    ISecurePreferences secure = secure();
+    secure.remove(GITHUB_TOKEN);
+    secure.flush();
   }
 
   // The user's own instructions, sent with every message in every project.

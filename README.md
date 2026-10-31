@@ -40,6 +40,14 @@ The view's header shows the installed version (`v0.1.0`). Once per Studio sessio
 2. `./publish-update-site.sh --notes "What changed"` builds, runs the offline checks, copies the update site into `../website/docs/public/studio-ai/updates/0.2.0/`, and rewrites the composite index, `p2.index` and `latest.json`. Every version stays, so users can roll back. It refuses to overwrite a published version unless you pass `--replace`.
 3. In `website/`, commit, open a PR (its preview deploy serves the site at the preview URL for a test install), merge, then run **Deploy to Production**. Users see the update after that deploy.
 
+### Sign in with GitHub for feedback
+
+While `GitHub.CLIENT_ID` in `feedback/GitHub.java` is empty, the Feedback popup only opens GitHub's New issue page. To let it send:
+
+1. **MuleSoft-Forge org > Settings > Developer settings > GitHub Apps > New GitHub App**. Name it "MuleSoftForge Studio AI", homepage `https://docs.mulesoftforge.com/studio-ai/`. Clear **Webhook > Active**, tick **Enable Device Flow**, and clear **Expire user authorization tokens** (refreshing a token needs the client secret, so users would sign in again every 8 hours). Under **Repository permissions** set **Issues** to **Read and write**, and choose **Only on this account**.
+2. **Install App** on `mulesoftforge-studio-ai` only.
+3. Put the app's **Client ID** in `GitHub.CLIENT_ID` and release. The client ID is public; do not generate a client secret.
+
 ## Use
 
 Open a Mule file, type a question, press Enter. **Include open file** sends the active editor's content (unsaved edits included when the editor exposes text) with your message. **New chat** clears the conversation.
@@ -86,6 +94,8 @@ These use Studio's `org.mule.tooling.dfl.ui.weaveEmbeddedContextMenuAction` exte
 **Speak instead of typing.** The mic button next to **Send** starts the operating system's dictation in the message box: macOS Dictation (turn it on in System Settings > Keyboard > Dictation), or Windows voice typing (Windows+H). The plugin never records audio itself and sends none to the AI provider; the system turns speech into text and the text is sent like typing. Press Enter, or click Send, when it reads right.
 
 If you cancel a request, the AI is told with your next message that it was dropped, so it does not assume the work was done.
+
+**Feedback and bug reports.** **Feedback** in the view's header opens a popup: Bug or Feedback, a title, what happened, and the details sent with it (plugin, Studio, Eclipse, Java and OS versions, provider and model, and whether the DataWeave CLI is set up; no paths, URLs, project names or keys). It becomes a public issue on this repository, so the title, text and details are always masked as they are for the model, whatever the masking setting, and the popup says when something was masked. **Sign in with GitHub** shows a short code, copies it and opens github.com/login/device; after **Authorize** the popup shows **Sending as @name**, and **Send** opens the issue as that user and shows it in the browser, where screenshots can be added. Sign-in is GitHub's device flow for the MuleSoftForge Studio AI GitHub App, so there is no client secret in the plugin; the token can only open issues in repositories where the app is installed, and is kept in Eclipse secure storage. **Open on GitHub instead** (just **Open on GitHub** while `GitHub.CLIENT_ID` is empty) opens the New issue page with `.github/ISSUE_TEMPLATE/bug_report.yml` or `feedback.yml` filled in by field id; text that does not fit in the link (8,000 characters, 2,000 on Windows) is cut and copied to the clipboard. GitHub drops labels on issues opened by people without write access, so `.github/workflows/label-reports.yml` labels `Bug:` and `Feedback:` titles.
 
 The box next to **New chat** picks the model for the current provider. Choose a suggestion or type any model id and press Enter. Underneath it shows the list price per 1M input and output tokens; hover for the prices of every suggestion. You can switch models mid-chat, and the conversation carries over.
 
@@ -165,6 +175,7 @@ cd harness
 ./run.sh check-dataweave                               # DataWeave CLI parsing, proposal checks, tools, download (CLI parts skip without dw)
 ./run.sh dataweave-download [dir]                      # download and verify the real CLI release (network)
 ./run.sh check-workspace                               # Accept's writes in a real Eclipse workspace booted from Studio's plugins (STUDIO_APP)
+./run.sh check-feedback                                # offline: report masking, the issue-form link, GitHub sign-in and issues via a local stub
 ./run-checks.sh                                        # every offline check, as install and publish run them
 ./run.sh chat --mode plan --project /tmp/proj "add a /health endpoint"   # modes: ask, agent, plan
 ./run.sh chat --project /tmp/proj --attach src --lines src/main/mule/app.xml:1-12 "explain this"
@@ -197,6 +208,7 @@ com.mulesoftforge.studio.ai/            the plugin
   src/.../render/     Markdown rendering and code highlighting (no Eclipse imports)
   src/.../debug/      live debugger event, snapshot text, evaluate/expand tools (no Eclipse imports)
   src/.../dataweave/  DataWeave CLI: find, download, run, validate, proposal checks (no Eclipse imports)
+  src/.../feedback/   bug reports and feedback: issue text, issue-form link, GitHub sign-in and issues (no Eclipse imports)
   src/.../ui/         chat view, change review, preferences page, open-file capture, Studio debugger adapter
   lib/                LangChain4j jars, copied by Maven at build time (not in git)
 com.mulesoftforge.studio.ai.feature/    installable feature
