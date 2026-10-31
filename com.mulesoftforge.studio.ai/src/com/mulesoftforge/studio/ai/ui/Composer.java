@@ -74,6 +74,7 @@ final class Composer {
   private static final int MAX_CONSOLES_LISTED = 6;
 
   private final Composite root;
+  private final Composite panel;
   private final IWorkbenchPage page;
   private final Listener listener;
   private final List<Attachment> attached = new ArrayList<>();
@@ -92,13 +93,13 @@ final class Composer {
     this.listener = listener;
 
     // A grey panel behind the message box and its controls; text boxes and pickers keep their own white.
-    Composite panel = new Composite(root, SWT.NONE);
+    panel = new Composite(root, SWT.NONE);
     GridLayout panelLayout = new GridLayout(1, false);
     panelLayout.marginWidth = 6;
     panelLayout.marginHeight = 6;
     panel.setLayout(panelLayout);
     panel.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
-    panel.setBackground(TranscriptStyles.panel(root));
+    ThemeStyles.applyClass(panel, "MsfPanel");
     panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
 
     attachedRow = new Composite(panel, SWT.NONE);
@@ -319,6 +320,14 @@ final class Composer {
     send.setText("Cancelling…");
   }
 
+  void applyTheme() {
+    if (panel.isDisposed()) {
+      return;
+    }
+    ThemeStyles.applyClass(panel, "MsfPanel");
+    send.redraw();
+  }
+
   // The curated models for the current provider, those Refresh models last fetched, and whatever is chosen,
   // which may be a typed id.
   void refreshModels() {
@@ -402,8 +411,9 @@ final class Composer {
       }
       table.append("\n\nType any other model id and press Enter.");
       StatusPanel.PriceList prices = priceList(provider, current, models, found);
-      Display.getDefault().asyncExec(() -> {
-        if (modelPicker.isDisposed() || !current.equals(modelPicker.getText().trim())) {
+      Display display = modelPicker.getDisplay();
+      Ui.async(display, modelPicker, () -> {
+        if (!current.equals(modelPicker.getText().trim())) {
           return;
         }
         modelPicker.setToolTipText(table.toString());
@@ -486,6 +496,7 @@ final class Composer {
 
   private void showContextMenu(Control anchor) {
     Menu menu = new Menu(anchor);
+    Menus.disposeOnHide(menu);
     MenuItem files = new MenuItem(menu, SWT.PUSH);
     files.setText("Files or folders…");
     files.addListener(SWT.Selection, e -> pickResources());

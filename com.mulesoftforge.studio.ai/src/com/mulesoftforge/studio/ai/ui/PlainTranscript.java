@@ -195,6 +195,14 @@ final class PlainTranscript implements Transcript {
     showRaw = show;
   }
 
+  @Override
+  public void applyTheme(com.mulesoftforge.studio.ai.render.Palette palette,
+      com.mulesoftforge.studio.ai.render.Palette.Rgb background,
+      com.mulesoftforge.studio.ai.render.Palette.Rgb foreground) {
+    styles.apply(palette);
+    text.redraw();
+  }
+
   private void toggle(String where) {
     String[] parts = where.split(":");
     Offer offer = offers.get(Integer.parseInt(parts[0]));

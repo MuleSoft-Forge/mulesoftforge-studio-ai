@@ -20,8 +20,8 @@ final class VersionLink {
   private static final String P2_UPDATE_COMMAND = "org.eclipse.equinox.p2.ui.sdk.update";
 
   // Shared by every chat view so the site is asked at most once per Studio session.
-  private static Updates.Latest latest;
-  private static boolean checked;
+  private static volatile Updates.Latest latest;
+  private static volatile boolean checked;
 
   private final Link link;
   private final IWorkbenchPage page;
@@ -70,13 +70,10 @@ final class VersionLink {
       try {
         latest = Updates.fetch(Updates.LATEST_URL);
       } catch (Exception e) {
-        Activator.logError("Could not check for MuleSoftForge AI updates at " + Updates.LATEST_URL, e);
+        Activator.logFailure("Could not check for MuleSoftForge AI updates at " + Updates.LATEST_URL, e);
       }
-      Display.getDefault().asyncExec(() -> {
-        if (!link.isDisposed()) {
-          show();
-        }
-      });
+      Display display = link.getDisplay();
+      Ui.async(display, link, this::show);
       return Status.OK_STATUS;
     });
     job.setSystem(true);
@@ -90,9 +87,14 @@ final class VersionLink {
         page.getWorkbenchWindow().getService(IHandlerService.class).executeCommand(P2_UPDATE_COMMAND, null);
         return;
       } catch (Exception e) {
-        Activator.logError("Could not open Help > Check for Updates", e);
+        Activator.logFailure("Could not open Help > Check for Updates", e);
       }
     }
-    Program.launch(Updates.PAGE);
+    try {
+      org.eclipse.ui.PlatformUI.getWorkbench().getBrowserSupport().getExternalBrowser()
+          .openURL(java.net.URI.create(Updates.PAGE).toURL());
+    } catch (Exception e) {
+      Program.launch(Updates.PAGE);
+    }
   }
 }

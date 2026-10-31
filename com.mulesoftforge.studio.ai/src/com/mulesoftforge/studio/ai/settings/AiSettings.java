@@ -261,7 +261,13 @@ public final class AiSettings {
     secure.flush();
   }
 
-  private static ISecurePreferences secure() {
-    return SecurePreferencesFactory.getDefault().node(Activator.PLUGIN_ID);
+  private static ISecurePreferences secure() throws StorageException {
+    ISecurePreferences root = SecurePreferencesFactory.getDefault();
+    if (root == null) {
+      throw new StorageException(StorageException.NO_SECURE_MODULE,
+          "Eclipse secure storage is not available. Set up a master password under"
+              + " General > Security > Secure Storage > Password.");
+    }
+    return root.node(Activator.PLUGIN_ID);
   }
 }

@@ -100,4 +100,68 @@
   <extension point="org.mule.tooling.messageflow.nodecontextmenu">
     <nodecontextmenu class="com.mulesoftforge.studio.ai.ui.CanvasMenu"/>
   </extension>
+
+  <extension point="org.eclipse.ui.themes">
+    <themeElementCategory id="com.mulesoftforge.studio.ai.theme" label="MuleSoftForge AI"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.panel" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Panel background" value="240,241,243"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.divider" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Divider" value="200,204,210"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.codeBackground" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Code background" value="244,245,247"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.inlineCode" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Inline code background" value="232,234,238"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.muted" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Muted text" value="110,110,110"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.link" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Link" value="0,102,204"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.tag" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="XML tag" value="63,127,127"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.attrName" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Attribute name" value="127,0,127"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.attrValue" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Attribute value" value="42,0,255"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.comment" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Comment" value="63,95,191"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.string" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="String" value="163,21,21"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.number" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Number" value="9,134,88"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.keyword" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Keyword" value="127,0,85"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.key" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="JSON key" value="4,81,165"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.expression" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Expression" value="181,82,11"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.directive" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Directive" value="128,128,128"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.you" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="You speaker" value="0,95,184"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.ai" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="AI speaker" value="0,128,64"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.error" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Error speaker" value="200,30,30"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.note" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Note speaker" value="176,104,0"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.go" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Send button" value="46,125,50"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.stop" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Cancel button" value="198,40,40"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.buttonText" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Button text" value="255,255,255"/>
+    <colorDefinition id="com.mulesoftforge.studio.ai.buttonDisabled" categoryId="com.mulesoftforge.studio.ai.theme"
+        label="Disabled button" value="180,180,180"/>
+  </extension>
+
+  <extension point="org.eclipse.e4.ui.css.swt.theme">
+    <stylesheet uri="css/msf-light.css">
+      <themeid refid="org.mule.tooling.ui.theme.light"/>
+      <themeid refid="org.eclipse.e4.ui.css.theme.e4_default"/>
+      <themeid refid="org.eclipse.e4.ui.css.theme.e4_classic"/>
+    </stylesheet>
+    <stylesheet uri="css/msf-dark.css">
+      <themeid refid="org.mule.tooling.ui.theme.dark"/>
+      <themeid refid="org.eclipse.e4.ui.css.theme.e4_dark"/>
+    </stylesheet>
+  </extension>
 </plugin>

@@ -2,12 +2,16 @@ package com.mulesoftforge.studio.ai.llm;
 
 import java.net.URI;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicReference;
 
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.http.client.HttpClient;
@@ -18,23 +22,26 @@ import dev.langchain4j.http.client.sse.ServerSentEventListener;
 import dev.langchain4j.http.client.sse.ServerSentEventParser;
 
 /**
- * Sync chat calls go through {@link java.net.http.HttpClient} so failed responses keep status,
- * body and headers. Streaming is delegated to LangChain4j's JDK client (headers on stream errors
- * are not enriched yet).
+ * Sync chat calls go through {@link java.net.http.HttpClient#sendAsync} so Cancel can abort the
+ * in-flight exchange. Failures keep status, body and headers. Streaming is delegated to
+ * LangChain4j's JDK client (headers on stream errors are not enriched yet).
  */
 final class DiagnosingHttpClient implements HttpClient {
   private final java.net.http.HttpClient jdk;
   private final Duration readTimeout;
   private final HttpClient streaming;
   private final RawCapture capture;
+  private final AtomicReference<CompletableFuture<?>> inFlight;
 
   // capture, when not null, receives each sync exchange without headers.
+  // inFlight, when not null, holds the current sendAsync future so Job.canceling() can abort it.
   DiagnosingHttpClient(java.net.http.HttpClient jdk, Duration readTimeout, HttpClient streaming,
-      RawCapture capture) {
+      RawCapture capture, AtomicReference<CompletableFuture<?>> inFlight) {
     this.jdk = jdk;
     this.readTimeout = readTimeout == null ? Duration.ofSeconds(180) : readTimeout;
     this.streaming = streaming;
     this.capture = capture;
+    this.inFlight = inFlight;
   }
 
   @Override
@@ -59,17 +66,30 @@ final class DiagnosingHttpClient implements HttpClient {
       }
     }
 
-    java.net.http.HttpResponse<String> response;
+    CompletableFuture<HttpResponse<String>> future = jdk.sendAsync(builder.build(), BodyHandlers.ofString());
+    if (inFlight != null) {
+      inFlight.set(future);
+    }
+    HttpResponse<String> response;
     try {
-      response = jdk.send(builder.build(), BodyHandlers.ofString());
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
+      response = future.join();
+    } catch (CancellationException e) {
       captured(request, null, null);
-      throw new RuntimeException("Interrupted calling " + request.method() + " " + request.url(), e);
-    } catch (Exception e) {
+      throw e;
+    } catch (CompletionException e) {
       captured(request, null, null);
-      throw new RuntimeException("Transport failure calling " + request.method() + " " + request.url()
-          + ": " + Errors.describe(e), e);
+      Throwable cause = e.getCause() == null ? e : e.getCause();
+      if (cause instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+        throw new CancellationException("Interrupted calling " + request.method() + " " + request.url());
+      }
+      throw new TransportException(request.method().name(), request.url(),
+          "Transport failure calling " + request.method() + " " + request.url() + ": " + Errors.describe(cause),
+          cause);
+    } finally {
+      if (inFlight != null) {
+        inFlight.compareAndSet(future, null);
+      }
     }
 
     int status = response.statusCode();

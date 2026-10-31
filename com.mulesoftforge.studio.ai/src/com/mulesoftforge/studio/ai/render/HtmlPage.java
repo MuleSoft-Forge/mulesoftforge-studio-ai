@@ -10,92 +10,84 @@ public final class HtmlPage {
 
   private HtmlPage() {}
 
-  public static String page(Theme theme) {
+  // CSS custom-property values for a live theme switch via msfTheme().
+  public static String themeVars(Theme theme) {
     Palette p = theme.palette();
     boolean dark = theme.background().isDark();
     String border = dark ? "#3c3f44" : "#dcdfe4";
     String bubble = dark ? "#2f3338" : "#eef3fb";
+    return """
+        --scheme:%s;--bg:%s;--fg:%s;--bubble:%s;--border:%s;--muted:%s;--error:%s;--note:%s;
+        --inline:%s;--code:%s;--link:%s;--panel:%s;--tag:%s;--attr-name:%s;--attr-value:%s;
+        --comment:%s;--string:%s;--number:%s;--keyword:%s;--key:%s;--expression:%s;--directive:%s;
+        --you:%s;--ai:%s;
+        """.formatted(dark ? "dark" : "light", theme.background().css(), theme.foreground().css(), bubble, border,
+        p.muted().css(), p.error().css(), p.note().css(), p.inlineCodeBackground().css(), p.codeBackground().css(),
+        p.link().css(), p.panel().css(), p.tag().css(), p.attrName().css(), p.attrValue().css(), p.comment().css(),
+        p.string().css(), p.number().css(), p.keyword().css(), p.key().css(), p.expression().css(),
+        p.directive().css(), p.you().css(), p.ai().css()).replace("\n", "");
+  }
+
+  public static String page(Theme theme) {
     String css = """
-        :root { color-scheme: %s; }
-        html, body { margin: 0; padding: 0; background: %s; color: %s;
+        :root { %s color-scheme: var(--scheme); }
+        html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
           font-family: %s, -apple-system, "Segoe UI", sans-serif; font-size: %dpt; line-height: 1.45; }
         #log { padding: 8px 10px 16px; }
         .msg { margin: 10px 0 4px; }
         .who { font-weight: 600; font-size: 0.85em; margin-bottom: 2px; }
-        .you .body { background: %s; border: 1px solid %s; border-radius: 8px; padding: 6px 9px;
+        .you .body { background: var(--bubble); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
           white-space: normal; }
-        .ctx { color: %s; font-size: 0.85em; margin-top: 3px; }
+        .ctx { color: var(--muted); font-size: 0.85em; margin-top: 3px; }
         .error .body { font-family: %s, monospace; font-size: %dpt; white-space: pre-wrap;
-          border-left: 3px solid %s; padding-left: 8px; }
-        .note .body { border-left: 3px solid %s; padding-left: 8px; }
-        .steps { color: %s; font-style: italic; font-size: 0.9em; margin: 3px 0 3px 2px; }
+          border-left: 3px solid var(--error); padding-left: 8px; }
+        .note .body { border-left: 3px solid var(--note); padding-left: 8px; }
+        .steps { color: var(--muted); font-style: italic; font-size: 0.9em; margin: 3px 0 3px 2px; }
         .steps summary { cursor: pointer; }
         .step::before { content: "· "; }
         .h1 { font-size: 1.25em; font-weight: 600; }
         .h2 { font-size: 1.05em; font-weight: 600; }
-        .quote { color: %s; font-style: italic; }
-        code.inline { font-family: %s, monospace; font-size: %dpt; background: %s; border-radius: 3px;
+        .quote { color: var(--muted); font-style: italic; }
+        code.inline { font-family: %s, monospace; font-size: %dpt; background: var(--inline); border-radius: 3px;
           padding: 0 3px; }
-        .block { border: 1px solid %s; border-radius: 6px; margin: 6px 0; overflow: hidden; }
+        .block { border: 1px solid var(--border); border-radius: 6px; margin: 6px 0; overflow: hidden; }
         .bar { display: flex; gap: 12px; align-items: center; padding: 3px 8px; font-size: 0.8em;
-          background: %s; border-bottom: 1px solid %s; }
-        .lang { flex: 1; color: %s; text-transform: uppercase; letter-spacing: 0.04em; }
-        pre { margin: 0; padding: 8px; overflow-x: auto; background: %s; font-family: %s, monospace;
+          background: var(--inline); border-bottom: 1px solid var(--border); }
+        .lang { flex: 1; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+        pre { margin: 0; padding: 8px; overflow-x: auto; background: var(--code); font-family: %s, monospace;
           font-size: %dpt; line-height: 1.35; }
-        a { color: %s; text-decoration: none; cursor: pointer; }
+        a { color: var(--link); text-decoration: none; cursor: pointer; }
         a:hover { text-decoration: underline; }
         .actions { margin: 6px 0; }
-        .button { display: inline-block; border: 1px solid %s; border-radius: 5px; padding: 2px 10px;
-          color: %s; }
+        .button { display: inline-block; border: 1px solid var(--border); border-radius: 5px; padding: 2px 10px;
+          color: var(--link); }
         table { border-collapse: collapse; margin: 6px 0; font-size: 0.95em; }
-        th, td { border: 1px solid %s; padding: 3px 8px; text-align: left; vertical-align: top; }
-        th { background: %s; }
+        th, td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; vertical-align: top; }
+        th { background: var(--code); }
         .t-tag, .t-attr-name, .t-attr-value, .t-comment, .t-string, .t-number, .t-keyword, .t-key,
           .t-expression, .t-directive { font-family: %s, monospace; }
-        .t-tag { color: %s; } .t-attr-name { color: %s; } .t-attr-value { color: %s; }
-        .t-comment { color: %s; font-style: italic; } .t-string { color: %s; } .t-number { color: %s; }
-        .t-keyword { color: %s; font-weight: 600; } .t-key { color: %s; } .t-expression { color: %s; }
-        .t-directive { color: %s; }
-        .you .who { color: %s; } .ai .who { color: %s; } .error .who { color: %s; } .note .who { color: %s; }
-        """.formatted(dark ? "dark" : "light", theme.background().css(), theme.foreground().css(),
-        quote(theme.font()), theme.fontPt(),
-        bubble, border, p.muted().css(),
-        quote(theme.mono()), theme.monoPt(), p.error().css(),
-        p.note().css(),
-        p.muted().css(),
-        p.muted().css(),
-        quote(theme.mono()), theme.monoPt(), p.inlineCodeBackground().css(),
-        border,
-        p.inlineCodeBackground().css(), border,
-        p.muted().css(),
-        p.codeBackground().css(), quote(theme.mono()), theme.monoPt(),
-        p.link().css(),
-        border, p.link().css(),
-        border, p.codeBackground().css(),
-        quote(theme.mono()),
-        p.tag().css(), p.attrName().css(), p.attrValue().css(),
-        p.comment().css(), p.string().css(), p.number().css(),
-        p.keyword().css(), p.key().css(), p.expression().css(),
-        p.directive().css(),
-        p.you().css(), p.ai().css(), p.error().css(), p.note().css())
-        + """
-        .ai .body { background: %s; border: 1px solid %s; border-radius: 8px; padding: 6px 10px; }
-        .ai .body pre { background: %s; }
-        .offer { margin: 6px 0; padding: 6px 10px; border: 1px solid %s; border-radius: 8px; }
+        .t-tag { color: var(--tag); } .t-attr-name { color: var(--attr-name); } .t-attr-value { color: var(--attr-value); }
+        .t-comment { color: var(--comment); font-style: italic; } .t-string { color: var(--string); } .t-number { color: var(--number); }
+        .t-keyword { color: var(--keyword); font-weight: 600; } .t-key { color: var(--key); } .t-expression { color: var(--expression); }
+        .t-directive { color: var(--directive); }
+        .you .who { color: var(--you); } .ai .who { color: var(--ai); } .error .who { color: var(--error); } .note .who { color: var(--note); }
+        .ai .body { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+        .ai .body pre { background: var(--bg); }
+        .offer { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; }
         .offer .title { font-weight: 600; font-size: 0.9em; margin-bottom: 3px; }
         .offer.suggested .title { cursor: pointer; font-weight: normal; }
         .offer.suggested:not([open]) .title { margin-bottom: 0; }
         .offer label { display: block; margin: 2px 0; cursor: pointer; }
         .offer .button { margin-top: 5px; }
-        .raw { margin: 4px 0 8px; font-size: 0.85em; color: %s; }
+        .raw { margin: 4px 0 8px; font-size: 0.85em; color: var(--muted); }
         .raw.hidden { display: none; }
         .raw summary { cursor: pointer; }
         .raw .open { margin-left: 10px; }
         .raw details { margin: 3px 0 3px 14px; }
         .raw pre { white-space: pre-wrap; word-break: break-all; max-height: 420px; overflow: auto;
-          border: 1px solid %s; border-radius: 4px; color: %s; }
-        """.formatted(p.panel().css(), border, theme.background().css(), border, p.muted().css(), border,
-            theme.foreground().css());
+          border: 1px solid var(--border); border-radius: 4px; color: var(--fg); }
+        """.formatted(themeVars(theme), quote(theme.font()), theme.fontPt(), quote(theme.mono()), theme.monoPt(),
+        quote(theme.mono()), theme.monoPt(), quote(theme.mono()), theme.monoPt(), quote(theme.mono()));
     return """
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
@@ -229,6 +221,16 @@ public final class HtmlPage {
           document.querySelectorAll('.raw').forEach(function (b) { b.classList.toggle('hidden', !on); });
         }
         function msfClear() { log.innerHTML = ''; steps = null; }
+        function msfTheme(cssText) {
+          var root = document.documentElement;
+          cssText.split(';').forEach(function (part) {
+            var i = part.indexOf(':');
+            if (i > 0) { root.style.setProperty(part.substring(0, i).trim(), part.substring(i + 1).trim()); }
+          });
+          if (root.style.getPropertyValue('--scheme')) {
+            root.style.colorScheme = root.style.getPropertyValue('--scheme');
+          }
+        }
         document.addEventListener('click', function (e) {
           var offer = e.target.closest('[data-offer]');
           if (offer) {

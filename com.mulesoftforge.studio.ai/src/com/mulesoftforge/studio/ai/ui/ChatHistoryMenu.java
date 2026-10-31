@@ -69,6 +69,7 @@ final class ChatHistoryMenu {
     String current = host.currentChatId();
     boolean busy = host.busy();
     Menu menu = new Menu(anchor);
+    Menus.disposeOnHide(menu);
     action(menu, "New chat", !busy, host::newChat);
     if (current != null && Stores.raw().exists(current)) {
       action(menu, "Open raw log of this chat", true, () -> openRaw(current));

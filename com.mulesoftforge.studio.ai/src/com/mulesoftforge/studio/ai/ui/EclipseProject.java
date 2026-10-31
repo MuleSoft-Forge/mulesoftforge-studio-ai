@@ -15,7 +15,16 @@ import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceProxy;
+import org.eclipse.core.resources.IWorkspaceRunnable;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Adapters;
+import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.ISchedulingRule;
+import org.eclipse.core.runtime.jobs.MultiRule;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.ui.IEditorInput;
@@ -116,15 +125,62 @@ final class EclipseProject implements ProjectFiles {
     return paths.size() > limit ? paths.subList(0, limit) : paths;
   }
 
-  // Must run on the UI thread. Writes keep local history, so Replace With > Local History undoes them.
-  void apply(FileChange change, IWorkbenchPage page) throws Exception {
+  // Checks that can only run on the UI thread. Returns a problem message, or null when the write may proceed.
+  String preflight(FileChange change, IWorkbenchPage page) throws Exception {
     IFile file = project.getFile(change.path());
     if (isDirtyInEditor(file, page)) {
-      throw new IllegalStateException(change.path() + " has unsaved edits. Save or revert it, then ask again.");
+      return change.path() + " has unsaved edits. Save or revert it, then ask again.";
     }
     if (!Objects.equals(read(change.path()), change.before())) {
-      throw new IllegalStateException(change.path() + " changed since it was proposed. Ask again.");
+      return change.path() + " changed since it was proposed. Ask again.";
     }
+    return null;
+  }
+
+  // Writes keep local history, so Replace With > Local History undoes them. Runs as a workspace job.
+  void applyAsync(List<FileChange> changes, IWorkbenchPage page, ApplyCallback callback) {
+    List<IFile> files = new ArrayList<>();
+    for (FileChange change : changes) {
+      files.add(project.getFile(change.path()));
+    }
+    ISchedulingRule rule = MultiRule.combine(files.toArray(ISchedulingRule[]::new));
+    Job job = new Job("Apply MuleSoftForge AI changes") {
+      @Override
+      protected IStatus run(IProgressMonitor monitor) {
+        try {
+          ResourcesPlugin.getWorkspace().run((IWorkspaceRunnable) progress -> {
+            try {
+              for (FileChange change : changes) {
+                write(change);
+              }
+            } catch (Exception e) {
+              throw new CoreException(Status.error("Could not apply changes", e));
+            }
+          }, rule, IResource.NONE, monitor);
+          callback.done(null);
+          return Status.OK_STATUS;
+        } catch (Exception e) {
+          callback.done(e);
+          return Status.error("Could not apply changes", e);
+        }
+      }
+    };
+    job.setRule(rule);
+    job.setUser(true);
+    job.schedule();
+  }
+
+  // Must run on the UI thread for preflight only; prefer applyAsync for the write.
+  void apply(FileChange change, IWorkbenchPage page) throws Exception {
+    String problem = preflight(change, page);
+    if (problem != null) {
+      throw new IllegalStateException(problem);
+    }
+    write(change);
+  }
+
+  private void write(FileChange change) throws Exception {
+    IFile file = project.getFile(change.path());
     if (file.exists()) {
       byte[] bytes = change.after().getBytes(Charset.forName(file.getCharset()));
       file.setContents(new ByteArrayInputStream(bytes), IResource.KEEP_HISTORY, null);
@@ -133,6 +189,10 @@ final class EclipseProject implements ProjectFiles {
       byte[] bytes = change.after().getBytes(Charset.forName(project.getDefaultCharset()));
       file.create(new ByteArrayInputStream(bytes), IResource.NONE, null);
     }
+  }
+
+  interface ApplyCallback {
+    void done(Exception error);
   }
 
   private static void createParents(IContainer container) throws Exception {

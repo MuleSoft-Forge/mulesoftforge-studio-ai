@@ -6,7 +6,7 @@
   <parent>
     <groupId>com.mulesoftforge.studio</groupId>
     <artifactId>studio-ai-parent</artifactId>
-    <version>0.5.5-SNAPSHOT</version>
+    <version>0.5.6-SNAPSHOT</version>
   </parent>
   <artifactId>com.mulesoftforge.studio.ai</artifactId>
   <packaging>eclipse-plugin</packaging>
@@ -86,7 +86,8 @@
                 netty-resolver-dns-native-macos,
                 netty-transport-native-epoll,
                 netty-transport-native-kqueue,
-                netty-tcnative-boringssl-static
+                netty-tcnative-boringssl-static,
+                jtokkit
               </excludeArtifactIds>
               <!-- Tycho adds the Eclipse target platform to the Maven dependency list; copy only our libraries. -->
               <includeGroupIds>

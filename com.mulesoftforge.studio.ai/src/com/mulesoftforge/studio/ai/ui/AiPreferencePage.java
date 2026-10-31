@@ -295,9 +295,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     resultData.widthHint = 380;
     checkResult.setLayoutData(resultData);
     check.addListener(SWT.Selection, e -> {
-      Network.configure(trustFromFields());
-      checkResult.setText(Network.report().describe());
-      group.layout(true, true);
+      checkResult.setText("Checking…");
+      Network.Trust checkTrust = trustFromFields();
+      Display display = checkResult.getDisplay();
+      Job.create("Check MuleSoftForge AI certificates", monitor -> {
+        String text = Network.report(checkTrust).describe();
+        Ui.async(display, checkResult, () -> {
+          checkResult.setText(text);
+          group.layout(true, true);
+        });
+        return Status.OK_STATUS;
+      }).schedule();
     });
   }
 
@@ -491,7 +499,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Connection fields = fromFields();
     // Auto is not a model id; test the strong model, which Auto uses for most work.
     Connection connection = AutoRouter.isAuto(fields.model()) ? fields.withModel(autoStrong.getText().trim()) : fields;
-    Network.configure(trustFromFields());
+    // Do not call Network.configure here: Cancel must not leave a throwaway trust setting active.
+    // performOk applies the saved trust. The shared client still uses the last applied trust.
     testResult.setText("Testing…");
     Display display = testResult.getDisplay();
     Job.create("Test MuleSoftForge AI connection", monitor -> {
@@ -502,14 +511,12 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
             + " replied: " + shorten(reply)
             + "\nUse Refresh models to update the dropdown.";
       } catch (Exception e) {
-        result = "Failed:\n" + keyHint(connection) + Errors.describe(e);
+        result = "Failed:\n" + keyHint(connection) + Errors.classify(e, connection.provider()).transcript();
       }
       String text = result;
-      display.asyncExec(() -> {
-        if (!testResult.isDisposed()) {
-          testResult.setText(text);
-          testResult.getParent().layout(true, true);
-        }
+      Ui.async(display, testResult, () -> {
+        testResult.setText(text);
+        testResult.getParent().layout(true, true);
       });
       return Status.OK_STATUS;
     }).schedule();
@@ -517,7 +524,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   private void refreshModels() {
     Connection connection = fromFields();
-    Network.configure(trustFromFields());
     testResult.setText("Loading models…");
     Display display = testResult.getDisplay();
     Job.create("Refresh MuleSoftForge AI models", monitor -> {
@@ -529,14 +535,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         result = ModelLists.summarize(connection.provider(), raw.size(), picker);
         AiSettings.saveFetchedModels(connection.provider(), ModelLists.filterForChat(connection.provider(), raw));
       } catch (Exception e) {
-        result = "Could not load models:\n" + keyHint(connection) + Errors.describe(e);
+        result = "Could not load models:\n" + keyHint(connection) + Errors.classify(e, connection.provider()).transcript();
       }
       String text = result;
       List<String> choices = picker;
-      display.asyncExec(() -> {
-        if (testResult.isDisposed()) {
-          return;
-        }
+      Ui.async(display, testResult, () -> {
         if (!choices.isEmpty()) {
           applyChoices(choices, connection.model(), true);
           seedAuto(connection.provider(), autoFromFields(), choices);

@@ -1,11 +1,12 @@
 package com.mulesoftforge.studio.ai.llm;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Pattern;
 
 import com.mulesoftforge.studio.ai.check.Problem;
@@ -83,11 +84,15 @@ public class ChatSession {
   }
 
   private final List<ChatMessage> history = new ArrayList<>();
-  private final List<String> reviewNotes = new ArrayList<>();
-  private final List<String> cancelNotes = Collections.synchronizedList(new ArrayList<>());
+  // Lock-free so Accept/Reject/Apply on the UI thread never block on an in-flight model call.
+  private final Queue<String> reviewNotes = new ConcurrentLinkedQueue<>();
+  private final Queue<String> cancelNotes = new ConcurrentLinkedQueue<>();
   private final List<ChatRecord.Message> saved = new ArrayList<>();
+  private volatile List<ChatRecord.Message> savedSnapshot = List.of();
   private final SecretMask secrets = new SecretMask();
-  private String instructions = "";
+  private volatile String instructions = "";
+  // Only one send at a time per session; serialises turn starts without holding the monitor across I/O.
+  private final Object sendGate = new Object();
 
   // Off sends values as they are; files that only hold secrets are withheld either way.
   public void maskSecrets(boolean on) {
@@ -138,14 +143,22 @@ public class ChatSession {
     return secrets.unmask(text);
   }
 
-  public synchronized Turn send(ChatModel model, String prompt, List<Attachment> attachments, ProjectFiles project) {
+  public Turn send(ChatModel model, String prompt, List<Attachment> attachments, ProjectFiles project) {
     return send(model, ChatMode.AGENT, prompt, attachments, project, Progress.NONE);
   }
 
-  public synchronized Turn send(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
+  public Turn send(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
       ProjectFiles project, Progress progress) {
+    synchronized (sendGate) {
+      return sendLocked(model, mode, prompt, attachments, project, progress);
+    }
+  }
+
+  private Turn sendLocked(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
+      ProjectFiles project, Progress progress) {
+    String currentInstructions = instructions;
     SecretMask.Masked projectText = secrets.mask(Prompts.AGENTS_FILE, agentsFile(project));
-    SecretMask.Masked userText = secrets.mask(null, instructions);
+    SecretMask.Masked userText = secrets.mask(null, currentInstructions);
     int maskedBefore = secrets.total();
     prompt = secrets.mask(null, prompt).text();
     StringBuilder context = new StringBuilder();
@@ -173,15 +186,13 @@ public class ChatSession {
     String text = context + prompt;
     String savedText = sent.isEmpty() ? prompt : "[Attached at the time: " + String.join(", ", sent) + "]\n" + prompt;
     String notes = "";
-    List<String> cancelled;
-    synchronized (cancelNotes) {
-      cancelled = List.copyOf(cancelNotes);
-    }
+    List<String> cancelled = drain(cancelNotes);
+    List<String> reviews = drain(reviewNotes);
     if (!cancelled.isEmpty()) {
       notes += String.join("\n", cancelled) + "\n\n";
     }
-    if (!reviewNotes.isEmpty()) {
-      notes += "REVIEW OF YOUR EARLIER PROPOSALS:\n" + String.join("\n", reviewNotes) + "\n\n";
+    if (!reviews.isEmpty()) {
+      notes += "REVIEW OF YOUR EARLIER PROPOSALS:\n" + String.join("\n", reviews) + "\n\n";
     }
     text = notes + text;
     savedText = notes + savedText;
@@ -201,7 +212,14 @@ public class ChatSession {
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
         fromUser.text());
-    if (history.isEmpty()) {
+
+    List<ChatMessage> past;
+    boolean firstTurn;
+    synchronized (this) {
+      past = List.copyOf(history);
+      firstTurn = history.isEmpty();
+    }
+    if (firstTurn) {
       String following = following(fromProject, fromUser, projectText.count() + userText.count());
       if (following != null) {
         progress.step(following);
@@ -224,7 +242,7 @@ public class ChatSession {
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system));
-      messages.addAll(history);
+      messages.addAll(past);
       messages.addAll(turn);
       ChatRequest.Builder request = ChatRequest.builder().messages(messages);
       if (tools != null) {
@@ -291,14 +309,24 @@ public class ChatSession {
       remembered += "\n\n" + ChangeOffer.remembered(offers);
     }
     // Images are large and billed on every request that carries them, so later turns keep only the text.
-    history.add(textOnly);
-    history.add(AiMessage.from(remembered));
-    saved.add(new ChatRecord.Message("user", savedText));
-    saved.add(new ChatRecord.Message("ai", remembered));
-    reviewNotes.clear();
-    cancelNotes.removeAll(cancelled);
+    synchronized (this) {
+      history.add(textOnly);
+      history.add(AiMessage.from(remembered));
+      saved.add(new ChatRecord.Message("user", savedText));
+      saved.add(new ChatRecord.Message("ai", remembered));
+      savedSnapshot = List.copyOf(saved);
+    }
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+  }
+
+  private static List<String> drain(Queue<String> queue) {
+    List<String> out = new ArrayList<>();
+    String next;
+    while ((next = queue.poll()) != null) {
+      out.add(next);
+    }
+    return out;
   }
 
   static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,
@@ -308,8 +336,8 @@ public class ChatSession {
   }
 
   // History safe to write to disk: same turns, without the open-file contents.
-  public synchronized List<ChatRecord.Message> savedHistory() {
-    return new ArrayList<>(saved);
+  public List<ChatRecord.Message> savedHistory() {
+    return savedSnapshot;
   }
 
   public synchronized void restore(List<ChatRecord.Message> messages) {
@@ -324,10 +352,11 @@ public class ChatSession {
       history.add("user".equals(m.role()) ? UserMessage.from(m.text()) : AiMessage.from(m.text()));
       saved.add(m);
     }
+    savedSnapshot = List.copyOf(saved);
   }
 
   // Told to the model with the next prompt, so it knows which proposals actually landed.
-  public synchronized void noteReview(String note) {
+  public void noteReview(String note) {
     reviewNotes.add(note);
   }
 
@@ -335,15 +364,14 @@ public class ChatSession {
   public void noteCancelled(String prompt) {
     String masked = secrets.mask(null, prompt).text();
     String shown = masked.length() > 200 ? masked.substring(0, 200) + "…" : masked;
-    synchronized (cancelNotes) {
-      cancelNotes.add("NOTE: The user cancelled an earlier request before you answered (\"" + shown
-          + "\"). Nothing from it was kept; do not assume it was done.");
-    }
+    cancelNotes.add("NOTE: The user cancelled an earlier request before you answered (\"" + shown
+        + "\"). Nothing from it was kept; do not assume it was done.");
   }
 
   public synchronized void clear() {
     history.clear();
     saved.clear();
+    savedSnapshot = List.of();
     secrets.clear();
     reviewNotes.clear();
     cancelNotes.clear();

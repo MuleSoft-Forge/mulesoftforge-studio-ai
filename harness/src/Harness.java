@@ -1091,7 +1091,8 @@ public class Harness {
         new Palette.Rgb(0, 0, 0), "Helvetica", 12, "Menlo", 11));
     failed += check("page has a content security policy", page.contains("Content-Security-Policy")
         && page.contains("default-src 'none'"));
-    failed += check("page colours filled in", page.contains(".t-tag { color: #3f7f7f; }") && !page.contains("%s"));
+    failed += check("page colours filled in", page.contains("--tag:#3f7f7f") && page.contains(".t-tag { color: var(--tag); }")
+        && !page.contains("%s"));
     failed += check("offer checklist sends the ticked items", page.contains("function msfOffer(")
         && page.contains("'cmd:offer:'") && page.contains("box.checked = !suggested"));
     failed += check("Ask-mode offers are collapsed and unticked", page.contains("createElement(suggested ? 'details'")

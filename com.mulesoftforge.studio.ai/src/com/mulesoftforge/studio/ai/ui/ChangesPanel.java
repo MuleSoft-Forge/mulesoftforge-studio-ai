@@ -9,6 +9,7 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
@@ -129,33 +130,66 @@ final class ChangesPanel {
       listener.note("Note", "Select a proposed file first.");
       return;
     }
-    List<String> done = new ArrayList<>();
+    if (!accept) {
+      List<String> done = new ArrayList<>();
+      for (Pending p : chosen) {
+        p.change().markRejected();
+        listener.reviewed("REJECTED, not written: " + p.change().path());
+        done.add("Rejected " + p.change().path());
+        pending.remove(p);
+      }
+      listener.note("Review", String.join("\n", done));
+      refresh();
+      listener.resolved();
+      return;
+    }
+
+    // Preflight on the UI thread (dirty editors, baseline mismatch), then one workspace job for all writes.
+    List<Pending> ready = new ArrayList<>();
     for (Pending p : chosen) {
-      String path = p.change().path();
-      if (accept) {
-        try {
-          p.project().apply(p.change(), page);
-          p.change().markAccepted();
-          listener.reviewed("ACCEPTED and written: " + path);
-          done.add("Accepted " + path);
-        } catch (Exception e) {
-          Activator.logError("MuleSoftForge AI could not write " + path, e);
-          listener.note("Error", "Not written: " + Errors.describe(e));
+      try {
+        String problem = p.project().preflight(p.change(), page);
+        if (problem != null) {
+          listener.note("Error", "Not written: " + problem);
           continue;
         }
-      } else {
-        p.change().markRejected();
-        listener.reviewed("REJECTED, not written: " + path);
-        done.add("Rejected " + path);
+        ready.add(p);
+      } catch (Exception e) {
+        Activator.logFailure("MuleSoftForge AI could not check " + p.change().path(), e);
+        listener.note("Error", "Not written: " + Errors.describe(e));
       }
-      pending.remove(p);
     }
-    if (!done.isEmpty()) {
-      listener.note("Review", String.join("\n", done)
-          + (accept ? "\nUndo with right-click > Replace With > Local History." : ""));
+    if (ready.isEmpty()) {
+      return;
     }
-    refresh();
-    listener.resolved();
+    Display display = table.getDisplay();
+    // One workspace job per project so scheduling rules stay correct.
+    java.util.Map<EclipseProject, List<Pending>> byProject = new java.util.LinkedHashMap<>();
+    for (Pending p : ready) {
+      byProject.computeIfAbsent(p.project(), k -> new ArrayList<>()).add(p);
+    }
+    for (var entry : byProject.entrySet()) {
+      List<Pending> batch = entry.getValue();
+      List<FileChange> changes = batch.stream().map(Pending::change).toList();
+      entry.getKey().applyAsync(changes, page, error -> Ui.async(display, table, () -> {
+        if (error != null) {
+          Activator.logFailure("MuleSoftForge AI could not write changes", error);
+          listener.note("Error", "Not written: " + Errors.describe(error));
+          return;
+        }
+        List<String> done = new ArrayList<>();
+        for (Pending p : batch) {
+          p.change().markAccepted();
+          listener.reviewed("ACCEPTED and written: " + p.change().path());
+          done.add("Accepted " + p.change().path());
+          pending.remove(p);
+        }
+        listener.note("Review", String.join("\n", done)
+            + "\nUndo with right-click > Replace With > Local History.");
+        refresh();
+        listener.resolved();
+      }));
+    }
   }
 
   private void refresh() {

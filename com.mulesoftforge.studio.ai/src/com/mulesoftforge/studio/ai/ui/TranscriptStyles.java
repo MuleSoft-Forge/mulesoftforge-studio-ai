@@ -5,47 +5,50 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.widgets.Control;
 
 import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.render.Span;
 
-// SWT colours and fonts for the plain transcript. The theme is read from the widget background, not the OS.
+// SWT colours and fonts for the plain transcript. Colours come from the workbench theme registry.
 final class TranscriptStyles {
-  final Palette palette;
-  final Color codeBackground;
-  final Color muted;
-  private final Color inlineCodeBackground;
-  private final Color link;
+  Palette palette;
+  Color codeBackground;
+  Color muted;
+  private Color inlineCodeBackground;
+  private Color link;
+
+  TranscriptStyles() {
+    apply(ThemeStyles.palette());
+  }
 
   TranscriptStyles(Control control) {
-    palette = Palette.forBackground(rgb(control.getBackground().getRGB()));
-    codeBackground = color(palette.codeBackground());
-    inlineCodeBackground = color(palette.inlineCodeBackground());
-    muted = color(palette.muted());
-    link = color(palette.link());
+    this();
   }
 
-  static Palette.Rgb rgb(RGB rgb) {
-    return new Palette.Rgb(rgb.red, rgb.green, rgb.blue);
+  void apply(Palette next) {
+    palette = next;
+    codeBackground = ThemeStyles.swt(next.codeBackground());
+    inlineCodeBackground = ThemeStyles.swt(next.inlineCodeBackground());
+    muted = ThemeStyles.swt(next.muted());
+    link = ThemeStyles.swt(next.link());
   }
 
-  // The grey for panels and dividers that suits the theme of control (light or dark).
+  // The grey for panels and dividers that suits the current theme.
   static Color panel(Control control) {
-    return color(Palette.forBackground(rgb(control.getBackground().getRGB())).panel());
+    return ThemeStyles.swt(PANEL_ID());
   }
 
   static Color divider(Control control) {
-    return color(Palette.forBackground(rgb(control.getBackground().getRGB())).divider());
+    return ThemeStyles.swt(ThemeStyles.DIVIDER);
   }
 
-  private static Color color(Palette.Rgb rgb) {
-    return new Color(rgb.red(), rgb.green(), rgb.blue());
+  private static String PANEL_ID() {
+    return ThemeStyles.PANEL;
   }
 
   Color speaker(String name) {
-    return color(palette.speaker(name));
+    return ThemeStyles.swt(palette.speaker(name));
   }
 
   static Font mono() {
@@ -108,6 +111,6 @@ final class TranscriptStyles {
 
   private static void token(StyleRange range, Palette.Rgb rgb) {
     range.font = mono();
-    range.foreground = color(rgb);
+    range.foreground = ThemeStyles.swt(rgb);
   }
 }

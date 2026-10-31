@@ -1,0 +1,40 @@
+/* MuleSoftForge AI — dark theme overrides for Studio Dark and Eclipse Dark. */
+IEclipsePreferences#org-eclipse-ui-workbench:com-mulesoftforge-studio-ai {
+  preferences:
+    'com.mulesoftforge.studio.ai.panel=52,55,60'
+    'com.mulesoftforge.studio.ai.divider=78,82,88'
+    'com.mulesoftforge.studio.ai.codeBackground=43,46,51'
+    'com.mulesoftforge.studio.ai.inlineCode=58,61,65'
+    'com.mulesoftforge.studio.ai.muted=140,140,140'
+    'com.mulesoftforge.studio.ai.link=110,170,255'
+    'com.mulesoftforge.studio.ai.tag=86,156,214'
+    'com.mulesoftforge.studio.ai.attrName=156,220,254'
+    'com.mulesoftforge.studio.ai.attrValue=206,145,120'
+    'com.mulesoftforge.studio.ai.comment=106,153,85'
+    'com.mulesoftforge.studio.ai.string=206,145,120'
+    'com.mulesoftforge.studio.ai.number=181,206,168'
+    'com.mulesoftforge.studio.ai.keyword=197,134,192'
+    'com.mulesoftforge.studio.ai.key=156,220,254'
+    'com.mulesoftforge.studio.ai.expression=220,220,170'
+    'com.mulesoftforge.studio.ai.directive=197,134,192'
+    'com.mulesoftforge.studio.ai.you=110,170,255'
+    'com.mulesoftforge.studio.ai.ai=115,201,145'
+    'com.mulesoftforge.studio.ai.error=244,112,103'
+    'com.mulesoftforge.studio.ai.note=229,192,123'
+    'com.mulesoftforge.studio.ai.go=46,125,50'
+    'com.mulesoftforge.studio.ai.stop=198,40,40'
+    'com.mulesoftforge.studio.ai.buttonText=255,255,255'
+    'com.mulesoftforge.studio.ai.buttonDisabled=90,90,90';
+}
+
+.MsfPanel {
+  background-color: #34373c;
+}
+
+.MsfDivider {
+  background-color: #4e5258;
+}
+
+.MsfRoot {
+  background-color: #222222;
+}

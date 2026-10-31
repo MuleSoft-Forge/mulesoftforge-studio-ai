@@ -40,8 +40,11 @@ public final class RawLog {
 
   public synchronized void append(String id, Call call) throws IOException {
     Files.createDirectories(dir);
-    Files.writeString(file(id), JSON.writeValueAsString(call) + "\n", StandardCharsets.UTF_8,
+    restrictOwner(dir);
+    Path target = file(id);
+    Files.writeString(target, JSON.writeValueAsString(call) + "\n", StandardCharsets.UTF_8,
         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    restrictOwner(target);
   }
 
   // Lines that cannot be read (a crash mid-write) are skipped.
@@ -117,6 +120,21 @@ public final class RawLog {
       throw new IllegalArgumentException("Invalid chat id: " + id);
     }
     return id;
+  }
+
+  // Owner-only on POSIX so raw request bodies are not world-readable under the workspace metadata folder.
+  private static void restrictOwner(Path path) {
+    try {
+      java.util.Set<java.nio.file.attribute.PosixFilePermission> perms = new java.util.HashSet<>();
+      perms.add(java.nio.file.attribute.PosixFilePermission.OWNER_READ);
+      perms.add(java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
+      if (Files.isDirectory(path)) {
+        perms.add(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE);
+      }
+      Files.setPosixFilePermissions(path, perms);
+    } catch (UnsupportedOperationException | IOException e) {
+      // Windows and some filesystems have no POSIX permissions.
+    }
   }
 
   private List<Path> files() throws IOException {

@@ -4,6 +4,8 @@ import java.util.List;
 
 import org.eclipse.swt.widgets.Control;
 
+import com.mulesoftforge.studio.ai.render.Palette;
+
 // The conversation area. Two implementations: a rich HTML one in Eclipse's browser, and a plain
 // StyledText one used when the browser is unavailable or turned off.
 interface Transcript {
@@ -45,4 +47,7 @@ interface Transcript {
 
   // Hides or shows every raw block, including ones added later.
   void showRaw(boolean show);
+
+  // Re-apply colours after a Studio theme switch.
+  default void applyTheme(Palette palette, Palette.Rgb background, Palette.Rgb foreground) {}
 }

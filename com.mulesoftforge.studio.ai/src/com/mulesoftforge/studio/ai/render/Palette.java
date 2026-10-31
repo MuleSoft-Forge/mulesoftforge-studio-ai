@@ -3,6 +3,7 @@ package com.mulesoftforge.studio.ai.render;
 // Transcript colours, shared by the plain and HTML transcripts. Light colours follow Eclipse's XML
 // editor; dark ones follow the common dark-theme palette. Panel is the grey behind answers, the message box and
 // the cost column, like the section boxes in Studio's properties views; divider is the bar between regions.
+// Studio themes override these through colorDefinitions (see ThemeStyles.fromRegistry).
 public record Palette(Rgb codeBackground, Rgb inlineCodeBackground, Rgb muted, Rgb link, Rgb tag, Rgb attrName,
     Rgb attrValue, Rgb comment, Rgb string, Rgb number, Rgb keyword, Rgb key, Rgb expression, Rgb directive,
     Rgb you, Rgb ai, Rgb error, Rgb note, Rgb panel, Rgb divider) {
@@ -41,7 +42,7 @@ public record Palette(Rgb codeBackground, Rgb inlineCodeBackground, Rgb muted, R
     };
   }
 
-  private static Rgb rgb(int red, int green, int blue) {
+  public static Rgb rgb(int red, int green, int blue) {
     return new Rgb(red, green, blue);
   }
 }

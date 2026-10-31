@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.lang.ref.WeakReference;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,9 +10,10 @@ import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.compare.CompareUI;
-import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.e4.core.services.events.IEventBroker;
+import org.eclipse.e4.ui.css.swt.theme.IThemeEngine;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.ITextSelection;
@@ -22,7 +24,6 @@ import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
@@ -31,10 +32,13 @@ import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.IActionBars;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
+import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.actions.ActionFactory;
+import org.eclipse.ui.browser.IWorkbenchBrowserSupport;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.part.ViewPart;
 import org.eclipse.ui.texteditor.ITextEditor;
+import org.osgi.service.event.EventHandler;
 
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
@@ -47,17 +51,15 @@ import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
-import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
-import com.mulesoftforge.studio.ai.llm.Progress;
 import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.render.HtmlPage;
+import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
-import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 // The MuleSoftForge AI view: runs each message, records the chat for saving, and tracks its cost.
@@ -65,9 +67,12 @@ import com.mulesoftforge.studio.ai.settings.Provider;
 public class ChatView extends ViewPart {
   public static final String ID = "com.mulesoftforge.studio.ai.chat";
 
-  private record Running(Job job, AtomicBoolean cancelled) {}
-
-  private record DataWeaveProposal(DataWeaveScript script, String fixed) {}
+  private record DataWeaveProposal(WeakReference<DataWeaveScript> scriptRef, String fixed, String where,
+      String originalText) {
+    DataWeaveScript script() {
+      return scriptRef == null ? null : scriptRef.get();
+    }
+  }
 
   private static final String BUILD_PLAN = "build-plan";
   private static final String MAKE_CHANGES = "make-changes";
@@ -84,7 +89,8 @@ public class ChatView extends ViewPart {
   private final ChatSession session = new ChatSession();
   private final CostMeter chatCost = new CostMeter();
   private boolean chatCounted;
-  private Running running;
+  private ChatJob running;
+  private Job pendingSave;
 
   // The chat being shown; id is null until the first message is sent.
   private String chatId;
@@ -102,13 +108,18 @@ public class ChatView extends ViewPart {
   private Transcript transcript;
   private ChangesPanel changes;
   private Composer composer;
+  private Composite root;
   private Runnable stopWatchingSettings;
+  private EventHandler themeHandler;
+  private IEventBroker eventBroker;
   private final AtomicBoolean settingsRefreshPending = new AtomicBoolean();
 
   @Override
   public void createPartControl(Composite parent) {
+    root = parent;
     parent.setLayout(new GridLayout(1, false));
     IWorkbenchPage page = getSite().getPage();
+    ThemeStyles.applyClass(parent, "MsfRoot");
 
     // Provider and Settings on the left; version, Raw and History on the right.
     Composite top = new Composite(parent, SWT.NONE);
@@ -139,12 +150,11 @@ public class ChatView extends ViewPart {
     // The transcript and, beside it, the model and cost. Drag the divider to resize.
     SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
     middle.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+    ThemeStyles.applyClass(middle, "MsfDivider");
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
     transcript.showRaw(AiSettings.rawLog());
     status = new StatusPanel(middle, () -> composer.refreshPrices());
     middle.setWeights(78, 22);
-    // After the children exist: the transcript takes its theme from its parent's background.
-    middle.setBackground(TranscriptStyles.divider(parent));
     middle.setSashWidth(3);
 
     changes = new ChangesPanel(parent, page, new ChangesPanel.Listener() {
@@ -206,16 +216,40 @@ public class ChatView extends ViewPart {
     Display display = parent.getDisplay();
     stopWatchingSettings = AiSettings.onChange(key -> {
       if (AiSettings.affectsModels(key) && settingsRefreshPending.compareAndSet(false, true)) {
-        display.asyncExec(this::settingsChanged);
+        Ui.async(display, header, this::settingsChanged);
       }
       if (AiSettings.affectsRawLog(key)) {
-        display.asyncExec(this::rawSettingChanged);
+        Ui.async(display, rawToggle, this::rawSettingChanged);
       }
     });
+
+    eventBroker = PlatformUI.getWorkbench().getService(IEventBroker.class);
+    if (eventBroker != null) {
+      themeHandler = event -> applyTheme();
+      eventBroker.subscribe(IThemeEngine.Events.THEME_CHANGED, themeHandler);
+    }
+    // CSS may style widgets after createPartControl; re-apply once the skin event has run.
+    display.asyncExec(this::applyTheme);
 
     refreshHeader();
     refreshCost();
     pruneOldChats();
+  }
+
+  private void applyTheme() {
+    if (root == null || root.isDisposed()) {
+      return;
+    }
+    Palette palette = ThemeStyles.palette();
+    if (transcript != null) {
+      transcript.applyTheme(palette, ThemeStyles.background(), ThemeStyles.foreground());
+    }
+    if (status != null && !status.isDisposed()) {
+      status.applyTheme();
+    }
+    if (composer != null) {
+      composer.applyTheme();
+    }
   }
 
   // Preferences can be opened from Studio's menu as well as from this view, and saves several keys at once.
@@ -263,8 +297,19 @@ public class ChatView extends ViewPart {
 
   @Override
   public void dispose() {
+    if (running != null) {
+      running.cancel();
+      running = null;
+    }
+    if (pendingSave != null) {
+      pendingSave.cancel();
+      pendingSave = null;
+    }
     if (stopWatchingSettings != null) {
       stopWatchingSettings.run();
+    }
+    if (eventBroker != null && themeHandler != null) {
+      eventBroker.unsubscribe(themeHandler);
     }
     super.dispose();
   }
@@ -317,7 +362,12 @@ public class ChatView extends ViewPart {
 
     @Override
     public void open(String url) {
-      Program.launch(url);
+      try {
+        IWorkbenchBrowserSupport support = PlatformUI.getWorkbench().getBrowserSupport();
+        support.getExternalBrowser().openURL(java.net.URI.create(url).toURL());
+      } catch (Exception e) {
+        append("Error", "Could not open the link: " + Errors.describe(e));
+      }
     }
 
     @Override
@@ -334,8 +384,9 @@ public class ChatView extends ViewPart {
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
         if (proposal != null) {
-          CompareUI.openCompareDialog(ChangeCompareInput.dataWeave(proposal.script().where(),
-              proposal.script().text(), proposal.fixed()));
+          DataWeaveScript script = proposal.script();
+          String before = script == null ? proposal.originalText() : script.text();
+          CompareUI.openCompareDialog(ChangeCompareInput.dataWeave(proposal.where(), before, proposal.fixed()));
         }
       } else if (OPEN_RAW.equals(id) && chatId != null) {
         try {
@@ -418,7 +469,7 @@ public class ChatView extends ViewPart {
         Stores.chats().prune(days, Instant.now());
         Stores.raw().prune(days, Instant.now());
       } catch (Exception e) {
-        Activator.logError("Could not prune saved chats", e);
+        Activator.logFailure("Could not prune saved chats", e);
       }
       return Status.OK_STATUS;
     });
@@ -433,32 +484,53 @@ public class ChatView extends ViewPart {
     ChatRecord record = new ChatRecord(ChatRecord.SCHEMA, chatId, chatTitle, chatProject, chatCreated,
         Instant.now().toString(), new ArrayList<>(entries), session.savedHistory(), chatCost.snapshot(),
         changes.size());
+    if (pendingSave != null) {
+      pendingSave.cancel();
+    }
     Job job = Job.create("Save MuleSoftForge AI chat", monitor -> {
+      if (monitor.isCanceled()) {
+        return Status.CANCEL_STATUS;
+      }
       try {
         Stores.chats().save(record);
       } catch (Exception e) {
-        Activator.logError("Could not save chat " + record.id(), e);
+        Activator.logFailure("Could not save chat " + record.id(), e);
       }
+      return Status.OK_STATUS;
+    });
+    job.setSystem(true);
+    pendingSave = job;
+    job.schedule(200);
+  }
+
+  private void openChat(String id) {
+    Display display = transcript.control().getDisplay();
+    Job job = Job.create("Open MuleSoftForge AI chat", monitor -> {
+      ChatRecord record;
+      Map<Integer, List<RawCapture.Call>> raw;
+      try {
+        record = Stores.chats().load(id);
+        raw = rawCalls(record.id());
+      } catch (Exception e) {
+        Ui.async(display, transcript.control(),
+            () -> append("Error", "Could not open chat: " + Errors.describe(e)));
+        return Status.OK_STATUS;
+      }
+      ChatRecord loaded = record;
+      Map<Integer, List<RawCapture.Call>> rawByTurn = raw;
+      Ui.async(display, transcript.control(), () -> showLoadedChat(loaded, rawByTurn));
       return Status.OK_STATUS;
     });
     job.setSystem(true);
     job.schedule();
   }
 
-  private void openChat(String id) {
-    ChatRecord record;
-    try {
-      record = Stores.chats().load(id);
-    } catch (Exception e) {
-      append("Error", "Could not open chat: " + Errors.describe(e));
-      return;
-    }
+  private void showLoadedChat(ChatRecord record, Map<Integer, List<RawCapture.Call>> raw) {
     resetChat();
     chatId = record.id();
     chatTitle = record.title();
     chatCreated = record.created();
     chatProject = record.project();
-    Map<Integer, List<RawCapture.Call>> raw = rawCalls(record.id());
     replaying = true;
     try {
       for (ChatRecord.Entry entry : record.entries()) {
@@ -502,7 +574,7 @@ public class ChatView extends ViewPart {
         byTurn.computeIfAbsent(call.turn(), t -> new ArrayList<>()).add(call);
       }
     } catch (Exception e) {
-      Activator.logError("Could not read the raw log of chat " + id, e);
+      Activator.logFailure("Could not read the raw log of chat " + id, e);
     }
     return byTurn;
   }
@@ -519,25 +591,13 @@ public class ChatView extends ViewPart {
     }
     refreshHeader();
     String id = chatId != null ? chatId : ChatStore.newId();
-    List<AutoRouter.Option> models = new ArrayList<>();
-    AutoRouter.Choice auto = null;
-    RawCapture capture;
     List<Attachment> attachments = new ArrayList<>();
     EclipseProject project;
-    Provider provider;
-    String keyProblem;
+    AutoRouter.Choice auto = null;
+    boolean showModel;
     try {
-      Connection connection = AiSettings.current();
-      provider = connection.provider();
-      keyProblem = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
-          connection.clientSecret());
-      capture = AiSettings.rawLog() ? new RawCapture(turns + 1, provider.label, call -> {
-        try {
-          Stores.raw().append(id, call);
-        } catch (Exception e) {
-          Activator.logError("Could not write the MuleSoftForge AI raw log", e);
-        }
-      }) : null;
+      Provider provider = AiSettings.provider();
+      String model = AiSettings.model(provider);
       List<Attachment> attached = composer.attached();
       Attachment open = composer.includeOpenFile() ? ActiveFile.capture(getSite().getPage()) : null;
       if (open != null && attached.stream().noneMatch(a -> a.kind() == Attachment.Kind.FILE
@@ -546,18 +606,12 @@ public class ChatView extends ViewPart {
       }
       attachments.addAll(attached);
       project = EclipseProject.find(getSite().getPage());
-      if (AutoRouter.isAuto(connection.model())) {
+      if (AutoRouter.isAuto(model)) {
         auto = AutoRouter.choose(mode, prompt, attachments, fix != null, AiSettings.autoModels(provider));
-        models.add(new AutoRouter.Option(auto.model(), ChatModels.create(connection.withModel(auto.model()), capture)));
-        if (auto.fallback() != null) {
-          models.add(new AutoRouter.Option(auto.fallback(),
-              ChatModels.create(connection.withModel(auto.fallback()), capture)));
-        }
-      } else {
-        models.add(new AutoRouter.Option(connection.model(), ChatModels.create(connection, capture)));
       }
+      showModel = auto != null || model.endsWith("/auto");
     } catch (Exception e) {
-      append("Error", Errors.describe(e));
+      append("Error", Errors.classify(e, AiSettings.provider()).transcript());
       return;
     }
 
@@ -570,6 +624,7 @@ public class ChatView extends ViewPart {
     }
     String usageChat = chatId;
     String usageProject = project == null ? chatProject : project.name();
+    Provider provider = AiSettings.provider();
 
     List<String> context = new ArrayList<>();
     context.add(mode.label);
@@ -578,133 +633,93 @@ public class ChatView extends ViewPart {
     }
     context.add(project == null ? "no project open, so no file access" : "project " + project.name());
     appendYou(prompt, String.join(", ", context));
-    if (auto != null) {
-      appendStep("Auto picked " + auto.model() + ": " + auto.reason());
-    }
-    boolean showModel = auto != null || models.get(0).name().endsWith("/auto");
     composer.setPrompt("");
     composer.clearAttached();
     composer.setBusy(true);
 
     Display display = transcript.control().getDisplay();
-    AtomicBoolean cancelled = new AtomicBoolean();
-    long started = System.nanoTime();
-    CostMeter answerCost = new CostMeter();
-    Progress progress = new Progress() {
-      @Override
-      public void step(String message) {
-        display.asyncExec(() -> {
-          if (!transcript.control().isDisposed() && !cancelled.get()) {
-            appendStep(message);
+    DataWeaveScript fixTarget = fix;
+    AutoRouter.Choice autoChoice = auto;
+    ChatJob job = new ChatJob(session, mode, prompt, attachments, project, id, turns, showModel, null, autoChoice,
+        display, new ChatJob.Listener() {
+          @Override
+          public void step(String message) {
+            if (!transcript.control().isDisposed()) {
+              appendStep(message);
+            }
           }
-        });
-      }
 
-      // Counted as each call returns, so cancelled and failed answers still show what they cost.
-      @Override
-      public void answered(CallUsage usage, long seconds) {
-        Pricing.CallCost cost = Pricing.cost(provider, usage);
-        answerCost.add(cost);
-        chatCost.add(cost);
-        CostMeter.SESSION.add(cost);
-        try {
-          Stores.usage().append(usageChat, usageProject, provider.name(), cost);
-        } catch (Exception e) {
-          Activator.logError("Could not write the MuleSoftForge AI cost ledger", e);
-        }
-        display.asyncExec(() -> {
-          if (transcript.control().isDisposed()) {
-            return;
-          }
-          if (!chatCounted) {
-            chatCounted = true;
-            CostMeter.SESSION.countChat();
-          }
-          if (!cancelled.get()) {
+          @Override
+          public void answered(CallUsage usage, Pricing.CallCost cost, long seconds, boolean showModel) {
+            chatCost.add(cost);
+            CostMeter.SESSION.add(cost);
+            try {
+              Stores.usage().append(usageChat, usageProject, provider.name(), cost);
+            } catch (Exception e) {
+              Activator.logFailure("Could not write the MuleSoftForge AI cost ledger", e);
+            }
+            if (transcript.control().isDisposed()) {
+              return;
+            }
+            if (!chatCounted) {
+              chatCounted = true;
+              CostMeter.SESSION.countChat();
+            }
             appendStep("Model answered in " + seconds + " s" + (showModel ? " · " + usage.model() : "") + " · "
                 + CostMeter.describe(cost));
+            refreshCost();
           }
-          refreshCost();
-        });
-      }
 
-      @Override
-      public boolean isCancelled() {
-        return cancelled.get();
-      }
-    };
-    Job job = Job.create("MuleSoftForge AI", (IProgressMonitor monitor) -> {
-      ChatSession.Turn turn = null;
-      String error = null;
-      try {
-        session.maskSecrets(AiSettings.maskSecrets());
-        session.instructions(AiSettings.instructions());
-        turn = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
-      } catch (Exception e) {
-        if (!cancelled.get()) {
-          Activator.logError("MuleSoftForge AI request failed", e);
-          error = (keyProblem == null ? "" : keyProblem + " Check Settings.\n\n") + Errors.describe(e);
-          if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
-            error += "\n\nThis message included an image. If the model " + models.get(models.size() - 1).name()
-                + " cannot read images, pick one that can (for example a Claude, GPT-4o/GPT-5 or Gemini model,"
-                + " or a vision model such as llava in Ollama), or remove the image and send again.";
+          @Override
+          public void finished(ChatSession.Turn result, Errors.UserError failure, boolean cancelled, long seconds,
+              CostMeter answerCost, List<RawCapture.Call> rawCalls) {
+            if (transcript.control().isDisposed()) {
+              return;
+            }
+            String spent = answerCost.isEmpty() ? "" : " · this answer " + answerCost.summary();
+            if (cancelled) {
+              session.noteCancelled(prompt);
+              append("Note", "Cancelled after " + seconds + " s" + spent
+                  + ". The AI will be told this request was dropped.");
+            } else if (result == null) {
+              append("Error", failure == null ? "Request failed." : failure.transcript());
+              if (!spent.isEmpty()) {
+                appendStep("Spent before the error" + spent);
+              }
+            } else {
+              appendMarkdown("AI", result.text());
+              appendStep("Done in " + seconds + " s · " + result.activity() + spent);
+              if (!result.problems().isEmpty()) {
+                append("Note", "The project checks still find problems in these proposals. Look at them before you"
+                    + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
+              }
+              changes.add(project, result.changes().all());
+              int drafted = result.changes().all().size();
+              if (drafted > 0) {
+                appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
+                    + ". Review the diffs below; nothing is written until you accept.");
+              }
+              if (project != null && !result.offers().isEmpty()) {
+                transcript.offer(String.valueOf(offers.size()),
+                    result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
+                offers.add(result.offers());
+              } else if (mode == ChatMode.PLAN && project != null) {
+                transcript.action("Draft this plan for review in Agent mode", BUILD_PLAN);
+              } else if (project != null && fixTarget == null && result.changes().isEmpty()
+                  && result.text().contains("```")) {
+                transcript.action("Draft these changes as diffs", MAKE_CHANGES);
+              }
+              if (fixTarget != null) {
+                offerDataWeaveFix(fixTarget, result.text());
+              }
+            }
+            showRawTurn(rawCalls);
+            running = null;
+            composer.setBusy(false);
+            saveChat();
           }
-        }
-      }
-      ChatSession.Turn result = turn;
-      String failure = error;
-      long seconds = (System.nanoTime() - started) / 1_000_000_000;
-      display.asyncExec(() -> {
-        if (transcript.control().isDisposed()) {
-          return;
-        }
-        String spent = answerCost.isEmpty() ? "" : " · this answer " + answerCost.summary();
-        if (cancelled.get()) {
-          session.noteCancelled(prompt);
-          append("Note", "Cancelled after " + seconds + " s" + spent + ". The AI will be told this request was dropped.");
-        } else if (result == null) {
-          append("Error", failure);
-          if (!spent.isEmpty()) {
-            appendStep("Spent before the error" + spent);
-          }
-        } else {
-          appendMarkdown("AI", result.text());
-          appendStep("Done in " + seconds + " s · " + result.activity() + spent);
-          if (!result.problems().isEmpty()) {
-            append("Note", "The project checks still find problems in these proposals. Look at them before you"
-                + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
-          }
-          changes.add(project, result.changes().all());
-          int drafted = result.changes().all().size();
-          if (drafted > 0) {
-            appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
-                + ". Review the diffs below; nothing is written until you accept.");
-          }
-          if (project != null && !result.offers().isEmpty()) {
-            transcript.offer(String.valueOf(offers.size()),
-                result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
-            offers.add(result.offers());
-          } else if (mode == ChatMode.PLAN && project != null) {
-            transcript.action("Draft this plan for review in Agent mode", BUILD_PLAN);
-          } else if (project != null && fix == null && result.changes().isEmpty()
-              && result.text().contains("```")) {
-            transcript.action("Draft these changes as diffs", MAKE_CHANGES);
-          }
-          if (fix != null) {
-            offerDataWeaveFix(fix, result.text());
-          }
-        }
-        if (capture != null) {
-          showRawTurn(capture.calls());
-        }
-        running = null;
-        composer.setBusy(false);
-        saveChat();
-      });
-      return Status.OK_STATUS;
-    });
-    job.setUser(false);
-    running = new Running(job, cancelled);
+        });
+    running = job;
     job.schedule();
   }
 
@@ -719,7 +734,7 @@ public class ChatView extends ViewPart {
       return;
     }
     int index = dataWeaveFixes.size();
-    dataWeaveFixes.add(new DataWeaveProposal(script, fixed));
+    dataWeaveFixes.add(new DataWeaveProposal(new WeakReference<>(script), fixed, script.where(), script.text()));
     transcript.action("Review diff", DATAWEAVE_DIFF + index);
     transcript.action("Apply to the DataWeave editor", DATAWEAVE_APPLY + index);
   }
@@ -768,12 +783,18 @@ public class ChatView extends ViewPart {
 
   private void applyDataWeaveFix(DataWeaveProposal proposal) {
     try {
-      String problem = proposal.script().apply(proposal.fixed());
+      DataWeaveScript script = proposal.script();
+      if (script == null) {
+        append("Note", "The DataWeave editor this fix was for has been closed. Choose Fix with MuleSoftForge AI"
+            + " again.");
+        return;
+      }
+      String problem = script.apply(proposal.fixed());
       if (problem != null) {
         append("Note", problem);
         return;
       }
-      appendStep("Applied the fix to the DataWeave editor for " + proposal.script().where()
+      appendStep("Applied the fix to the DataWeave editor for " + proposal.where()
           + " (Cmd/Ctrl+Z in that editor undoes it; save the Mule file to keep it)");
       session.noteReview("The user applied your corrected DataWeave script to the editor.");
     } catch (Exception e) {
@@ -782,15 +803,11 @@ public class ChatView extends ViewPart {
   }
 
   private void cancel() {
-    Running current = running;
+    ChatJob current = running;
     if (current == null) {
       return;
     }
-    current.cancelled().set(true);
-    Thread thread = current.job().getThread();
-    if (thread != null) {
-      thread.interrupt();
-    }
+    current.cancel();
     composer.setCancelling();
   }
 
@@ -842,11 +859,11 @@ public class ChatView extends ViewPart {
   }
 
   private void refreshCost() {
-    CostMeter session = CostMeter.SESSION;
-    int chats = session.chats();
+    CostMeter sessionCost = CostMeter.SESSION;
+    int chats = sessionCost.chats();
     UsageLog ledger = Stores.usage();
     String chatModels = chatCost.breakdown();
-    String sessionModels = session.breakdown();
+    String sessionModels = sessionCost.breakdown();
     String project = chatProject == null ? "" : "\nProject " + chatProject + ", all time: "
         + CostMeter.describe(ledger.project(chatProject));
     status.showCost(chatCost.summary(), CostMeter.describe(ledger.today()), CostMeter.describe(ledger.thisMonth()),
@@ -859,12 +876,7 @@ public class ChatView extends ViewPart {
   }
 
   private void refreshHeader() {
-    try {
-      Connection connection = AiSettings.current();
-      header.setText(connection.provider().label);
-    } catch (Exception e) {
-      header.setText("Secure storage unavailable: " + Errors.describe(e));
-    }
+    header.setText(AiSettings.provider().label);
     header.getParent().layout();
   }
 

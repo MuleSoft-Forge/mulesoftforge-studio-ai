@@ -14,26 +14,15 @@ import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
 
+import com.mulesoftforge.studio.ai.render.Palette;
+
 // A push button with a coloured fill. Native SWT buttons ignore background colours on macOS, so this one draws
 // itself. It sends SWT.Selection like a Button, on click or on Space/Enter when focused.
 final class ColorButton extends Canvas {
   enum Tone {
-    GO(46, 125, 50),
-    STOP(198, 40, 40);
-
-    final int red;
-    final int green;
-    final int blue;
-
-    Tone(int red, int green, int blue) {
-      this.red = red;
-      this.green = green;
-      this.blue = blue;
-    }
+    GO, STOP
   }
 
-  private static final Color TEXT = new Color(255, 255, 255);
-  private static final Color DISABLED = new Color(150, 150, 150);
   private static final int PAD_X = 16;
   private static final int PAD_Y = 6;
 
@@ -140,22 +129,34 @@ final class ColorButton extends Canvas {
     gc.setAntialias(SWT.ON);
     gc.setBackground(getParent().getBackground());
     gc.fillRectangle(area);
-    gc.setBackground(isEnabled() ? shade() : DISABLED);
+    Color fill = isEnabled() ? shade() : ThemeStyles.swt(ThemeStyles.BUTTON_DISABLED);
+    Color textColor = isEnabled() ? ThemeStyles.swt(ThemeStyles.BUTTON_TEXT)
+        : ThemeStyles.swt(Palette.rgb(40, 40, 40));
+    gc.setBackground(fill);
     gc.fillRoundRectangle(0, 0, area.width - 1, area.height - 1, 10, 10);
     if (isFocusControl()) {
-      gc.setForeground(TEXT);
+      gc.setForeground(textColor);
       gc.setLineStyle(SWT.LINE_DOT);
       gc.drawRoundRectangle(2, 2, area.width - 5, area.height - 5, 8, 8);
     }
-    gc.setForeground(TEXT);
+    gc.setForeground(textColor);
     gc.setFont(getFont());
     Point extent = gc.textExtent(text);
     gc.drawText(text, (area.width - extent.x) / 2, (area.height - extent.y) / 2, true);
   }
 
   private Color shade() {
+    Palette.Rgb base = tone == Tone.STOP
+        ? colorOr(ThemeStyles.STOP, Palette.rgb(198, 40, 40))
+        : colorOr(ThemeStyles.GO, Palette.rgb(46, 125, 50));
     double factor = pressed ? 0.8 : hover ? 1.12 : 1.0;
-    return new Color(clamp(tone.red * factor), clamp(tone.green * factor), clamp(tone.blue * factor));
+    return ThemeStyles.swt(Palette.rgb(clamp(base.red() * factor), clamp(base.green() * factor),
+        clamp(base.blue() * factor)));
+  }
+
+  private static Palette.Rgb colorOr(String id, Palette.Rgb fallback) {
+    Color color = ThemeStyles.colors().get(id);
+    return color == null ? fallback : ThemeStyles.rgb(color.getRGB());
   }
 
   private static int clamp(double value) {

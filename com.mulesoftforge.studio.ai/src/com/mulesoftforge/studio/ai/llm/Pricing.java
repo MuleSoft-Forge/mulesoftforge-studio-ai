@@ -75,13 +75,22 @@ public final class Pricing {
   }
 
   public static CallCost cost(Provider provider, CallUsage usage) {
+    return cost(provider, usage, true);
+  }
+
+  // Same as cost(), but never fetches the price list. Safe to call between agent tool rounds.
+  public static CallCost costCached(Provider provider, CallUsage usage) {
+    return cost(provider, usage, false);
+  }
+
+  private static CallCost cost(Provider provider, CallUsage usage, boolean mayFetch) {
     if (usage.reportedCost() != null) {
       return new CallCost(usage, usage.reportedCost(), Basis.BILLED);
     }
     if (provider == Provider.OLLAMA) {
       return new CallCost(usage, 0.0, Basis.FREE);
     }
-    Price price = lookup(provider, usage.model());
+    Price price = mayFetch ? lookup(provider, usage.model()) : lookupCached(provider, usage.model());
     if (price == null) {
       return new CallCost(usage, null, Basis.UNKNOWN);
     }
@@ -146,10 +155,21 @@ public final class Pricing {
   }
 
   private static Price lookup(Provider provider, String model) {
-    if (model == null || model.isBlank()) {
+    return lookupIn(prices(), provider, model);
+  }
+
+  private static Price lookupCached(Provider provider, String model) {
+    Map<String, Price> list;
+    synchronized (Pricing.class) {
+      list = prices == null ? Map.of() : prices;
+    }
+    return lookupIn(list, provider, model);
+  }
+
+  private static Price lookupIn(Map<String, Price> list, Provider provider, String model) {
+    if (model == null || model.isBlank() || list.isEmpty()) {
       return null;
     }
-    Map<String, Price> list = prices();
     for (String id : candidates(provider, model.trim())) {
       Price price = list.get(id);
       if (price != null) {
@@ -215,7 +235,7 @@ public final class Pricing {
       return Map.of();
     }
     try {
-      HttpClient http = Network.builder().build();
+      HttpClient http = Network.client();
       HttpRequest request = HttpRequest.newBuilder(URI.create(PRICE_LIST_URL))
           .timeout(Duration.ofSeconds(20))
           .GET()

@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -47,6 +48,7 @@ public final class Network {
   private static Trust trust = new Trust(true, "");
   private static SSLContext context;
   private static TrustReport report;
+  private static HttpClient sharedClient;
 
   private Network() {}
 
@@ -57,6 +59,30 @@ public final class Network {
       trust = next;
       context = null;
       report = null;
+      sharedClient = null;
+      ChatModels.closeClients();
+    }
+  }
+
+  // Builds an SSL context for these settings without replacing the shared client. Used by "Check certificates"
+  // and Test connection so Cancel does not leave a throwaway trust configuration active.
+  public static TrustReport report(Trust value) {
+    Trust previous;
+    synchronized (Network.class) {
+      previous = trust;
+      Trust next = value == null ? new Trust(true, "") : new Trust(value.useSystem(),
+          value.caPemPath() == null ? "" : value.caPemPath().trim());
+      trust = next;
+      context = null;
+      report = null;
+      try {
+        sslContext();
+        return report;
+      } finally {
+        trust = previous;
+        context = null;
+        report = null;
+      }
     }
   }
 
@@ -66,6 +92,14 @@ public final class Network {
         .proxy(ProxySelector.getDefault())
         .connectTimeout(Duration.ofSeconds(20))
         .sslContext(sslContext());
+  }
+
+  // One client per trust configuration; connections are reused across model calls.
+  public static synchronized HttpClient client() {
+    if (sharedClient == null) {
+      sharedClient = builder().build();
+    }
+    return sharedClient;
   }
 
   public static synchronized TrustReport report() {
@@ -187,17 +221,28 @@ public final class Network {
   }
 
   private static Collection<? extends Certificate> macKeychain(String keychain) {
+    Process process = null;
     try {
-      Process process = new ProcessBuilder("/usr/bin/security", "find-certificate", "-a", "-p", keychain)
-          .redirectErrorStream(false)
+      process = new ProcessBuilder("/usr/bin/security", "find-certificate", "-a", "-p", keychain)
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
           .start();
-      byte[] out = process.getInputStream().readAllBytes();
-      if (!process.waitFor(10, TimeUnit.SECONDS)) {
+      Process running = process;
+      CompletableFuture<byte[]> stdout = CompletableFuture.supplyAsync(() -> {
+        try {
+          return running.getInputStream().readAllBytes();
+        } catch (Exception e) {
+          return new byte[0];
+        }
+      });
+      byte[] out = stdout.get(10, TimeUnit.SECONDS);
+      if (!process.waitFor(1, TimeUnit.SECONDS)) {
         process.destroyForcibly();
-        return List.of();
       }
       return parse(new ByteArrayInputStream(out));
     } catch (Exception e) {
+      if (process != null) {
+        process.destroyForcibly();
+      }
       if (e instanceof InterruptedException) {
         Thread.currentThread().interrupt();
       }

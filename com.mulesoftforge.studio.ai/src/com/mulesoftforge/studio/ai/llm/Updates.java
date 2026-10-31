@@ -27,7 +27,7 @@ public final class Updates {
         .header("Accept", "application/json")
         .GET()
         .build();
-    HttpResponse<String> response = Network.builder().build().send(request, BodyHandlers.ofString());
+    HttpResponse<String> response = Network.client().send(request, BodyHandlers.ofString());
     if (response.statusCode() != 200) {
       throw new IOException("GET " + url + " returned HTTP " + response.statusCode() + "\n"
           + response.headers().map() + "\n" + response.body());

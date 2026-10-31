@@ -5,6 +5,9 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -33,15 +36,25 @@ public final class ChatModels {
   private static final int MAX_OUTPUT_TOKENS = 8192;
   private static final String AZURE_API_VERSION = "2024-10-21";
 
+  private record BedrockKey(String region, String apiKey) {}
+
+  private static final ConcurrentHashMap<BedrockKey, BedrockRuntimeClient> BEDROCK = new ConcurrentHashMap<>();
+
   private ChatModels() {}
 
   public static ChatModel create(Connection connection) {
-    return create(connection, null);
+    return create(connection, null, null);
+  }
+
+  public static ChatModel create(Connection connection, RawCapture capture) {
+    return create(connection, capture, null);
   }
 
   // capture, when not null, records every call: the HTTP exchange where this client makes it, otherwise the
-  // request and response LangChain4j sees.
-  public static ChatModel create(Connection connection, RawCapture capture) {
+  // request and response LangChain4j sees. inFlight, when not null, holds the current sendAsync future so a Job
+  // can abort it from canceling().
+  public static ChatModel create(Connection connection, RawCapture capture,
+      AtomicReference<CompletableFuture<?>> inFlight) {
     validate(connection);
     List<ChatModelListener> listeners = capture == null ? List.of() : List.of(capture.listener());
     String apiKey = connection.provider().needsClientCredentials() || connection.apiKey().isBlank()
@@ -50,12 +63,13 @@ public final class ChatModels {
     return switch (connection.provider().api) {
       case OPENAI_COMPATIBLE -> {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
-            .httpClientBuilder(http(capture))
+            .httpClientBuilder(http(capture, inFlight))
             .baseUrl(connection.baseUrl())
             .apiKey(apiKey)
             .modelName(connection.model())
             .maxCompletionTokens(MAX_OUTPUT_TOKENS)
             .timeout(TIMEOUT)
+            .maxRetries(0)
             .listeners(listeners);
         Map<String, String> headers = gatewayHeaders(connection);
         if (!headers.isEmpty()) {
@@ -64,21 +78,23 @@ public final class ChatModels {
         yield builder.build();
       }
       case ANTHROPIC -> AnthropicChatModel.builder()
-          .httpClientBuilder(http(capture))
+          .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .maxRetries(0)
           .listeners(listeners)
           .build();
       case GOOGLE_AI_GEMINI -> GoogleAiGeminiChatModel.builder()
-          .httpClientBuilder(http(capture))
+          .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxOutputTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .maxRetries(0)
           .listeners(listeners)
           .build();
       case AZURE_OPENAI -> AzureOpenAiChatModel.builder()
@@ -88,14 +104,16 @@ public final class ChatModels {
           .serviceVersion(AZURE_API_VERSION)
           .maxTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
+          .maxRetries(0)
           .listeners(listeners)
           .build();
       case BEDROCK -> bedrock(connection, listeners);
       case OLLAMA -> OllamaChatModel.builder()
-          .httpClientBuilder(http(capture))
+          .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .modelName(connection.model())
           .timeout(TIMEOUT)
+          .maxRetries(0)
           .listeners(listeners)
           .build();
     };
@@ -103,16 +121,10 @@ public final class ChatModels {
 
   private static ChatModel bedrock(Connection connection, List<ChatModelListener> listeners) {
     Region region = Region.of(bedrockRegion(connection.baseUrl()));
-    BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(region);
     String key = connection.apiKey() == null ? "" : connection.apiKey().trim();
-    if (!key.isEmpty()) {
-      SdkToken token = () -> key;
-      client.tokenProvider(StaticTokenProvider.create(token));
-    } else {
-      client.credentialsProvider(DefaultCredentialsProvider.create());
-    }
+    BedrockRuntimeClient client = bedrockClient(region.id(), key);
     return BedrockChatModel.builder()
-        .client(client.build())
+        .client(client)
         .region(region)
         .modelId(connection.model())
         .timeout(TIMEOUT)
@@ -121,6 +133,32 @@ public final class ChatModels {
             .build())
         .listeners(listeners)
         .build();
+  }
+
+  private static BedrockRuntimeClient bedrockClient(String regionId, String apiKey) {
+    BedrockKey key = new BedrockKey(regionId, apiKey);
+    return BEDROCK.computeIfAbsent(key, k -> {
+      BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(Region.of(k.region()));
+      if (!k.apiKey().isEmpty()) {
+        SdkToken token = () -> k.apiKey();
+        client.tokenProvider(StaticTokenProvider.create(token));
+      } else {
+        client.credentialsProvider(DefaultCredentialsProvider.create());
+      }
+      return client.build();
+    });
+  }
+
+  // Closes cached Bedrock clients. Called when network settings change and on plugin stop.
+  public static void closeClients() {
+    for (BedrockRuntimeClient client : BEDROCK.values()) {
+      try {
+        client.close();
+      } catch (Exception e) {
+        // Best effort on shutdown.
+      }
+    }
+    BEDROCK.clear();
   }
 
   // Preferences "Base URL" holds the region for Bedrock (us-east-1), or a full bedrock-runtime URL.
@@ -160,9 +198,14 @@ public final class ChatModels {
 
   // Sync calls use DiagnosingHttpClient so failures keep HTTP status, body and response headers.
   // LangChain4j's ServiceLoader cannot see jars embedded in an OSGi bundle, so the client is passed in.
-  private static HttpClientBuilder http(RawCapture capture) {
-    HttpClient.Builder jdkBuilder = Network.builder();
-    JdkHttpClientBuilder streamingBuilder = JdkHttpClient.builder().httpClientBuilder(jdkBuilder);
+  private static HttpClientBuilder http(RawCapture capture, AtomicReference<CompletableFuture<?>> inFlight) {
+    HttpClient shared = Network.client();
+    JdkHttpClientBuilder streamingBuilder = JdkHttpClient.builder()
+        .httpClientBuilder(HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .proxy(java.net.ProxySelector.getDefault())
+            .connectTimeout(Duration.ofSeconds(20))
+            .sslContext(shared.sslContext()));
     return new HttpClientBuilder() {
       private Duration connectTimeout = Duration.ofSeconds(20);
       private Duration readTimeout = TIMEOUT;
@@ -176,7 +219,6 @@ public final class ChatModels {
       public HttpClientBuilder connectTimeout(Duration connectTimeout) {
         this.connectTimeout = connectTimeout;
         streamingBuilder.connectTimeout(connectTimeout);
-        jdkBuilder.connectTimeout(connectTimeout);
         return this;
       }
 
@@ -194,7 +236,7 @@ public final class ChatModels {
 
       @Override
       public dev.langchain4j.http.client.HttpClient build() {
-        return new DiagnosingHttpClient(jdkBuilder.build(), readTimeout, streamingBuilder.build(), capture);
+        return new DiagnosingHttpClient(shared, readTimeout, streamingBuilder.build(), capture, inFlight);
       }
     };
   }

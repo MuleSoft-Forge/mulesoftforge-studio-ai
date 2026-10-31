@@ -114,11 +114,7 @@ public final class AutoRouter {
         return status == 408 || status == 429 || status >= 500;
       }
       if (t instanceof RetriableException || t instanceof HttpTimeoutException || t instanceof SocketException
-          || t instanceof SocketTimeoutException) {
-        return true;
-      }
-      String message = t.getMessage();
-      if (message != null && message.startsWith("Transport failure")) {
+          || t instanceof SocketTimeoutException || t instanceof TransportException) {
         return true;
       }
     }

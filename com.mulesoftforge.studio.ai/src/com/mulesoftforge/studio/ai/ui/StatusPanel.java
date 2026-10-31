@@ -33,17 +33,17 @@ final class StatusPanel {
   private final Label pricesHelp;
   private final ScrolledComposite pricesScroll;
   private final Composite pricesRows;
-  private final Color muted;
+  private Color muted;
 
   StatusPanel(Composite parent, Runnable refreshPrices) {
     panel = new Composite(parent, SWT.NONE);
-    panel.setBackground(TranscriptStyles.panel(parent));
+    ThemeStyles.applyClass(panel, "MsfPanel");
     panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
     GridLayout layout = new GridLayout(1, false);
     layout.marginWidth = 8;
     layout.verticalSpacing = 3;
     panel.setLayout(layout);
-    muted = new TranscriptStyles(panel).muted;
+    muted = ThemeStyles.swt(ThemeStyles.MUTED);
 
     heading("Model");
     model = value(false);
@@ -147,6 +147,16 @@ final class StatusPanel {
 
   boolean isDisposed() {
     return panel.isDisposed();
+  }
+
+  void applyTheme() {
+    if (panel.isDisposed()) {
+      return;
+    }
+    ThemeStyles.applyClass(panel, "MsfPanel");
+    muted = ThemeStyles.swt(ThemeStyles.MUTED);
+    pricesNote.setForeground(muted);
+    panel.layout(true, true);
   }
 
   private void heading(String text) {

@@ -2,13 +2,17 @@ package com.mulesoftforge.studio.ai;
 
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.resource.ImageRegistry;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 
+import com.mulesoftforge.studio.ai.llm.ChatModels;
+import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
+import com.mulesoftforge.studio.ai.ui.ChatJob;
 
 public class Activator extends AbstractUIPlugin {
   public static final String PLUGIN_ID = "com.mulesoftforge.studio.ai";
@@ -24,8 +28,18 @@ public class Activator extends AbstractUIPlugin {
 
   @Override
   public void stop(BundleContext context) throws Exception {
-    plugin = null;
-    super.stop(context);
+    try {
+      Job.getJobManager().cancel(ChatJob.FAMILY);
+      try {
+        Job.getJobManager().join(ChatJob.FAMILY, null);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      ChatModels.closeClients();
+    } finally {
+      plugin = null;
+      super.stop(context);
+    }
   }
 
   public static Activator getDefault() {
@@ -45,5 +59,14 @@ public class Activator extends AbstractUIPlugin {
 
   public static void logError(String message, Throwable error) {
     ILog.of(Activator.class).log(Status.error(message, error));
+  }
+
+  // Expected network and user failures stay out of the Error Log unless they look like bugs.
+  public static void logFailure(String message, Throwable error) {
+    if (Errors.isExpectedFailure(error)) {
+      ILog.of(Activator.class).log(Status.info(message + ": " + Errors.logSummary(error)));
+      return;
+    }
+    logError(message, error);
   }
 }

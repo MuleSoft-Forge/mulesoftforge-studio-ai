@@ -13,7 +13,7 @@ public final class CostMeter {
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record Totals(int calls, long input, long output, double usd, int unpriced, boolean estimated) {
-    static final Totals ZERO = new Totals(0, 0, 0, 0, 0, false);
+    public static final Totals ZERO = new Totals(0, 0, 0, 0, 0, false);
 
     Totals plus(CallCost cost) {
       return new Totals(calls + 1, input + cost.usage().input(), output + cost.usage().output(),

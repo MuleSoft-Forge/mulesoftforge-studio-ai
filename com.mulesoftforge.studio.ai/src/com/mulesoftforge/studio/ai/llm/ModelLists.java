@@ -247,7 +247,7 @@ public final class ModelLists {
   }
 
   private static JsonNode getJson(String url, HttpRequest.Builder builder) throws Exception {
-    HttpClient client = Network.builder().build();
+    HttpClient client = Network.client();
     HttpRequest request = builder.uri(URI.create(url)).timeout(TIMEOUT).GET().build();
     HttpResponse<String> response;
     try {
@@ -256,7 +256,7 @@ public final class ModelLists {
       Thread.currentThread().interrupt();
       throw new RuntimeException("Interrupted calling GET " + url, e);
     } catch (Exception e) {
-      throw new RuntimeException("Transport failure calling GET " + url + ": " + Errors.describe(e), e);
+      throw new TransportException("GET", url, "Transport failure calling GET " + url + ": " + Errors.describe(e), e);
     }
     String body = response.body() == null ? "" : response.body();
     if (response.statusCode() >= 400) {

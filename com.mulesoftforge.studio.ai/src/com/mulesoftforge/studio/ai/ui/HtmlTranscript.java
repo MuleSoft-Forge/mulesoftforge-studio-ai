@@ -79,12 +79,20 @@ final class HtmlTranscript implements Transcript {
   }
 
   private static HtmlPage.Theme theme(Composite parent) {
-    Palette.Rgb background = TranscriptStyles.rgb(parent.getBackground().getRGB());
     FontData font = JFaceResources.getDefaultFont().getFontData()[0];
     FontData mono = JFaceResources.getTextFont().getFontData()[0];
-    return new HtmlPage.Theme(Palette.forBackground(background), background,
-        TranscriptStyles.rgb(parent.getForeground().getRGB()), font.getName(), font.getHeight(), mono.getName(),
-        mono.getHeight());
+    Palette palette = ThemeStyles.palette();
+    return new HtmlPage.Theme(palette, ThemeStyles.background(), ThemeStyles.foreground(), font.getName(),
+        font.getHeight(), mono.getName(), mono.getHeight());
+  }
+
+  @Override
+  public void applyTheme(Palette palette, Palette.Rgb background, Palette.Rgb foreground) {
+    FontData font = JFaceResources.getDefaultFont().getFontData()[0];
+    FontData mono = JFaceResources.getTextFont().getFontData()[0];
+    HtmlPage.Theme next = new HtmlPage.Theme(palette, background, foreground, font.getName(), font.getHeight(),
+        mono.getName(), mono.getHeight());
+    run("msfTheme(" + js(HtmlPage.themeVars(next)) + ")");
   }
 
   @Override
