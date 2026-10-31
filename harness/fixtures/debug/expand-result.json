@@ -1,0 +1,108 @@
+{
+ "ms": 20,
+ "field": {
+  "name": "attributes",
+  "className": "org.mule.extension.http.internal.certificate.DefaultCertificateProvider",
+  "value": "org.mule.extension.http.internal.certificate.DefaultCertificateProvider@567450ee",
+  "valueLength": 80,
+  "dwAccessor": "attributes.lazyClientCertificateProvider",
+  "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}]}",
+  "hasUnloadedChildren": false,
+  "error": false,
+  "canEdit": true,
+  "modifiers": 0,
+  "children": [
+   {
+    "name": "SERIALIZABLE_LAZY_VALUE_CLASS_NAME",
+    "className": "java.lang.String",
+    "value": "org.mule.runtime.api.util.SerializableLazyValue",
+    "valueLength": 47,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.SERIALIZABLE_LAZY_VALUE_CLASS_NAME",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='SERIALIZABLE_LAZY_VALUE_CLASS_NAME'}]}",
+    "hasUnloadedChildren": false,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 24,
+    "children": []
+   },
+   {
+    "name": "GET_METHOD_NAME",
+    "className": "java.lang.String",
+    "value": "get",
+    "valueLength": 3,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.GET_METHOD_NAME",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='GET_METHOD_NAME'}]}",
+    "hasUnloadedChildren": false,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 26,
+    "children": []
+   },
+   {
+    "name": "serialVersionUID",
+    "className": "java.lang.Long",
+    "value": "-4010056097536262602",
+    "valueLength": 20,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.serialVersionUID",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='serialVersionUID'}]}",
+    "hasUnloadedChildren": false,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 26,
+    "children": []
+   },
+   {
+    "name": "SERIALIZABLE_LAZY_VALUE_CLASS",
+    "className": "java.lang.Class",
+    "value": "class org.mule.runtime.api.util.SerializableLazyValue",
+    "valueLength": 53,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.SERIALIZABLE_LAZY_VALUE_CLASS",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='SERIALIZABLE_LAZY_VALUE_CLASS'}]}",
+    "hasUnloadedChildren": true,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 10,
+    "children": []
+   },
+   {
+    "name": "GET",
+    "className": "java.lang.reflect.Method",
+    "value": "public java.io.Serializable org.mule.runtime.api.util.SerializableLazyValue.get()",
+    "valueLength": 81,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.GET",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='GET'}]}",
+    "hasUnloadedChildren": true,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 10,
+    "children": []
+   },
+   {
+    "name": "SERIALIZABLE_LAZY_VALUE_CONSTRUCTOR",
+    "className": "java.lang.reflect.Constructor",
+    "value": "public org.mule.runtime.api.util.SerializableLazyValue(java.util.function.Supplier)",
+    "valueLength": 83,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.SERIALIZABLE_LAZY_VALUE_CONSTRUCTOR",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='SERIALIZABLE_LAZY_VALUE_CONSTRUCTOR'}]}",
+    "hasUnloadedChildren": true,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 10,
+    "children": []
+   },
+   {
+    "name": "serializableLazyValue",
+    "className": "org.mule.runtime.api.util.SerializableLazyValue",
+    "value": "org.mule.runtime.api.util.SerializableLazyValue@4ff34bfd",
+    "valueLength": 56,
+    "dwAccessor": "attributes.lazyClientCertificateProvider.serializableLazyValue",
+    "path": "FieldPath{name='attributes', orderedPathElements=[FieldNode{name='lazyClientCertificateProvider'}, FieldNode{name='serializableLazyValue'}]}",
+    "hasUnloadedChildren": true,
+    "error": false,
+    "canEdit": true,
+    "modifiers": 2,
+    "children": []
+   }
+  ]
+ }
+}

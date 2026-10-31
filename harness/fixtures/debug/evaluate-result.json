@@ -1,0 +1,31 @@
+{
+ "ms": 17,
+ "mimeType": "application/json",
+ "result": {
+  "name": "output application/json --- { probe: \"ok\", vars: keysOf(vars) }",
+  "className": "org.mule.weave.v2.el.ByteArrayBasedCursorStreamProvider",
+  "value": "{\n  \"probe\": \"ok\",\n  \"vars\": [\n    \"outboundHeaders\"\n  ]\n}",
+  "valueLength": 58,
+  "dwAccessor": "output application/json --- { probe: \"ok\", vars: keysOf(vars) }",
+  "path": "FieldPath{name='output application/json --- { probe: \"ok\", vars: keysOf(vars) }', orderedPathElements=[]}",
+  "hasUnloadedChildren": false,
+  "error": false,
+  "canEdit": true,
+  "modifiers": 0,
+  "children": [
+   {
+    "name": "^mediaType",
+    "className": "",
+    "value": "application/json; charset=UTF-8",
+    "valueLength": 31,
+    "dwAccessor": "output application/json --- { probe: \"ok\", vars: keysOf(vars) }.^mediaType",
+    "path": "FieldPath{name='', orderedPathElements=[]}",
+    "hasUnloadedChildren": false,
+    "error": false,
+    "canEdit": false,
+    "modifiers": 0,
+    "children": []
+   }
+  ]
+ }
+}

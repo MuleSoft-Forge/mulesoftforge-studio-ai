@@ -24,15 +24,24 @@
         name="Send to MuleSoftForge AI"
         description="Open MuleSoftForge AI with the selected lines, files, folders or processors attached"
         categoryId="com.mulesoftforge.studio.ai.commands"/>
+    <command
+        id="com.mulesoftforge.studio.ai.askDebugEvent"
+        name="Ask MuleSoftForge AI about this event"
+        description="Open MuleSoftForge AI with the event Studio's Mule debugger is stopped at attached"
+        categoryId="com.mulesoftforge.studio.ai.commands"/>
     <category id="com.mulesoftforge.studio.ai.commands" name="MuleSoftForge"/>
   </extension>
   <extension point="org.eclipse.ui.handlers">
     <handler
         commandId="com.mulesoftforge.studio.ai.ask"
         class="com.mulesoftforge.studio.ai.ui.AskAiHandler"/>
+    <handler
+        commandId="com.mulesoftforge.studio.ai.askDebugEvent"
+        class="com.mulesoftforge.studio.ai.ui.AskDebugEventHandler"/>
   </extension>
   <extension point="org.eclipse.ui.commandImages">
     <image commandId="com.mulesoftforge.studio.ai.ask" icon="icons/forge16.png"/>
+    <image commandId="com.mulesoftforge.studio.ai.askDebugEvent" icon="icons/forge16.png"/>
   </extension>
   <extension point="org.eclipse.ui.bindings">
     <key
@@ -50,6 +59,13 @@
             tooltip="Send the selection to MuleSoftForge AI"
             style="push"/>
       </toolbar>
+    </menuContribution>
+    <!-- Studio's Mule Debugger view builds its own toolbar; the workbench adds view-toolbar contributions to it. -->
+    <menuContribution locationURI="toolbar:org.mule.tooling.ui.contribution.debugger.view?after=additions">
+      <command
+          commandId="com.mulesoftforge.studio.ai.askDebugEvent"
+          tooltip="Ask MuleSoftForge AI about the event the debugger is stopped at"
+          style="push"/>
     </menuContribution>
     <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
       <command
@@ -99,6 +115,23 @@
        extension point of org.mule.tooling.messageflow; CanvasMenu is a factory for one. -->
   <extension point="org.mule.tooling.messageflow.nodecontextmenu">
     <nodecontextmenu class="com.mulesoftforge.studio.ai.ui.CanvasMenu"/>
+  </extension>
+
+  <!-- The AI view opens beside Studio's Evaluate view in a fresh (or reset) Mule Debug perspective. -->
+  <extension point="org.eclipse.ui.perspectiveExtensions">
+    <perspectiveExtension targetID="org.mule.tooling.ui.debugPerspective">
+      <view
+          id="com.mulesoftforge.studio.ai.chat"
+          relative="org.mule.tooling.ui.contribution.debugger.evaluate"
+          relationship="stack"
+          visible="true"/>
+      <viewShortcut id="com.mulesoftforge.studio.ai.chat"/>
+    </perspectiveExtension>
+  </extension>
+
+  <!-- Follows Studio's Mule debugger from startup, so the stopped event is known when the user asks. -->
+  <extension point="org.eclipse.ui.startup">
+    <startup class="com.mulesoftforge.studio.ai.ui.DebuggerStartup"/>
   </extension>
 
   <extension point="org.eclipse.ui.themes">

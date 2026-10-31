@@ -15,8 +15,10 @@ import org.eclipse.ui.console.IConsoleView;
 import org.eclipse.ui.handlers.HandlerUtil;
 
 // Opens the AI view and attaches what was selected: editor lines, files and folders in an explorer, rows in the
-// Problems view, or Console output.
+// Problems view, Console output, or the stopped event when one of Studio's debugger views is active.
 public class AskAiHandler extends AbstractHandler {
+  private static final String DEBUGGER_VIEWS = "org.mule.tooling.ui.contribution.debugger.";
+
   @Override
   public Object execute(ExecutionEvent event) throws ExecutionException {
     IWorkbenchWindow window = HandlerUtil.getActiveWorkbenchWindowChecked(event);
@@ -30,6 +32,14 @@ public class AskAiHandler extends AbstractHandler {
       selection = HandlerUtil.getCurrentSelection(event);
     }
     IEditorPart editor = part instanceof IEditorPart activeEditor ? activeEditor : null;
+    if (part != null && part.getSite().getId().startsWith(DEBUGGER_VIEWS)) {
+      try {
+        ((ChatView) page.showView(ChatView.ID)).askAboutDebugEvent();
+      } catch (PartInitException e) {
+        throw new ExecutionException("Could not open the MuleSoftForge AI view", e);
+      }
+      return null;
+    }
     Attachments.Result result;
     if (part instanceof ChatView) {
       result = new Attachments.Result(List.of(), List.of());

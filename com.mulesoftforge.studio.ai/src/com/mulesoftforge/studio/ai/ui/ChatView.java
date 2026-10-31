@@ -42,6 +42,7 @@ import org.osgi.service.event.EventHandler;
 
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.debug.DebugStop;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
@@ -108,6 +109,8 @@ public class ChatView extends ViewPart {
   private Transcript transcript;
   private ChangesPanel changes;
   private Composer composer;
+  private DebugBar debugBar;
+  private Runnable debuggerListener;
   private Composite root;
   private Runnable stopWatchingSettings;
   private EventHandler themeHandler;
@@ -174,6 +177,7 @@ public class ChatView extends ViewPart {
       }
     });
 
+    debugBar = new DebugBar(parent, this::askAboutDebugEvent);
     composer = new Composer(parent, page, new Composer.Listener() {
       @Override
       public void send() {
@@ -214,6 +218,11 @@ public class ChatView extends ViewPart {
     bars.updateActionBars();
 
     Display display = parent.getDisplay();
+    StudioDebugger debugger = StudioDebugger.get();
+    debugger.start();
+    debuggerListener = () -> Ui.async(display, root, () -> debugBar.show(debugger.current()));
+    debugger.addListener(debuggerListener);
+    debugBar.show(debugger.current());
     stopWatchingSettings = AiSettings.onChange(key -> {
       if (AiSettings.affectsModels(key) && settingsRefreshPending.compareAndSet(false, true)) {
         Ui.async(display, header, this::settingsChanged);
@@ -308,6 +317,9 @@ public class ChatView extends ViewPart {
     if (stopWatchingSettings != null) {
       stopWatchingSettings.run();
     }
+    if (debuggerListener != null) {
+      StudioDebugger.get().removeListener(debuggerListener);
+    }
     if (eventBroker != null && themeHandler != null) {
       eventBroker.unsubscribe(themeHandler);
     }
@@ -322,6 +334,24 @@ public class ChatView extends ViewPart {
   // Used by the Send to MuleSoftForge AI command and menu items.
   void attach(Attachments.Result result) {
     composer.attach(result);
+  }
+
+  // Attaches the event Studio's debugger is stopped at. Finding the processor's XML reads files, so it runs in a job.
+  void askAboutDebugEvent() {
+    StudioDebugger debugger = StudioDebugger.get();
+    DebugStop stop = debugger.current();
+    if (stop == null) {
+      append("Note", debugger.available()
+          ? "Studio's debugger is not stopped at a processor now. Stop at a breakpoint, then ask again."
+          : "MuleSoftForge AI cannot follow Studio's Mule debugger in this Studio.");
+      return;
+    }
+    Display display = root.getDisplay();
+    Job.create("Reading the event the debugger stopped at", monitor -> {
+      Attachment event = DebugEvents.attachment(stop);
+      Ui.async(display, root, () -> composer.attach(new Attachments.Result(List.of(event), List.of())));
+      return Status.OK_STATUS;
+    }).schedule();
   }
 
   // Fix with MuleSoftForge AI in a DataWeave editor: sends the script and the errors the editor shows, in Ask mode

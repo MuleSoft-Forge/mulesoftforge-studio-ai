@@ -10,6 +10,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Pattern;
 
 import com.mulesoftforge.studio.ai.check.Problem;
+import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
+import com.mulesoftforge.studio.ai.dataweave.DataWeaveTools;
+import com.mulesoftforge.studio.ai.debug.DebugSession;
+import com.mulesoftforge.studio.ai.debug.DebugTools;
+import com.mulesoftforge.studio.ai.debug.PersonalData;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
@@ -17,6 +22,7 @@ import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.Content;
@@ -67,6 +73,22 @@ public class ChatSession {
       if (toolCounts.getOrDefault("check_project", 0) > 0) {
         parts.add("ran the project checks");
       }
+      int evaluated = toolCounts.getOrDefault(DebugTools.EVALUATE, 0);
+      if (evaluated > 0) {
+        parts.add("evaluated " + plural(evaluated, "expression") + " at the breakpoint");
+      }
+      int expanded = toolCounts.getOrDefault(DebugTools.EXPAND, 0);
+      if (expanded > 0) {
+        parts.add("loaded " + plural(expanded, "field") + " from the debugger");
+      }
+      int runs = toolCounts.getOrDefault(DataWeaveTools.RUN, 0);
+      if (runs > 0) {
+        parts.add("ran DataWeave " + (runs == 1 ? "once" : runs + " times"));
+      }
+      int validated = toolCounts.getOrDefault(DataWeaveTools.VALIDATE, 0);
+      if (validated > 0) {
+        parts.add("checked DataWeave " + (validated == 1 ? "once" : validated + " times"));
+      }
       if (proposed > 0) {
         parts.add("proposed changes to " + plural(proposed, "file"));
       } else if (edits > 0) {
@@ -90,6 +112,10 @@ public class ChatSession {
   private final List<ChatRecord.Message> saved = new ArrayList<>();
   private volatile List<ChatRecord.Message> savedSnapshot = List.of();
   private final SecretMask secrets = new SecretMask();
+  private final PersonalData personal = new PersonalData();
+  private volatile boolean maskPersonal = true;
+  private volatile DebugSession debugger;
+  private volatile DataWeaveCli dataWeave;
   private volatile String instructions = "";
   // Only one send at a time per session; serialises turn starts without holding the monitor across I/O.
   private final Object sendGate = new Object();
@@ -97,6 +123,21 @@ public class ChatSession {
   // Off sends values as they are; files that only hold secrets are withheld either way.
   public void maskSecrets(boolean on) {
     secrets.setEnabled(on);
+  }
+
+  // Email addresses and phone numbers in live debug events; on by default since those hold real data.
+  public void maskPersonalData(boolean on) {
+    maskPersonal = on;
+  }
+
+  // Studio's debugger, so the model gets the debug tools whenever it is stopped; null when unavailable.
+  public void debugger(DebugSession session) {
+    debugger = session;
+  }
+
+  // The DataWeave CLI, so proposals' DataWeave is compiled and the DataWeave tools are offered; null without it.
+  public void dataWeave(DataWeaveCli cli) {
+    dataWeave = cli;
   }
 
   // The user's own instructions from Preferences, sent with every message.
@@ -160,6 +201,8 @@ public class ChatSession {
     SecretMask.Masked projectText = secrets.mask(Prompts.AGENTS_FILE, agentsFile(project));
     SecretMask.Masked userText = secrets.mask(null, currentInstructions);
     int maskedBefore = secrets.total();
+    int personalBefore = personal.total();
+    PersonalData personalMask = maskPersonal ? personal : null;
     prompt = secrets.mask(null, prompt).text();
     StringBuilder context = new StringBuilder();
     List<String> sent = new ArrayList<>();
@@ -167,6 +210,10 @@ public class ChatSession {
     List<ImageContent> images = new ArrayList<>();
     for (Attachment original : attachments) {
       Attachment attachment = secrets.protect(original);
+      if (personalMask != null && attachment.kind() == Attachment.Kind.DEBUG_EVENT) {
+        attachment = new Attachment(attachment.kind(), attachment.project(), attachment.path(), attachment.lines(),
+            personalMask.mask(attachment.content()), attachment.truncated());
+      }
       String block = attachment.toPrompt();
       if (attachment.kind() == Attachment.Kind.IMAGE) {
         images.add(attachment.toImage());
@@ -208,10 +255,16 @@ public class ChatSession {
       progress.step("Hid " + maskedInMessage + (maskedInMessage == 1 ? " secret value" : " secret values")
           + " in your message and attachments before sending");
     }
+    notePersonal(progress, personal.total() - personalBefore);
+    DebugSession debug = debugger;
+    DebugTools debugTools = debug != null && debug.current() != null
+        ? new DebugTools(debug, secrets, personalMask) : null;
+    DataWeaveCli cli = dataWeave;
+    DataWeaveTools dataWeaveTools = cli == null ? null : new DataWeaveTools(cli, project, secrets);
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text());
+        fromUser.text(), debugTools != null, dataWeaveTools != null);
 
     List<ChatMessage> past;
     boolean firstTurn;
@@ -228,6 +281,19 @@ public class ChatSession {
 
     ChangeSet changes = new ChangeSet();
     ProjectTools tools = project == null ? null : new ProjectTools(project, changes, mode.canEdit, secrets);
+    if (tools != null) {
+      tools.useDataWeave(cli);
+    }
+    List<ToolSpecification> specifications = new ArrayList<>();
+    if (tools != null) {
+      specifications.addAll(tools.specifications());
+    }
+    if (debugTools != null) {
+      specifications.addAll(DebugTools.SPECIFICATIONS);
+    }
+    if (dataWeaveTools != null) {
+      specifications.addAll(DataWeaveTools.SPECIFICATIONS);
+    }
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
     int toolCalls = 0;
@@ -245,8 +311,8 @@ public class ChatSession {
       messages.addAll(past);
       messages.addAll(turn);
       ChatRequest.Builder request = ChatRequest.builder().messages(messages);
-      if (tools != null) {
-        request.toolSpecifications(tools.specifications());
+      if (!specifications.isEmpty()) {
+        request.toolSpecifications(specifications);
       }
 
       progress.checkCancelled();
@@ -260,7 +326,7 @@ public class ChatSession {
       progress.checkCancelled();
       AiMessage reply = response.aiMessage();
       turn.add(reply);
-      if (tools == null || !reply.hasToolExecutionRequests()) {
+      if (specifications.isEmpty() || !reply.hasToolExecutionRequests()) {
         answer = reply.text() == null || reply.text().isBlank()
             ? (changes.isEmpty() ? EMPTY_REPLY : "Proposed changes are ready for review.")
             : reply.text();
@@ -280,13 +346,21 @@ public class ChatSession {
       for (ToolExecutionRequest call : reply.toolExecutionRequests()) {
         toolCalls++;
         toolCounts.merge(call.name(), 1, Integer::sum);
-        progress.step(ProjectTools.describe(call));
+        boolean debugCall = DebugTools.handles(call.name());
+        boolean dataWeaveCall = DataWeaveTools.handles(call.name());
+        progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
+            : ProjectTools.describe(call));
         int before = secrets.total();
-        String result = tools.execute(call);
+        int personalBeforeCall = personal.total();
+        String result = debugCall && debugTools != null ? debugTools.execute(call)
+            : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
+            : tools != null && !debugCall && !dataWeaveCall ? tools.execute(call)
+            : "ERROR: " + call.name() + " is not available now.";
         int hidden = secrets.total() - before;
         if (hidden > 0) {
           progress.step("Hid " + hidden + (hidden == 1 ? " secret value" : " secret values") + " before sending");
         }
+        notePersonal(progress, personal.total() - personalBeforeCall);
         turn.add(ToolExecutionResultMessage.from(call, result));
       }
     }
@@ -318,6 +392,13 @@ public class ChatSession {
     }
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+  }
+
+  private static void notePersonal(Progress progress, int hidden) {
+    if (hidden > 0) {
+      progress.step("Hid " + hidden + (hidden == 1 ? " email address or phone number" : " email addresses or phone"
+          + " numbers") + " from the live event before sending");
+    }
   }
 
   private static List<String> drain(Queue<String> queue) {
@@ -373,6 +454,7 @@ public class ChatSession {
     saved.clear();
     savedSnapshot = List.of();
     secrets.clear();
+    personal.clear();
     reviewNotes.clear();
     cancelNotes.clear();
   }

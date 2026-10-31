@@ -22,6 +22,6 @@ CP="$PLUGIN/target/classes"
 for j in "$PLUGIN"/lib/*.jar; do
   CP="$CP:$j"
 done
-"$JAVAC" -d "$ROOT/harness/out" -cp "$CP" "$ROOT/harness/src/Harness.java"
+"$JAVAC" -d "$ROOT/harness/out" -cp "$CP" "$ROOT"/harness/src/*.java
 cd "$ROOT/harness"
 exec "$JAVA" -cp "out:$CP" Harness "$@"

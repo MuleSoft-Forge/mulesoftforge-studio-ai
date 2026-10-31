@@ -27,12 +27,24 @@ public final class Prompts {
 
   // project is null when no project is open: no tools, so no mode rules.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions) {
+    return system(mode, project, projectInstructions, userInstructions, false, false);
+  }
+
+  // debugging: Studio's debugger is stopped and the debug tools are offered. dataWeave: the DataWeave CLI is.
+  public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
+      boolean debugging, boolean dataWeave) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md"));
     if (project != null) {
       out.append('\n').append(mode(mode, project));
       if (mode == ChatMode.AGENT) {
         out.append('\n').append(file("mule-edits.md"));
       }
+    }
+    if (debugging) {
+      out.append('\n').append(file("debug.md"));
+    }
+    if (dataWeave) {
+      out.append('\n').append(file("dataweave.md"));
     }
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
@@ -64,6 +76,8 @@ public final class Prompts {
         + "\nAgent mode, with a project open (always applies)\n\n" + mode(ChatMode.AGENT, "<project>")
         + "\nAgent mode, Mule guidance (your instructions can override this)\n\n" + file("mule-edits.md")
         + "\nPlan mode, with a project open (always applies)\n\n" + mode(ChatMode.PLAN, "<project>")
+        + "\nWhile Studio's debugger is stopped (always applies)\n\n" + file("debug.md")
+        + "\nWith the DataWeave CLI (always applies)\n\n" + file("dataweave.md")
         + "\nThen " + AGENTS_FILE + " from the project root and your instructions from Preferences, each up to "
         + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";
   }

@@ -36,6 +36,8 @@ public final class AiSettings {
   private static final String RETENTION_DAYS = "history.retentionDays";
   private static final String UPDATE_CHECK_DISABLED = "updates.checkDisabled";
   private static final String MASK_SECRETS_DISABLED = "privacy.maskSecretsDisabled";
+  private static final String MASK_PERSONAL_DISABLED = "privacy.maskPersonalDataDisabled";
+  private static final String DATAWEAVE_CLI = "dataweave.cli";
   private static final String RAW_LOG = "history.rawLog";
   private static final String INSTRUCTIONS = "chat.instructions";
   public static final int DEFAULT_RETENTION_DAYS = 90;
@@ -168,6 +170,28 @@ public final class AiSettings {
   public static void saveMaskSecrets(boolean mask) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(MASK_SECRETS_DISABLED, !mask);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Where the DataWeave CLI is; empty to look for dw on the PATH, in ~/.dw/bin and in Homebrew.
+  public static String dataWeaveCli() {
+    return store().getString(DATAWEAVE_CLI);
+  }
+
+  public static void saveDataWeaveCli(String path) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(DATAWEAVE_CLI, path == null ? "" : path.strip());
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Whether email addresses and phone numbers in live debug events are replaced with placeholders.
+  public static boolean maskPersonalData() {
+    return !store().getBoolean(MASK_PERSONAL_DISABLED);
+  }
+
+  public static void saveMaskPersonalData(boolean mask) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(MASK_PERSONAL_DISABLED, !mask);
     ((ScopedPreferenceStore) prefs).save();
   }
 

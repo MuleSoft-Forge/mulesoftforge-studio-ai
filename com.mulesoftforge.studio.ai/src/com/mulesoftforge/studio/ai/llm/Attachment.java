@@ -23,8 +23,11 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     CONSOLE,
     IMAGE,
     DATAWEAVE,
-    PROCESSORS
+    PROCESSORS,
+    DEBUG_EVENT
   }
+
+  private static final String FAILED = "error";
 
   public static final int MAX_IMAGES = 5;
   private static final Pattern DATA_URL = Pattern.compile("data:(image/[a-z+.-]+);base64,(.+)", Pattern.DOTALL);
@@ -149,6 +152,13 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return capped(Kind.PROCESSORS, project, path, summary, String.join("\n\n", kept));
   }
 
+  // The live event where Studio's debugger is stopped. Where names the stop, e.g. transform "Transform Message" in
+  // main-flow; content is the event as text, already cut to fit.
+  public static Attachment debugEvent(String project, String where, boolean failed, String content,
+      boolean truncated) {
+    return new Attachment(Kind.DEBUG_EVENT, project, where, failed ? FAILED : null, content, truncated);
+  }
+
   // A picture for the model to look at, e.g. "pasted image 1". Content is the image as a base64 data URL.
   public static Attachment image(String name, int width, int height, String mimeType, byte[] bytes) {
     return new Attachment(Kind.IMAGE, null, name, width + "×" + height,
@@ -160,6 +170,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
     return switch (kind) {
       case PROBLEMS -> content.startsWith(Problem.Severity.ERROR + " ");
       case CONSOLE -> FAILURE.matcher(content).find();
+      case DEBUG_EVENT -> FAILED.equals(lines);
       case OPEN_FILE, FILE, SELECTION, FOLDER, IMAGE, DATAWEAVE, PROCESSORS -> false;
     };
   }
@@ -197,6 +208,7 @@ public record Attachment(Kind kind, String project, String path, String lines, S
       case IMAGE -> path + " (" + lines + ")";
       case DATAWEAVE -> (lines == null ? "DataWeave script" : "DataWeave " + lines) + " in " + where;
       case PROCESSORS -> "canvas selection in " + where + " (" + lines + ")";
+      case DEBUG_EVENT -> "debug event at " + where + (FAILED.equals(lines) ? " (error)" : "");
     };
   }
 
@@ -226,6 +238,10 @@ public record Attachment(Kind kind, String project, String path, String lines, S
       case PROCESSORS -> "SELECTED ON THE CANVAS OF " + path + in + cut + ", " + lines
           + "\nThe XML of each selected element as Studio's model holds it. Attribute order and spacing can differ"
           + " from the file, so read the file before proposing an edit to it.";
+      case DEBUG_EVENT -> "LIVE MULE EVENT FROM STUDIO'S DEBUGGER, STOPPED AT " + path + in + cut
+          + "\nThe event as the debugger showed it when the user asked. Paths in [brackets] are DataWeave accessors:"
+          + " evaluate them with evaluate_at_breakpoint, or load fields marked not loaded with expand_field, while"
+          + " the debugger stays stopped there.";
     };
     return kind == Kind.IMAGE ? heading + "\n\n" : heading + "\n```\n" + content + "\n```\n\n";
   }

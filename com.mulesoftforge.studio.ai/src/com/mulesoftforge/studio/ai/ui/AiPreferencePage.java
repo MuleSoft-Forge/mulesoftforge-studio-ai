@@ -67,6 +67,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button richTranscript;
   private Button checkUpdates;
   private Button maskSecrets;
+  private Button maskPersonal;
+  private DataWeaveCliGroup dataWeaveCli;
   private Text instructions;
   private Button useSystemCerts;
   private Text caPem;
@@ -160,6 +162,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     createDisplayGroup(body);
     createInstructionsGroup(body);
     createNetworkGroup(body);
+    dataWeaveCli = new DataWeaveCliGroup(body);
     createHistoryGroup(body);
 
     Provider current = AiSettings.provider();
@@ -193,6 +196,11 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     label(group, "Values in properties and YAML files, Mule XML, URLs, console output and your messages are sent"
         + " as «masked-N». Edits the AI proposes get the real values back. Files such as .env and private keys are"
         + " never sent, whatever this is set to. Screenshots are sent as they are.");
+    maskPersonal = new Button(group, SWT.CHECK);
+    maskPersonal.setText("Hide email addresses and phone numbers in live debug events (recommended)");
+    maskPersonal.setSelection(AiSettings.maskPersonalData());
+    label(group, "When you ask about an event Studio's debugger is stopped at, its real data is sent. With this on,"
+        + " email addresses and phone numbers in it become «email-N» and «phone-N».");
   }
 
   private void createInstructionsGroup(Composite body) {
@@ -400,6 +408,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
       AiSettings.saveMaskSecrets(maskSecrets.getSelection());
+      AiSettings.saveMaskPersonalData(maskPersonal.getSelection());
+      AiSettings.saveDataWeaveCli(dataWeaveCli.path());
       AiSettings.saveInstructions(instructions.getText());
       return true;
     } catch (StorageException e) {

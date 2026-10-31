@@ -34,6 +34,7 @@ public final class AutoRouter {
   private static final Pattern NEEDS_STRONG = Pattern.compile("\\b(review|fix\\w*|bugs?|wrong|broken|fail\\w*|"
       + "errors?|exceptions?|debug\\w*|refactor\\w*|improve\\w*|optimi[sz]\\w*|migrat\\w*|secur\\w*|vulnerab\\w*|"
       + "write|generate|create|implement\\w*|design\\w*|convert\\w*|rewrite|test(s|ing)?|munit)\\b");
+  private static final Pattern DATAWEAVE = Pattern.compile("dataweave|%dw|\\bdwl\\b|\\.dwl\\b|transform message");
 
   private AutoRouter() {}
 
@@ -86,6 +87,13 @@ public final class AutoRouter {
     if (fix) {
       return "it asks for a fix";
     }
+    String lower = prompt.toLowerCase(Locale.ROOT);
+    if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.DEBUG_EVENT)) {
+      return "a live debug event is attached";
+    }
+    if (attachments.stream().anyMatch(AutoRouter::isDataWeave) || DATAWEAVE.matcher(lower).find()) {
+      return "it is about DataWeave";
+    }
     if (attachments.stream().anyMatch(a -> a.kind() == Attachment.Kind.IMAGE)) {
       return "an image is attached";
     }
@@ -96,10 +104,15 @@ public final class AutoRouter {
     if (prompt.length() > LONG_PROMPT_CHARS) {
       return "a long message";
     }
-    if (NEEDS_STRONG.matcher(prompt.toLowerCase(Locale.ROOT)).find()) {
+    if (NEEDS_STRONG.matcher(lower).find()) {
       return "it asks for a review, a fix or new code";
     }
     return null;
+  }
+
+  private static boolean isDataWeave(Attachment attachment) {
+    return attachment.kind() == Attachment.Kind.DATAWEAVE
+        || attachment.path() != null && attachment.path().toLowerCase(Locale.ROOT).endsWith(".dwl");
   }
 
   // Worth trying another model: rate limits, server errors, timeouts and dropped connections. Not bad keys,

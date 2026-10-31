@@ -1,29 +1,21 @@
 package com.mulesoftforge.studio.ai.ui;
 
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
-import org.eclipse.core.resources.IFolder;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceProxy;
-import org.eclipse.core.resources.IWorkspaceRunnable;
-import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Adapters;
-import org.eclipse.core.runtime.CoreException;
-import org.eclipse.core.runtime.IProgressMonitor;
-import org.eclipse.core.runtime.IStatus;
-import org.eclipse.core.runtime.Status;
-import org.eclipse.core.runtime.jobs.ISchedulingRule;
-import org.eclipse.core.runtime.jobs.MultiRule;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
@@ -33,6 +25,7 @@ import org.eclipse.ui.IEditorReference;
 import org.eclipse.ui.IFileEditorInput;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.PartInitException;
+import org.eclipse.ui.progress.IProgressConstants;
 
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
@@ -137,69 +130,21 @@ final class EclipseProject implements ProjectFiles {
     return null;
   }
 
-  // Writes keep local history, so Replace With > Local History undoes them. Runs as a workspace job.
+  // Writes in a user job; edits keep local history, so Replace With > Local History undoes them.
   void applyAsync(List<FileChange> changes, IWorkbenchPage page, ApplyCallback callback) {
-    List<IFile> files = new ArrayList<>();
+    Map<String, String> contents = new LinkedHashMap<>();
     for (FileChange change : changes) {
-      files.add(project.getFile(change.path()));
+      contents.put(change.path(), change.after());
     }
-    ISchedulingRule rule = MultiRule.combine(files.toArray(ISchedulingRule[]::new));
-    Job job = new Job("Apply MuleSoftForge AI changes") {
-      @Override
-      protected IStatus run(IProgressMonitor monitor) {
-        try {
-          ResourcesPlugin.getWorkspace().run((IWorkspaceRunnable) progress -> {
-            try {
-              for (FileChange change : changes) {
-                write(change);
-              }
-            } catch (Exception e) {
-              throw new CoreException(Status.error("Could not apply changes", e));
-            }
-          }, rule, IResource.NONE, monitor);
-          callback.done(null);
-          return Status.OK_STATUS;
-        } catch (Exception e) {
-          callback.done(e);
-          return Status.error("Could not apply changes", e);
-        }
-      }
-    };
-    job.setRule(rule);
+    Job job = WorkspaceWrites.job(project, contents, callback::done);
     job.setUser(true);
+    // The chat already says what was not written, next to Accept.
+    job.setProperty(IProgressConstants.NO_IMMEDIATE_ERROR_PROMPT_PROPERTY, Boolean.TRUE);
     job.schedule();
-  }
-
-  // Must run on the UI thread for preflight only; prefer applyAsync for the write.
-  void apply(FileChange change, IWorkbenchPage page) throws Exception {
-    String problem = preflight(change, page);
-    if (problem != null) {
-      throw new IllegalStateException(problem);
-    }
-    write(change);
-  }
-
-  private void write(FileChange change) throws Exception {
-    IFile file = project.getFile(change.path());
-    if (file.exists()) {
-      byte[] bytes = change.after().getBytes(Charset.forName(file.getCharset()));
-      file.setContents(new ByteArrayInputStream(bytes), IResource.KEEP_HISTORY, null);
-    } else {
-      createParents(file.getParent());
-      byte[] bytes = change.after().getBytes(Charset.forName(project.getDefaultCharset()));
-      file.create(new ByteArrayInputStream(bytes), IResource.NONE, null);
-    }
   }
 
   interface ApplyCallback {
     void done(Exception error);
-  }
-
-  private static void createParents(IContainer container) throws Exception {
-    if (container instanceof IFolder folder && !folder.exists()) {
-      createParents(folder.getParent());
-      folder.create(IResource.NONE, true, null);
-    }
   }
 
   private static boolean isDirtyInEditor(IFile file, IWorkbenchPage page) throws PartInitException {

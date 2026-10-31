@@ -190,6 +190,18 @@ public class Harness {
       case "check-instructions" -> checkInstructions();
       case "check-tls" -> checkTls();
       case "check-updates" -> checkUpdates(args.length > 1 ? args[1] : null);
+      case "check-debug" -> DebugChecks.run();
+      case "debug-snapshot" -> DebugChecks.print(args[1]);
+      case "check-dataweave" -> DataWeaveChecks.run();
+      case "check-workspace" -> WorkspaceChecks.run();
+      case "dataweave-download" -> {
+        com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
+            com.mulesoftforge.studio.ai.dataweave.CliDownload.current();
+        Path target = args.length > 1 ? Path.of(args[1]) : Files.createTempDirectory("dw-cli");
+        Path dw = com.mulesoftforge.studio.ai.dataweave.CliDownload.install(Network.client(), asset, target, () -> false);
+        System.out.println("Installed " + asset.platform() + " build at " + dw + ", version "
+            + com.mulesoftforge.studio.ai.dataweave.DataWeaveCli.at(dw).version());
+      }
       case "prices" -> prices(Arrays.copyOfRange(args, 1, args.length));
       case "list-chats" -> listChats(args.length > 1 ? Path.of(args[1]) : DEFAULT_STATE);
       case "show-chat" -> System.out.println(ChatStore.toMarkdown(
@@ -1377,6 +1389,20 @@ public class Harness {
         .equals("strong-model"));
     failed += check("large context goes strong", AutoRouter.choose(ChatMode.ASK, "what does it do",
         List.of(Attachment.file("p", "big.xml", "x".repeat(30_000))), false, pair).reason().contains("context"));
+    AutoRouter.Choice debugEvent = AutoRouter.choose(ChatMode.ASK, "Explain what is happening at this processor.",
+        List.of(Attachment.debugEvent("employees-api", "Logger in get-employees", false, "PAYLOAD\n[]", false)), false,
+        pair);
+    failed += check("a debug event goes strong", debugEvent.model().equals("strong-model")
+        && debugEvent.reason().equals("a live debug event is attached"));
+    failed += check("a DataWeave question goes strong", AutoRouter.choose(ChatMode.ASK, "what does this DataWeave do?",
+        none, false, pair).reason().equals("it is about DataWeave"));
+    failed += check("a .dwl file goes strong", AutoRouter.choose(ChatMode.ASK, "what does it do",
+        List.of(Attachment.file("p", "src/main/resources/dwl/map.dwl", "%dw 2.0\n---\npayload")), false, pair).model()
+        .equals("strong-model"));
+    failed += check("Transform Message goes strong", AutoRouter.choose(ChatMode.ASK, "what is in this Transform Message",
+        none, false, pair).model().equals("strong-model"));
+    failed += check("the word data alone stays fast", AutoRouter.choose(ChatMode.ASK, "what data does this flow get",
+        none, false, pair).model().equals("fast-model"));
     failed += check("same model twice has no fallback", AutoRouter.choose(ChatMode.ASK, "hi", none, false,
         new AutoRouter.Models("m", "m")).fallback() == null);
     failed += check("unset models are explained", rejectsState(() -> AutoRouter.choose(ChatMode.ASK, "hi", none, false,

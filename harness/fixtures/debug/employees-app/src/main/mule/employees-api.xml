@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:mule-soft-o-auth-provider-api="http://www.mulesoft.org/schema/mule/mule-soft-o-auth-provider-api" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd  http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd http://www.mulesoft.org/schema/mule/mule-soft-o-auth-provider-api http://www.mulesoft.org/schema/mule/mule-soft-o-auth-provider-api/current/mule-mule-soft-o-auth-provider-api.xsd">
+    <http:listener-config name="employees-api-httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="8081" />
+    </http:listener-config>
+    <apikit:config name="employees-api-config" api="resource::eca25329-9592-4ff1-9054-1b08d103b991:employees-api:1.0.2:oas:zip:employees-api.yaml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+    <configuration-properties doc:name="OAuth Properties" file="oauth-provider.properties" />
+    <mule-soft-o-auth-provider-api:config name="MuleSoft_OAuth_Provider_API_Config" doc:name="MuleSoft OAuth Provider API Config" doc:id="e338a43e-5b03-42d0-831b-346d0493f2d1" property_host="${oauth.provider.host}" property_port="443" property_protocol="HTTPS" property_responseTimeout="30000" property_basic-auth-username="admin" property_basic-auth-password="${oauth.provider.password}" />
+    <flow name="employees-api-main">
+        <http:listener config-ref="employees-api-httpListenerConfig" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="employees-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:BAD_REQUEST">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Bad request"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Method not allowed"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">405</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_ACCEPTABLE">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Not acceptable"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">406</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Unsupported media type"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">415</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_IMPLEMENTED">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Not Implemented"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">501</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <!-- Security handler to convert auth failures to 401 JSON -->
+            <on-error-propagate type="MULE:SECURITY">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Unauthorized", error: (error.description default error.message)}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">401</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <!-- Catch-all handler for unexpected errors -->
+            <on-error-propagate type="ANY">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Internal server error", error: (error.description default "Unexpected error")}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+    <flow name="employees-api-console">
+        <http:listener config-ref="employees-api-httpListenerConfig" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:console config-ref="employees-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <!-- Console catch-all to return consistent JSON -->
+            <on-error-propagate type="ANY">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Internal server error"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+    <flow name="get:\employees:employees-api-config">
+        <logger level="INFO" doc:name="Logger" doc:id="4c369358-a880-499c-8b79-9b514362769e" message='#[%dw 2.0&#10;output text&#10;---&#10;"\n\n \u1F680\u1F680\u1F680; List Employees" &#10;++ "\n\n\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325\u2325"&#10;++ "\n\n✅ Attributes: " ++ (write(attributes, "application/json")) as String&#10;++ "\n\n^^^^^^^^^^^^^^^^^^^^"&#10;++ "\n\n \u1F680\u1F680\u1F680; List Employees" &#10;++ "\n\n"]' />
+        <!-- [STUDIO:"OAuth-Token-Validate"]<mule-soft-o-auth-provider-api:oauth-token-validate doc:name="OAuth-Token-Validate" doc:id="5444c035-fcb0-4388-a908-1e6c90fd6560" config-ref="MuleSoft_OAuth_Provider_API_Config" authorization="#[attributes.headers.authorization&#93;" /> [STUDIO] -->
+        <ee:transform doc:name="Transform Message" doc:id="28e05cd1-81e5-45c3-b8bb-51e00217f348">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var employees = [
+  {
+    firstName: "Alice",
+    lastName: "Johnson",
+    dateOfBirth: "1990-05-15"
+  },
+  {
+    firstName: "Bob",
+    lastName: "Smith",
+    dateOfBirth: "1985-08-22"
+  },
+  {
+    firstName: "Carol",
+    lastName: "Martinez",
+    dateOfBirth: "1992-11-03"
+  },
+  {
+    firstName: "David",
+    lastName: "Chen",
+    dateOfBirth: "1988-02-28"
+  },
+  {
+    firstName: "Emma",
+    lastName: "Williams",
+    dateOfBirth: "1995-07-19"
+  }
+]
+var isAdmin = upper(payload.scope default "") contains "ADMIN"
+---
+employees map (employee) -> {
+    firstName: employee.firstName,
+    lastName: employee.lastName,
+    (dateOfBirth: employee.dateOfBirth) if (isAdmin)
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="f5b065b8-d361-413b-9e8e-227f2490fe52" message='#[%dw 2.0&#10;output text&#10;---&#10;"\n\n \u1F6E1;️\u1F6E1;️\u1F6E1;️\u1F6E1;️ Programmatic Check OAuth Token Validate" &#10;++ "\n\n⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄⌄"&#10;++ "\n\n\u1F6E1;️ Payload: " ++ (write(payload, "application/json")) as String&#10;++ "\n\n^^^^^^^^^^^^^^^^^^^^"&#10;++ "\n\n \u1F6E1;️\u1F6E1;️\u1F6E1;️\u1F6E1;️ Programmatic Check OAuth Token Validate" &#10;++ "\n\n"]' />
+    </flow>
+</mule>

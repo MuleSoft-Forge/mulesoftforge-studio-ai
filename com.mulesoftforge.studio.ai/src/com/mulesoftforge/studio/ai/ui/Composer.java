@@ -70,6 +70,8 @@ final class Composer {
   }
 
   static final String FIX_PROBLEMS_PROMPT = "Fix these problems.";
+  static final String WHY_FAILED_PROMPT = "Why did this fail?";
+  static final String EXPLAIN_EVENT_PROMPT = "Explain what is happening at this processor.";
   static final String FIX_CONSOLE_PROMPT = "Explain the error in this console output and fix its cause.";
   private static final int MAX_CONSOLES_LISTED = 6;
 
@@ -235,6 +237,18 @@ final class Composer {
     if (!result.problems().isEmpty()) {
       listener.note("Note", String.join("\n", result.problems()));
     }
+    // An explanation comes first while debugging, so the mode stays as it is.
+    Attachment event = result.attached().stream().filter(a -> a.kind() == Attachment.Kind.DEBUG_EVENT).findFirst()
+        .orElse(null);
+    if (event != null) {
+      if (prompt().isEmpty()) {
+        input.setText(event.reportsFailure() ? WHY_FAILED_PROMPT : EXPLAIN_EVENT_PROMPT);
+        input.setSelection(input.getText().length());
+      }
+      showAttached();
+      input.setFocus();
+      return;
+    }
     Attachment failure = result.attached().stream().filter(Attachment::reportsFailure).findFirst().orElse(null);
     if (failure != null && prompt().isEmpty()) {
       input.setText(failure.kind() == Attachment.Kind.CONSOLE ? FIX_CONSOLE_PROMPT : FIX_PROBLEMS_PROMPT);
@@ -250,6 +264,9 @@ final class Composer {
   }
 
   private static boolean sameTarget(Attachment a, Attachment b) {
+    if (a.kind() == Attachment.Kind.DEBUG_EVENT && b.kind() == Attachment.Kind.DEBUG_EVENT) {
+      return true;
+    }
     if (!Objects.equals(a.project(), b.project())) {
       return false;
     }

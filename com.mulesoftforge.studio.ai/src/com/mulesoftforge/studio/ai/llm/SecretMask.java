@@ -147,7 +147,7 @@ public final class SecretMask {
   public Attachment protect(Attachment attachment) {
     String source = switch (attachment.kind()) {
       case FOLDER, IMAGE -> null;
-      case CONSOLE, PROBLEMS -> "";
+      case CONSOLE, PROBLEMS, DEBUG_EVENT -> "";
       case OPEN_FILE, FILE, SELECTION, DATAWEAVE, PROCESSORS -> attachment.path();
     };
     if (source == null) {

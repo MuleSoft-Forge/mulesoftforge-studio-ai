@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
@@ -14,6 +15,7 @@ import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.swt.widgets.Display;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
@@ -104,7 +106,12 @@ public final class ChatJob extends Job {
       }
       Progress progress = jobProgress(sub, provider);
       session.maskSecrets(AiSettings.maskSecrets());
+      session.maskPersonalData(AiSettings.maskPersonalData());
       session.instructions(AiSettings.instructions());
+      StudioDebugger debugger = StudioDebugger.get();
+      session.debugger(debugger.available() ? debugger : null);
+      Path dataWeave = DataWeaveCli.find(AiSettings.dataWeaveCli());
+      session.dataWeave(dataWeave == null ? null : DataWeaveCli.at(dataWeave));
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
       cancelled = true;

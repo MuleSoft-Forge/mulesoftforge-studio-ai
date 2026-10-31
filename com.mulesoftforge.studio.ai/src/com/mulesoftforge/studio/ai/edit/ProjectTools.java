@@ -1,13 +1,18 @@
 package com.mulesoftforge.studio.ai.edit;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
+import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
+import com.mulesoftforge.studio.ai.dataweave.ScriptChecks;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -114,7 +119,9 @@ public final class ProjectTools {
   private final SecretMask secrets;
   private final ConnectorCatalog connectors;
   private final List<ChangeOffer> offers = new ArrayList<>();
+  private final Map<String, List<Problem>> dataWeaveChecked = new HashMap<>();
   private List<Problem> baseline;
+  private DataWeaveCli dataWeave;
 
   public ProjectTools(ProjectFiles files, ChangeSet changes) {
     this(files, changes, true);
@@ -131,6 +138,11 @@ public final class ProjectTools {
     this.canEdit = canEdit;
     this.secrets = secrets;
     this.connectors = ConnectorCatalog.of(files);
+  }
+
+  // With the DataWeave CLI, proposals' DataWeave is compiled too; null leaves it to the static checks.
+  public void useDataWeave(DataWeaveCli cli) {
+    dataWeave = cli;
   }
 
   public List<ToolSpecification> specifications() {
@@ -297,7 +309,8 @@ public final class ProjectTools {
     changes.stage(path, before, content);
     String result = "Proposed " + (isNew ? "new file " : "change to ") + path
         + ". It is pending the user's review and is not written yet.";
-    if (!MuleChecks.watches(path)) {
+    boolean dataWeaveWatched = dataWeave != null && ScriptChecks.watches(path);
+    if (!MuleChecks.watches(path) && !dataWeaveWatched) {
       return result;
     }
     List<Problem> problems = problemsIntroduced();
@@ -312,14 +325,37 @@ public final class ProjectTools {
 
   // Problems the pending proposals add to the project. Empty when the checks cannot run.
   public List<Problem> problemsIntroduced() {
+    List<Problem> problems = new ArrayList<>();
     try {
       if (baseline == null) {
         baseline = MuleChecks.check(MuleChecks.snapshot(files, null), connectors);
       }
-      return MuleChecks.introduced(baseline, MuleChecks.check(MuleChecks.snapshot(files, changes), connectors));
+      problems.addAll(MuleChecks.introduced(baseline, MuleChecks.check(MuleChecks.snapshot(files, changes),
+          connectors)));
     } catch (Exception e) {
-      return List.of();
+      // The static checks could not run; the DataWeave ones still may.
     }
+    if (dataWeave != null) {
+      for (FileChange change : changes.all()) {
+        if (ScriptChecks.watches(change.path())) {
+          problems.addAll(dataWeaveProblems(change));
+        }
+      }
+    }
+    return problems;
+  }
+
+  // Cached by content, so a file is compiled once per version however often the problems are asked for.
+  private List<Problem> dataWeaveProblems(FileChange change) {
+    String key = change.path() + "\n" + Objects.hashCode(change.before()) + "\n" + change.after().hashCode();
+    return dataWeaveChecked.computeIfAbsent(key, k -> {
+      try {
+        return ScriptChecks.introduced(dataWeave, change.path(), change.before(), change.after(),
+            ScriptChecks.TIMEOUT, () -> false);
+      } catch (Exception e) {
+        return List.of();
+      }
+    });
   }
 
   private String connectorReference(JsonNode args) throws Exception {
