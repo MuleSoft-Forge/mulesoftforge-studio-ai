@@ -167,7 +167,7 @@ public final class DataWeaveTools {
   }
 
   // MATCHES, or where the output first differs from what was expected.
-  static String compare(String expected, String actual) {
+  public static String compare(String expected, String actual) {
     String want = expected.strip();
     String got = actual.strip();
     if (want.equals(got)) {
@@ -254,7 +254,7 @@ public final class DataWeaveTools {
   }
 
   // JSON, XML or CSV, from how the sample looks.
-  static String guess(String content) {
+  public static String guess(String content) {
     String start = content.stripLeading();
     if (start.startsWith("{") || start.startsWith("[")) {
       return "application/json";

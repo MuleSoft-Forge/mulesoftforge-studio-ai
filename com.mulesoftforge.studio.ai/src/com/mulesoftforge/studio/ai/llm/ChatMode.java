@@ -9,9 +9,12 @@ public enum ChatMode {
 
   // Used when a plan came back without offer_changes.
   public static final String BUILD_PLAN_PROMPT = "Build the plan above. Propose all the changes it lists.";
-  // Used when an answer suggested code but did not call offer_changes.
+  // Used when an answer suggested project code but did not call offer_changes.
   public static final String MAKE_CHANGES_PROMPT = "Make the changes you suggested above. Propose them with the"
       + " tools.";
+  // Used when an answer suggested no changes, to get a checklist of improvements without editing yet.
+  public static final String SUGGEST_PROMPT = "From what you saw above, list the improvements you would recommend"
+      + " with offer_changes, one item per change. Do not edit files yet, and do not repeat your last answer.";
 
   public final String label;
   public final String description;

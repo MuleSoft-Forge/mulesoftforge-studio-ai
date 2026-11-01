@@ -20,6 +20,7 @@ import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
+import com.mulesoftforge.studio.ai.http.HttpTools;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -37,7 +38,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 
 public class ChatSession {
   private static final int MAX_TOOL_ROUNDS = 12;
-  private static final String EMPTY_REPLY = "(empty reply)";
+  public static final String EMPTY_REPLY = "(empty reply)";
   // Asked once in Agent mode when the answer to a change request pastes code but proposes nothing.
   static final String DRAFT_NUDGE = "You put the changes in your reply as code instead of proposing them. Propose"
       + " them now with edit_file or write_file so the user can review the diffs. Do not repeat the explanation;"
@@ -89,6 +90,17 @@ public class ChatSession {
       if (validated > 0) {
         parts.add("checked DataWeave " + (validated == 1 ? "once" : validated + " times"));
       }
+      if (toolCounts.getOrDefault(HttpTools.LIST, 0) > 0) {
+        parts.add("found the app's endpoints");
+      }
+      int called = toolCounts.getOrDefault(HttpTools.CALL, 0);
+      if (called > 0) {
+        parts.add("called the app " + (called == 1 ? "once" : called + " times"));
+      }
+      int pages = toolCounts.getOrDefault(HttpTools.DOCS, 0);
+      if (pages > 0) {
+        parts.add("read " + plural(pages, "docs page"));
+      }
       if (proposed > 0) {
         parts.add("proposed changes to " + plural(proposed, "file"));
       } else if (edits > 0) {
@@ -117,6 +129,8 @@ public class ChatSession {
   private volatile DebugSession debugger;
   private volatile DataWeaveCli dataWeave;
   private volatile String instructions = "";
+  private volatile String httpInstructions = "";
+  private volatile List<String> docsHosts = List.of();
   // Only one send at a time per session; serialises turn starts without holding the monitor across I/O.
   private final Object sendGate = new Object();
 
@@ -145,6 +159,16 @@ public class ChatSession {
     instructions = text == null ? "" : text;
   }
 
+  // Extra guidance for the HTTP tools, from Preferences; appended after the built-in http.md when those tools are on.
+  public void httpInstructions(String text) {
+    httpInstructions = text == null ? "" : text;
+  }
+
+  // Hosts fetch_docs may read; empty means the built-in defaults.
+  public void docsHosts(List<String> hosts) {
+    docsHosts = hosts == null ? List.of() : List.copyOf(hosts);
+  }
+
   private static String agentsFile(ProjectFiles project) {
     if (project == null) {
       return "";
@@ -158,7 +182,7 @@ public class ChatSession {
   }
 
   // The step shown on the first message, or null when there are no instructions to follow.
-  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, int hidden) {
+  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp, int hidden) {
     List<String> parts = new ArrayList<>();
     if (!fromProject.isEmpty()) {
       parts.add(Prompts.AGENTS_FILE + " (" + size(fromProject) + ")");
@@ -166,12 +190,19 @@ public class ChatSession {
     if (!fromUser.isEmpty()) {
       parts.add("your instructions (" + size(fromUser) + ")");
     }
+    if (fromHttp != null && !fromHttp.isEmpty()) {
+      parts.add("HTTP and docs instructions (" + size(fromHttp) + ")");
+    }
     if (parts.isEmpty()) {
       return null;
     }
     String step = "Following " + String.join(" and ", parts);
     return hidden == 0 ? step : step + "; hid " + hidden + (hidden == 1 ? " secret value" : " secret values")
         + " in them";
+  }
+
+  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, int hidden) {
+    return following(fromProject, fromUser, null, hidden);
   }
 
   private static String size(Prompts.Capped text) {
@@ -198,8 +229,11 @@ public class ChatSession {
   private Turn sendLocked(ChatModel model, ChatMode mode, String prompt, List<Attachment> attachments,
       ProjectFiles project, Progress progress) {
     String currentInstructions = instructions;
+    String currentHttpInstructions = httpInstructions;
+    List<String> currentDocsHosts = docsHosts;
     SecretMask.Masked projectText = secrets.mask(Prompts.AGENTS_FILE, agentsFile(project));
     SecretMask.Masked userText = secrets.mask(null, currentInstructions);
+    SecretMask.Masked httpText = secrets.mask(null, currentHttpInstructions);
     int maskedBefore = secrets.total();
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
@@ -261,10 +295,13 @@ public class ChatSession {
         ? new DebugTools(debug, secrets, personalMask) : null;
     DataWeaveCli cli = dataWeave;
     DataWeaveTools dataWeaveTools = cli == null ? null : new DataWeaveTools(cli, project, secrets);
+    HttpTools httpTools = project == null ? null
+        : new HttpTools(project, secrets, personalMask, mode.canEdit, currentDocsHosts, HttpTools.TIMEOUT);
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
+    Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text(), debugTools != null, dataWeaveTools != null);
+        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, fromHttp.text());
 
     List<ChatMessage> past;
     boolean firstTurn;
@@ -273,7 +310,8 @@ public class ChatSession {
       firstTurn = history.isEmpty();
     }
     if (firstTurn) {
-      String following = following(fromProject, fromUser, projectText.count() + userText.count());
+      String following = following(fromProject, fromUser, fromHttp,
+          projectText.count() + userText.count() + httpText.count());
       if (following != null) {
         progress.step(following);
       }
@@ -293,6 +331,9 @@ public class ChatSession {
     }
     if (dataWeaveTools != null) {
       specifications.addAll(DataWeaveTools.SPECIFICATIONS);
+    }
+    if (httpTools != null) {
+      specifications.addAll(httpTools.specifications());
     }
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
@@ -348,13 +389,15 @@ public class ChatSession {
         toolCounts.merge(call.name(), 1, Integer::sum);
         boolean debugCall = DebugTools.handles(call.name());
         boolean dataWeaveCall = DataWeaveTools.handles(call.name());
+        boolean httpCall = HttpTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
-            : ProjectTools.describe(call));
+            : httpCall ? HttpTools.describe(call) : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         String result = debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
-            : tools != null && !debugCall && !dataWeaveCall ? tools.execute(call)
+            : httpCall && httpTools != null ? httpTools.execute(call)
+            : tools != null && !debugCall && !dataWeaveCall && !httpCall ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         int hidden = secrets.total() - before;
         if (hidden > 0) {
@@ -371,9 +414,7 @@ public class ChatSession {
     if (pastedAnswer != null) {
       answer = changes.isEmpty() ? pastedAnswer : pastedAnswer + "\n\n" + answer;
     }
-    if (offeredWith != null && !answer.contains(offeredWith)) {
-      answer = answer.equals(EMPTY_REPLY) ? offeredWith : offeredWith + "\n\n" + answer;
-    }
+    answer = withOfferText(answer, offeredWith);
 
     // Tool traffic stays out of history: some providers reject tool messages in a request without tools.
     String remembered = changes.isEmpty() ? answer : answer + "\n\n[Proposed for review: "
@@ -412,8 +453,20 @@ public class ChatSession {
 
   static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,
       String prompt) {
-    return mode.canEdit && tools != null && changes.isEmpty() && tools.offers().isEmpty() && answer.contains("```")
-        && ASKS_FOR_CHANGE.matcher(prompt.toLowerCase(Locale.ROOT)).find();
+    return mode.canEdit && tools != null && changes.isEmpty() && tools.offers().isEmpty()
+        && CodeBlocks.hasProjectCode(answer) && ASKS_FOR_CHANGE.matcher(prompt.toLowerCase(Locale.ROOT)).find();
+  }
+
+  // The text sent with offer_changes is kept only when the final reply is just a closing line; a final reply that
+  // restates it would otherwise show the answer twice.
+  public static String withOfferText(String answer, String offeredWith) {
+    if (offeredWith == null || answer.contains(offeredWith)) {
+      return answer;
+    }
+    if (answer.equals(EMPTY_REPLY)) {
+      return offeredWith;
+    }
+    return answer.strip().length() < Math.min(200, offeredWith.length() / 2) ? offeredWith + "\n\n" + answer : answer;
   }
 
   // History safe to write to disk: same turns, without the open-file contents.

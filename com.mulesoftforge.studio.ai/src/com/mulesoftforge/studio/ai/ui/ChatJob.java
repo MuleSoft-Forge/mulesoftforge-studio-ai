@@ -108,6 +108,8 @@ public final class ChatJob extends Job {
       session.maskSecrets(AiSettings.maskSecrets());
       session.maskPersonalData(AiSettings.maskPersonalData());
       session.instructions(AiSettings.instructions());
+      session.httpInstructions(AiSettings.httpInstructions());
+      session.docsHosts(AiSettings.docsHosts());
       StudioDebugger debugger = StudioDebugger.get();
       session.debugger(debugger.available() ? debugger : null);
       Path dataWeave = DataWeaveCli.find(AiSettings.dataWeaveCli());

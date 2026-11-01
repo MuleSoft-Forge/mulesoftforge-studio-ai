@@ -48,10 +48,12 @@ import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.UsageLog;
+import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
+import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
@@ -77,6 +79,7 @@ public class ChatView extends ViewPart {
 
   private static final String BUILD_PLAN = "build-plan";
   private static final String MAKE_CHANGES = "make-changes";
+  private static final String SUGGEST = "suggest";
   private static final String OFFER = "offer:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
@@ -410,6 +413,8 @@ public class ChatView extends ViewPart {
         sendInAgentMode(ChatMode.BUILD_PLAN_PROMPT);
       } else if (MAKE_CHANGES.equals(id)) {
         sendInAgentMode(ChatMode.MAKE_CHANGES_PROMPT);
+      } else if (SUGGEST.equals(id)) {
+        sendInCurrentMode(ChatMode.SUGGEST_PROMPT);
       } else if (id.startsWith(OFFER)) {
         List<ChangeOffer> picked = pickedOffers(id.substring(OFFER.length()));
         if (picked != null) {
@@ -739,9 +744,12 @@ public class ChatView extends ViewPart {
                 offers.add(result.offers());
               } else if (mode == ChatMode.PLAN && project != null) {
                 transcript.action("Draft this plan for review in Agent mode", BUILD_PLAN);
-              } else if (project != null && fixTarget == null && result.changes().isEmpty()
-                  && result.text().contains("```")) {
-                transcript.action("Draft these changes as diffs", MAKE_CHANGES);
+              } else if (project != null && fixTarget == null && result.changes().isEmpty()) {
+                if (CodeBlocks.hasProjectCode(result.text())) {
+                  transcript.action("Draft these changes as diffs", MAKE_CHANGES);
+                } else if (result.text().contains("```") || result.toolCounts().containsKey(HttpTools.CALL)) {
+                  transcript.action("See possible improvements", SUGGEST);
+                }
               }
               if (fixTarget != null) {
                 offerDataWeaveFix(fixTarget, result.text());
@@ -779,6 +787,16 @@ public class ChatView extends ViewPart {
       return;
     }
     composer.setMode(ChatMode.AGENT);
+    composer.setPrompt(prompt);
+    send();
+  }
+
+  // offer_changes works in every mode, so asking for suggestions does not switch to Agent.
+  private void sendInCurrentMode(String prompt) {
+    if (running != null) {
+      append("Note", "Wait for the current answer, or cancel it, then click again.");
+      return;
+    }
     composer.setPrompt(prompt);
     send();
   }

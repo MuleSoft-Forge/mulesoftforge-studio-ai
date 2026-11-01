@@ -12,6 +12,7 @@ import org.eclipse.jface.util.IPropertyChangeListener;
 import org.eclipse.ui.preferences.ScopedPreferenceStore;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Network;
@@ -40,6 +41,8 @@ public final class AiSettings {
   private static final String DATAWEAVE_CLI = "dataweave.cli";
   private static final String RAW_LOG = "history.rawLog";
   private static final String INSTRUCTIONS = "chat.instructions";
+  private static final String HTTP_INSTRUCTIONS = "http.instructions";
+  private static final String DOCS_HOSTS = "http.docsHosts";
   private static final String GITHUB_LOGIN = "github.login";
   private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
@@ -233,6 +236,48 @@ public final class AiSettings {
   public static void saveInstructions(String text) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(INSTRUCTIONS, text == null ? "" : text.strip());
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Extra guidance for call_endpoint and fetch_docs, appended after the built-in HTTP prompt.
+  public static String httpInstructions() {
+    return store().getString(HTTP_INSTRUCTIONS);
+  }
+
+  public static void saveHttpInstructions(String text) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(HTTP_INSTRUCTIONS, text == null ? "" : text.strip());
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Hosts fetch_docs may read, one per line. Empty preference means the built-in defaults.
+  public static String docsHostsText() {
+    String text = store().getString(DOCS_HOSTS);
+    return text.isBlank() ? HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS) : text;
+  }
+
+  public static List<String> docsHosts() {
+    String text = store().getString(DOCS_HOSTS);
+    if (text.isBlank()) {
+      return HttpTools.DEFAULT_DOCS_HOSTS;
+    }
+    try {
+      return HttpTools.parseDocsHosts(text);
+    } catch (IllegalArgumentException e) {
+      return HttpTools.DEFAULT_DOCS_HOSTS;
+    }
+  }
+
+  // Saves the normalised host list. text must parse, or throws IllegalArgumentException.
+  public static void saveDocsHosts(String text) throws Exception {
+    List<String> hosts = HttpTools.parseDocsHosts(text);
+    IPreferenceStore prefs = store();
+    String normalised = HttpTools.formatDocsHosts(hosts);
+    if (normalised.equals(HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS))) {
+      prefs.setToDefault(DOCS_HOSTS);
+    } else {
+      prefs.setValue(DOCS_HOSTS, normalised);
+    }
     ((ScopedPreferenceStore) prefs).save();
   }
 

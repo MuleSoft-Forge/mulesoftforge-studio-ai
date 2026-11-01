@@ -48,6 +48,7 @@ import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
+import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
@@ -193,6 +194,7 @@ public class Harness {
       case "check-debug" -> DebugChecks.run();
       case "debug-snapshot" -> DebugChecks.print(args[1]);
       case "check-dataweave" -> DataWeaveChecks.run();
+      case "check-http" -> HttpChecks.run();
       case "check-workspace" -> WorkspaceChecks.run();
       case "check-feedback" -> FeedbackChecks.run();
       case "dataweave-download" -> {
@@ -1488,6 +1490,27 @@ public class Harness {
   // a question answered with a code example is left alone.
   private static void checkDraft() throws Exception {
     int failed = 0;
+    failed += check("curl block is not project code",
+        !CodeBlocks.hasProjectCode("Try:\n```bash\ncurl http://localhost:8081/api\n```"));
+    failed += check("unlabelled curl is not project code",
+        !CodeBlocks.hasProjectCode("```\ncurl -i http://localhost:8081/api\n```"));
+    failed += check("json payload is not project code", !CodeBlocks.hasProjectCode("```json\n{\"a\":1}\n```"));
+    failed += check("no fences is not project code", !CodeBlocks.hasProjectCode("It returned 202."));
+    failed += check("xml is project code", CodeBlocks.hasProjectCode("```xml\n<flow name=\"a\"/>\n```"));
+    failed += check("dwl is project code", CodeBlocks.hasProjectCode("```dataweave\n%dw 2.0\n---\n1\n```"));
+    failed += check("unlabelled xml is project code", CodeBlocks.hasProjectCode("```\n<flow name=\"a\"/>\n```"));
+    failed += check("curl plus properties is project code",
+        CodeBlocks.hasProjectCode("```bash\ncurl x\n```\nthen\n```properties\nport=8081\n```"));
+    String offered = "The endpoint returned 202 with an empty body. Two things look off: the content-type is text/plain"
+        + " and there is no error handler for bad JSON, so a malformed request returns a 500 with a stack trace.";
+    failed += check("closing line keeps the offer text",
+        ChatSession.withOfferText("Pick the ones you want.", offered).startsWith(offered));
+    failed += check("empty reply becomes the offer text",
+        ChatSession.withOfferText(ChatSession.EMPTY_REPLY, offered).equals(offered));
+    String restated = "The endpoint returned 202, but the content-type is text/plain and bad JSON gives a 500 with a"
+        + " stack trace. I listed two fixes above: set application/json and add an on-error-propagate for"
+        + " MULE:EXPRESSION.";
+    failed += check("a full final reply is not doubled", ChatSession.withOfferText(restated, offered).equals(restated));
     List<String> bodies = new ArrayList<>();
     String pasted = "Add this file:\\n```properties\\na=1\\n```";
     String toolCall = "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,"
@@ -1502,6 +1525,8 @@ public class Harness {
       String reply;
       if (body.contains("tool_call_id")) {
         reply = textReply("Proposed health.properties.");
+      } else if (body.contains("Fix the webhook endpoint")) {
+        reply = textReply("It returned 202:\\n```bash\\ncurl -X POST http://localhost:8081/api/webhook\\n```");
       } else if (body.contains("You put the changes in your reply as code")) {
         reply = toolCall;
       } else {
@@ -1550,6 +1575,11 @@ public class Harness {
       new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Add a health properties file", List.of(),
           new DiskProject(root), progress);
       failed += check("Ask mode is not drafted", bodies.size() == 1);
+
+      bodies.clear();
+      ChatSession.Turn curl = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Fix the webhook endpoint", List.of(), new DiskProject(root), progress);
+      failed += check("a curl-only answer is not drafted", bodies.size() == 1 && curl.changes().isEmpty());
     } finally {
       server.stop(0);
     }

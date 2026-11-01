@@ -1,6 +1,8 @@
 package com.mulesoftforge.studio.ai.llm;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -171,6 +173,24 @@ public final class SecretMask {
     }
     m.appendTail(out);
     return out.toString();
+  }
+
+  // Puts placeholders back for values already masked in this chat, wherever they appear in text, such as a local
+  // app echoing a header the model sent as a placeholder.
+  public synchronized String remask(String text) {
+    if (text == null || byValue.isEmpty() || !enabled) {
+      return text;
+    }
+    String out = text;
+    List<Map.Entry<String, String>> longestFirst = new ArrayList<>(byValue.entrySet());
+    longestFirst.sort((a, b) -> b.getKey().length() - a.getKey().length());
+    for (Map.Entry<String, String> entry : longestFirst) {
+      if (entry.getKey().length() >= 4 && out.contains(entry.getKey())) {
+        out = out.replace(entry.getKey(), entry.getValue());
+        total++;
+      }
+    }
+    return out;
   }
 
   public static boolean hasPlaceholder(String text) {

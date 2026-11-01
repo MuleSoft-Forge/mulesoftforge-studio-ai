@@ -30,6 +30,7 @@ import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.Errors;
@@ -70,6 +71,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button maskPersonal;
   private DataWeaveCliGroup dataWeaveCli;
   private Text instructions;
+  private Text docsHosts;
+  private Text httpInstructions;
   private Button useSystemCerts;
   private Text caPem;
   private Text retentionDays;
@@ -161,6 +164,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     createDisplayGroup(body);
     createInstructionsGroup(body);
+    createHttpGroup(body);
     createNetworkGroup(body);
     dataWeaveCli = new DataWeaveCliGroup(body);
     createHistoryGroup(body);
@@ -231,6 +235,57 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Link show = new Link(group, SWT.NONE);
     show.setText("<a>Show built-in prompt</a>");
     show.addListener(SWT.Selection, e -> new BuiltInPromptDialog(getShell()).open());
+  }
+
+  private void createHttpGroup(Composite body) {
+    Group group = new Group(body, SWT.NONE);
+    group.setText("HTTP and documentation");
+    group.setLayout(new GridLayout(2, false));
+    GridData groupData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    groupData.horizontalSpan = 2;
+    groupData.verticalIndent = 10;
+    group.setLayoutData(groupData);
+
+    Label hostsLabel = new Label(group, SWT.NONE);
+    hostsLabel.setText("Documentation hosts fetch_docs may read (one per line):");
+    hostsLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+    docsHosts = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+    GridData hostsData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    hostsData.widthHint = 420;
+    hostsData.heightHint = 70;
+    hostsData.horizontalSpan = 2;
+    docsHosts.setLayoutData(hostsData);
+    docsHosts.setMessage("docs.mulesoft.com");
+    docsHosts.setText(AiSettings.docsHostsText());
+
+    Button resetHosts = new Button(group, SWT.PUSH);
+    resetHosts.setText("Reset hosts to defaults");
+    resetHosts.addListener(SWT.Selection, e -> docsHosts.setText(HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS)));
+    Label hostsInfo = new Label(group, SWT.WRAP);
+    GridData hostsInfoData = new GridData(SWT.FILL, SWT.CENTER, true, false);
+    hostsInfoData.widthHint = 320;
+    hostsInfo.setLayoutData(hostsInfoData);
+    hostsInfo.setText("HTTPS GET only. Prefer vendor docs or sites you control. This does not open"
+        + " call_endpoint to those hosts; the local app stays localhost-only.");
+
+    Label httpLabel = new Label(group, SWT.NONE);
+    httpLabel.setText("HTTP and docs instructions (optional):");
+    httpLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+    httpInstructions = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+    GridData httpData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    httpData.widthHint = 420;
+    httpData.heightHint = 60;
+    httpData.horizontalSpan = 2;
+    httpInstructions.setLayoutData(httpData);
+    httpInstructions.setMessage("For example: Always show curl with -i. Prefer our /api/v1 paths.");
+    httpInstructions.setText(AiSettings.httpInstructions());
+    Label httpInfo = new Label(group, SWT.WRAP);
+    GridData httpInfoData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
+    httpInfoData.widthHint = 420;
+    httpInfo.setLayoutData(httpInfoData);
+    httpInfo.setText("Appended after the built-in HTTP guidance when a project is open, up to "
+        + String.format(Locale.ROOT, "%,d", Prompts.MAX_INSTRUCTIONS)
+        + " characters. Cannot override masking, localhost-only calls or the host list above.");
   }
 
   // Read-only view of the prompts the plugin sends before any instructions.
@@ -411,6 +466,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveMaskPersonalData(maskPersonal.getSelection());
       AiSettings.saveDataWeaveCli(dataWeaveCli.path());
       AiSettings.saveInstructions(instructions.getText());
+      try {
+        AiSettings.saveDocsHosts(docsHosts.getText());
+      } catch (IllegalArgumentException e) {
+        setErrorMessage(e.getMessage());
+        return false;
+      }
+      docsHosts.setText(AiSettings.docsHostsText());
+      AiSettings.saveHttpInstructions(httpInstructions.getText());
       return true;
     } catch (StorageException e) {
       setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD
