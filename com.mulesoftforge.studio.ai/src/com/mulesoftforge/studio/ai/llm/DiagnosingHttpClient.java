@@ -94,11 +94,13 @@ final class DiagnosingHttpClient implements HttpClient {
 
     int status = response.statusCode();
     String body = response.body() == null ? "" : response.body();
+    // Raw keeps what the gateway sent; LangChain4j gets a single choice when a model returned several.
     captured(request, status, body);
     Map<String, List<String>> headers = response.headers().map();
     if (status >= 400) {
       throw new ProviderHttpException(request.method().name(), request.url(), status, headers, body);
     }
+    body = ChatCompletions.collapseChoices(body);
     ReportedCost.capture(body);
     return SuccessfulHttpResponse.builder()
         .statusCode(status)

@@ -42,6 +42,7 @@ import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
+import com.mulesoftforge.studio.ai.llm.ChatCompletions;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
@@ -1255,9 +1256,9 @@ public class Harness {
   }
 
   // A real chat through the OpenAI-compatible client against a local stub, with raw capture on: the HTTP exchange
-  // is recorded exactly, without headers, and stored per chat.
+  // is recorded exactly, without headers, and stored per chat. Also covers Grok-style replies with two choices.
   private static void checkRawLog() throws Exception {
-    int failed = 0;
+    int failed = collapseChoices();
     Path dir = Files.createTempDirectory("studio-ai-raw");
     RawLog raw = new RawLog(dir.resolve("raw"));
     List<String> bodies = new ArrayList<>();
@@ -1364,7 +1365,89 @@ public class Harness {
     } finally {
       server.stop(0);
     }
+    failed += twoChoiceTools();
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // Grok (and some gateways) split a turn into a text choice and a tool_calls choice; LangChain4j needs one.
+  private static int collapseChoices() throws Exception {
+    int failed = 0;
+    String single = "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},"
+        + "\"finish_reason\":\"stop\"}]}";
+    failed += check("one choice is left alone", ChatCompletions.collapseChoices(single).equals(single));
+    failed += check("non-json is left alone", ChatCompletions.collapseChoices("not json").equals("not json"));
+    failed += check("empty body is left alone", ChatCompletions.collapseChoices("").isEmpty());
+
+    String grok = "{\"id\":\"r\",\"object\":\"chat.completion\",\"model\":\"grok-4.6\",\"choices\":["
+        + "{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"I will list the endpoints.\","
+        + "\"role\":\"assistant\"}},"
+        + "{\"finish_reason\":\"tool_calls\",\"index\":1,\"message\":{\"role\":\"assistant\",\"content\":null,"
+        + "\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"list_endpoints\","
+        + "\"arguments\":\"{}\"}}]}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}";
+    String collapsed = ChatCompletions.collapseChoices(grok);
+    var root = new ObjectMapper().readTree(collapsed);
+    failed += check("two choices become one", root.path("choices").size() == 1
+        && root.path("choices").get(0).path("index").asInt() == 0);
+    failed += check("tool calls are kept", root.path("choices").get(0).path("message").path("tool_calls").size() == 1
+        && root.path("choices").get(0).path("message").path("tool_calls").get(0).path("function").path("name")
+            .asText().equals("list_endpoints"));
+    failed += check("text from the other choice is kept on the tool choice",
+        root.path("choices").get(0).path("message").path("content").asText().equals("I will list the endpoints."));
+    failed += check("usage is kept", root.path("usage").path("total_tokens").asInt() == 15);
+
+    String textOnly = "{\"choices\":["
+        + "{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"first\"},\"finish_reason\":\"stop\"},"
+        + "{\"index\":1,\"message\":{\"role\":\"assistant\",\"content\":\"second\"},\"finish_reason\":\"stop\"}]}";
+    failed += check("without tools, the first text choice is kept",
+        new ObjectMapper().readTree(ChatCompletions.collapseChoices(textOnly)).path("choices").get(0)
+            .path("message").path("content").asText().equals("first"));
+    return failed;
+  }
+
+  // End-to-end: a stub returns Grok's two-choice shape; the chat must still run list_files and answer.
+  private static int twoChoiceTools() throws Exception {
+    int failed = 0;
+    List<String> bodies = new ArrayList<>();
+    String twoChoices = "{\"id\":\"r\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"grok\","
+        + "\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\","
+        + "\"content\":\"I will list the files.\"}},"
+        + "{\"index\":1,\"finish_reason\":\"tool_calls\",\"message\":{\"role\":\"assistant\",\"content\":null,"
+        + "\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"list_files\","
+        + "\"arguments\":\"{\\\"directory\\\":\\\"\\\"}\"}}]}}],"
+        + "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}";
+    String answer = textReply("The project has one file.");
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      bodies.add(body);
+      byte[] bytes = (body.contains("tool_call_id") ? answer : twoChoices).getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
+    server.start();
+    try {
+      Path root = Files.createTempDirectory("studio-ai-two-choice");
+      Files.writeString(root.resolve("readme.txt"), "hi");
+      Connection connection = new Connection(Provider.CUSTOM,
+          "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "grok", "");
+      // Raw keeps the gateway's two-choice body; LangChain4j sees the collapsed one.
+      RawCapture raw = new RawCapture(1, "Grok", call -> {
+      });
+      ChatSession.Turn turn = new ChatSession().send(ChatModels.create(connection, raw), ChatMode.ASK,
+          "What files are in this project?", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("two-choice tool reply runs the tool", turn.toolCalls() == 1
+          && turn.text().contains("The project has one file."));
+      failed += check("raw log keeps both choices from the gateway", raw.calls().size() >= 1
+          && raw.calls().get(0).http() != null
+          && raw.calls().get(0).http().response().contains("\"index\":1")
+          && raw.calls().get(0).http().response().contains("list_files"));
+      failed += check("tool result went back to the model", bodies.size() == 2 && bodies.get(1).contains("readme.txt"));
+    } finally {
+      server.stop(0);
+    }
+    return failed;
   }
 
   // Auto: which model each kind of message gets, which failures move to the other model, and a real failover
@@ -1592,7 +1675,7 @@ public class Harness {
     int failed = 0;
     for (ChatMode mode : ChatMode.values()) {
       String system = Prompts.system(mode, "demo", "", "");
-      failed += check(mode.label + " prompt loads from the bundle", system.contains("expert MuleSoft developer")
+      failed += check(mode.label + " prompt loads from the bundle", system.contains("You are MuleSoftForge AI")
           && system.contains("copy the placeholder exactly") && system.contains("\"demo\"")
           && !system.contains("{project}"));
     }
@@ -1600,10 +1683,20 @@ public class Harness {
         Prompts.system(ChatMode.AGENT, "demo", "", "").contains("Mule rules for changes"));
     failed += check("Ask prompt has no Mule edit guidance",
         !Prompts.system(ChatMode.ASK, "demo", "", "").contains("Mule rules for changes"));
-    failed += check("no project: no mode rules", !Prompts.system(ChatMode.AGENT, null, "", "").contains("tools"));
+    String noProject = Prompts.system(ChatMode.AGENT, null, "", "");
+    failed += check("no project: no mode rules", !noProject.contains("You are in Agent mode")
+        && !noProject.contains("You are in Ask mode") && !noProject.contains("Mule rules for changes"));
+    String about = Prompts.system(ChatMode.ASK, null, "", "");
+    failed += check("what-can-you-do guidance always present", about.contains("When the user asks what you can do")
+        && about.contains("not as a generic MuleSoft tutorial")
+        && about.contains("only capabilities that match tools you have been given"));
+    failed += check("what-can-you-do still present with user instructions",
+        Prompts.system(ChatMode.ASK, "demo", "", "Always answer in French.").contains(
+            "not as a generic MuleSoft tutorial"));
     String builtIn = Prompts.builtIn();
     failed += check("Show built-in prompt lists every part", builtIn.contains("Rules (always apply)")
-        && builtIn.contains("Ask mode") && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
+        && builtIn.contains("When asked what MuleSoftForge AI can do") && builtIn.contains("Ask mode")
+        && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
         && builtIn.contains("8,000 characters"));
 
     List<String> bodies = new ArrayList<>();
