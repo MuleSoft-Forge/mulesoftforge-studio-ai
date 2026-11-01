@@ -53,6 +53,7 @@ public final class HttpTools {
   public static final String LIST = "list_endpoints";
   public static final String CALL = "call_endpoint";
   public static final String DOCS = "fetch_docs";
+  public static final String CONSOLE = "read_console";
   // Defaults for Preferences; the user can replace the list there. fetch_docs still only sends GET over HTTPS.
   public static final List<String> DEFAULT_DOCS_HOSTS = List.of("docs.mulesoft.com", "developer.mulesoft.com",
       "dataweave.mulesoft.com", "dev-portal.mulesoft.com", "help.salesforce.com");
@@ -70,6 +71,14 @@ public final class HttpTools {
   private static final int MAX_REDIRECTS = 5;
   private static final int MAX_DOCS_URL = 500;
   private static final int MAX_MARKDOWN_LINKS = 40;
+  private static final int MAX_CONSOLE = 4_000;
+  private static final int MAX_CONSOLE_READ = 8_000;
+  private static final int CONSOLE_ANCHOR = 200;
+  // Mule writes its log asynchronously, so lines about a request can arrive after its response.
+  private static final long CONSOLE_QUIET_MS = 300;
+  private static final long CONSOLE_WAIT_MS = 2_000;
+  private static final long CONSOLE_POLL_MS = 100;
+  private static final Pattern ANSI = Pattern.compile("\u001B\\[[0-9;?]*[A-Za-z]");
   private static final Pattern MARKDOWN_LINK = Pattern.compile("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)");
   private static final Pattern LINK_HEADER = Pattern.compile(
       "<([^>]+)>\\s*;\\s*rel=\"?describedby\"?", Pattern.CASE_INSENSITIVE);
@@ -84,10 +93,12 @@ public final class HttpTools {
   private final boolean canChange;
   private final Set<String> docsHosts;
   private final Duration timeout;
+  private final AppConsole console;
 
   // files is null when no project is open; personal is null when personal data is sent as it is. canChange allows
   // requests that change data (POST, PUT, PATCH, DELETE), which Ask and Plan mode do not send. docsHosts is the
-  // allowlist for fetch_docs; null or empty uses the built-in defaults.
+  // allowlist for fetch_docs; null or empty uses the built-in defaults. console is null when the app's console
+  // cannot be read; with it, calls report what the console printed and read_console is offered.
   public HttpTools(ProjectFiles files, SecretMask secrets, PersonalData personal, boolean canChange) {
     this(files, secrets, personal, canChange, DEFAULT_DOCS_HOSTS, TIMEOUT);
   }
@@ -99,12 +110,18 @@ public final class HttpTools {
 
   public HttpTools(ProjectFiles files, SecretMask secrets, PersonalData personal, boolean canChange,
       Collection<String> docsHosts, Duration timeout) {
+    this(files, secrets, personal, canChange, docsHosts, timeout, null);
+  }
+
+  public HttpTools(ProjectFiles files, SecretMask secrets, PersonalData personal, boolean canChange,
+      Collection<String> docsHosts, Duration timeout, AppConsole console) {
     this.files = files;
     this.secrets = secrets;
     this.personal = personal;
     this.canChange = canChange;
     this.docsHosts = Set.copyOf(docsHosts == null || docsHosts.isEmpty() ? DEFAULT_DOCS_HOSTS : docsHosts);
     this.timeout = timeout;
+    this.console = console;
   }
 
   public static String formatDocsHosts(Collection<String> hosts) {
@@ -181,10 +198,11 @@ public final class HttpTools {
     out.add(ToolSpecification.builder()
         .name(CALL)
         .description("Send an HTTP request to the Mule app the user is running in Studio and get the status,"
-            + " headers and body. Only localhost addresses are allowed. Use it to test an endpoint, reproduce a"
+            + " headers and body" + (console == null ? "" : ", and what the app's console printed while it ran")
+            + ". Only localhost addresses are allowed. Use it to test an endpoint, reproduce a"
             + " bug or prove a fix. Masked values («masked-N») in the url, headers or body are sent as their real"
             + " values." + (canChange ? "" : " This mode only sends " + String.join(", ", READ_METHODS)
-            + "; requests that change data need Agent mode."))
+            + "; requests that change data need Agent or Diagnose mode."))
         .parameters(JsonObjectSchema.builder()
             .addEnumProperty("method", methods)
             .addStringProperty("url", "e.g. http://localhost:8081/api/employees?limit=5")
@@ -203,6 +221,16 @@ public final class HttpTools {
             .required("method", "url")
             .build())
         .build());
+    if (console != null) {
+      out.add(ToolSpecification.builder()
+          .name(CONSOLE)
+          .description("Read the last part of the console of the Mule app the user runs in Studio: whether it"
+              + " deployed, logger output, and errors with the flow, processor and file line they came from."
+              + " call_endpoint already returns what the console printed during each call; use this to see why"
+              + " the app did not start, or what it did after a redeploy.")
+          .parameters(JsonObjectSchema.builder().build())
+          .build());
+    }
     out.add(ToolSpecification.builder()
         .name(DOCS)
         .description("Read a documentation page as text, with the links on it. Only these sites: "
@@ -221,7 +249,7 @@ public final class HttpTools {
   }
 
   public static boolean handles(String tool) {
-    return LIST.equals(tool) || CALL.equals(tool) || DOCS.equals(tool);
+    return LIST.equals(tool) || CALL.equals(tool) || DOCS.equals(tool) || CONSOLE.equals(tool);
   }
 
   public static String describe(ToolExecutionRequest request) {
@@ -231,6 +259,7 @@ public final class HttpTools {
       case CALL -> "Calling " + args.path("method").asText("GET").toUpperCase(Locale.ROOT) + " "
           + args.path("url").asText("");
       case DOCS -> "Reading " + args.path("url").asText("the docs");
+      case CONSOLE -> "Reading the app's console";
       default -> "Running " + request.name();
     };
   }
@@ -243,6 +272,7 @@ public final class HttpTools {
         case LIST -> list();
         case CALL -> call(args);
         case DOCS -> docs(args.path("url").asText("").strip());
+        case CONSOLE -> readConsole();
         default -> "ERROR: unknown tool " + request.name();
       };
     } catch (InterruptedException e) {
@@ -267,7 +297,7 @@ public final class HttpTools {
     }
     if (!canChange && !READ_METHODS.contains(method)) {
       return "ERROR: this mode only sends " + String.join(", ", READ_METHODS) + ". Tell the user the " + method
-          + " request to send, or that Agent mode can send it.";
+          + " request to send, or that Agent or Diagnose mode can send it.";
     }
     String shownUrl = args.path("url").asText("").strip();
     URI uri;
@@ -320,18 +350,20 @@ public final class HttpTools {
     builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
         : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
 
+    AppConsole.Text before = consoleNow();
     long started = System.nanoTime();
     Received received;
     try {
       received = send(localClient(), builder.build(), uri, method, body, HttpTools::localProblem);
     } catch (ConnectException | HttpConnectTimeoutException e) {
-      return "ERROR: nothing is answering on " + uri.getHost() + ":" + port(uri) + ". The app is not running, or"
-          + " listens on another port. Ask the user to run it in Studio (Run As > Mule Application) and wait for"
-          + " DEPLOYED in the console" + (files == null ? "." : "; list_endpoints shows the port it uses.");
+      return masked("ERROR: nothing is answering on " + uri.getHost() + ":" + port(uri) + ". The app is not"
+          + " running, or listens on another port. Ask the user to run it in Studio (Run As > Mule Application) and"
+          + " wait for DEPLOYED in the console" + (files == null ? "." : "; list_endpoints shows the port it uses.")
+          + consoleEnd(before));
     } catch (HttpTimeoutException | TimeoutException e) {
-      return "ERROR: no response within " + timeout.toSeconds() + " s. If Studio's debugger is stopped at a"
+      return masked("ERROR: no response within " + timeout.toSeconds() + " s. If Studio's debugger is stopped at a"
           + " breakpoint, the request is waiting there: look at the event, then resume. Otherwise the flow is slow"
-          + " or stuck.";
+          + " or stuck." + consoleDuring(before));
     }
     long millis = (System.nanoTime() - started) / 1_000_000;
 
@@ -364,7 +396,122 @@ public final class HttpTools {
           : DataWeaveTools.compare(args.get("expected_body").asText(), text).replace("expected output",
               "expected body"));
     }
-    String result = secrets.remask(out.toString().strip());
+    out.append(consoleDuring(before));
+    return masked(out.toString().strip());
+  }
+
+  private String readConsole() {
+    AppConsole.Text now = consoleNow();
+    if (now == null) {
+      return "ERROR: no Mule app console is open in Studio. Ask the user to run the app (Run As > Mule"
+          + " Application).";
+    }
+    String text = clean(now.text());
+    return masked(text.isEmpty() ? "CONSOLE (" + now.name() + ") is empty."
+        : "CONSOLE (" + now.name() + "), last part:\n" + tail(text, MAX_CONSOLE_READ));
+  }
+
+  // The app's console now, or null when there is none or it cannot be read.
+  private AppConsole.Text consoleNow() {
+    if (console == null) {
+      return null;
+    }
+    try {
+      AppConsole.Text text = console.read(files == null ? null : files.name());
+      return text == null || text.text() == null ? null : text;
+    } catch (RuntimeException e) {
+      return null;
+    }
+  }
+
+  // When nothing answers, the end of the console tells a stopped app from one that failed to deploy.
+  private String consoleEnd(AppConsole.Text before) {
+    if (before == null) {
+      return "";
+    }
+    String text = clean(before.text());
+    return text.isEmpty() ? "\n\nCONSOLE (" + before.name() + ") is empty."
+        : "\n\nCONSOLE (" + before.name() + "), last part. If it shows the app failed to deploy or is still"
+            + " starting, say so from it rather than only asking the user to run the app:\n" + tail(text, MAX_CONSOLE);
+  }
+
+  // What the console printed between before and the log going quiet after the response.
+  private String consoleDuring(AppConsole.Text before) throws InterruptedException {
+    if (before == null) {
+      return "";
+    }
+    AppConsole.Text after = settled(before);
+    String added = clean(added(before, after));
+    if (added.isEmpty()) {
+      return "\n\nCONSOLE (" + after.name() + "): nothing new while the call ran.";
+    }
+    return "\n\nCONSOLE (" + after.name() + "), printed while the call ran. Other flows and schedulers write here"
+        + " too, so not every line is from this request:\n" + tail(added, MAX_CONSOLE);
+  }
+
+  private AppConsole.Text settled(AppConsole.Text before) throws InterruptedException {
+    AppConsole.Text last = consoleNow();
+    if (last == null) {
+      return before;
+    }
+    long start = System.nanoTime();
+    long changed = start;
+    while (millisSince(start) < CONSOLE_WAIT_MS) {
+      Thread.sleep(CONSOLE_POLL_MS);
+      AppConsole.Text next = consoleNow();
+      if (next == null) {
+        return last;
+      }
+      // A full console keeps its length as lines arrive, so the text is compared, not the length.
+      if (!next.text().equals(last.text()) || !next.name().equals(last.name())) {
+        last = next;
+        changed = System.nanoTime();
+      } else if (millisSince(changed) >= CONSOLE_QUIET_MS) {
+        break;
+      }
+    }
+    return last;
+  }
+
+  private static long millisSince(long nanos) {
+    return (System.nanoTime() - nanos) / 1_000_000;
+  }
+
+  // The text after appears to have gained since before. Consoles drop their oldest lines past a size limit, so the
+  // end of before is looked for in after rather than trusting its length.
+  private static String added(AppConsole.Text before, AppConsole.Text after) {
+    String old = before.text();
+    String now = after.text();
+    if (!before.name().equals(after.name()) || old.isEmpty()) {
+      return now;
+    }
+    String anchor = old.substring(Math.max(0, old.length() - CONSOLE_ANCHOR));
+    if (now.length() >= old.length() && now.startsWith(anchor, old.length() - anchor.length())) {
+      return now.substring(old.length());
+    }
+    int at = now.lastIndexOf(anchor);
+    return at >= 0 ? now.substring(at + anchor.length()) : now;
+  }
+
+  private static String clean(String text) {
+    return ANSI.matcher(text).replaceAll("").strip();
+  }
+
+  // The end of text, from a whole line, where errors usually are.
+  private static String tail(String text, int max) {
+    if (text.length() <= max) {
+      return text;
+    }
+    String end = text.substring(text.length() - max);
+    int line = end.indexOf('\n');
+    if (line >= 0 && line < 500) {
+      end = end.substring(line + 1);
+    }
+    return "… (earlier lines cut)\n" + end;
+  }
+
+  private String masked(String text) {
+    String result = secrets.remask(text);
     return mask(personal == null ? result : personal.mask(result));
   }
 

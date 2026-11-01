@@ -112,6 +112,7 @@ public final class ChatJob extends Job {
       session.docsHosts(AiSettings.docsHosts());
       StudioDebugger debugger = StudioDebugger.get();
       session.debugger(debugger.available() ? debugger : null);
+      session.appConsole(Consoles.MULE_APP);
       Path dataWeave = DataWeaveCli.find(AiSettings.dataWeaveCli());
       session.dataWeave(dataWeave == null ? null : DataWeaveCli.at(dataWeave));
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);

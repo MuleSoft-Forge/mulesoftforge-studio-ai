@@ -73,6 +73,7 @@ final class Composer {
   static final String WHY_FAILED_PROMPT = "Why did this fail?";
   static final String EXPLAIN_EVENT_PROMPT = "Explain what is happening at this processor.";
   static final String FIX_CONSOLE_PROMPT = "Explain the error in this console output and fix its cause.";
+  static final String DIAGNOSE_CONSOLE_PROMPT = "Find the cause of the error in this console output.";
   private static final int MAX_CONSOLES_LISTED = 6;
 
   private final Composite root;
@@ -227,8 +228,8 @@ final class Composer {
     return List.copyOf(attached);
   }
 
-  // Replaces an attachment for the same thing so attaching twice does not send it twice. Attaching problems, or
-  // console output showing a failure, to an empty message suggests fixing it.
+  // Replaces an attachment for the same thing so attaching twice does not send it twice. Attaching problems to an
+  // empty message suggests fixing them; console output showing a failure suggests diagnosing it.
   void attach(Attachments.Result result) {
     for (Attachment attachment : result.attached()) {
       attached.removeIf(a -> sameTarget(a, attachment));
@@ -251,13 +252,20 @@ final class Composer {
     }
     Attachment failure = result.attached().stream().filter(Attachment::reportsFailure).findFirst().orElse(null);
     if (failure != null && prompt().isEmpty()) {
-      input.setText(failure.kind() == Attachment.Kind.CONSOLE ? FIX_CONSOLE_PROMPT : FIX_PROBLEMS_PROMPT);
-      input.setSelection(input.getText().length());
-      if (mode() == ChatMode.ASK) {
+      // A failing console needs its cause found first; Problems usually say what to fix.
+      boolean console = failure.kind() == Attachment.Kind.CONSOLE;
+      if (console && (mode() == ChatMode.ASK || mode() == ChatMode.AGENT)) {
+        setMode(ChatMode.DIAGNOSE);
+        listener.note("Note", "Switched to Diagnose mode: it reproduces the error and finds its cause, then offers"
+            + " fixes for Agent mode to make. Pick Agent to go straight to a fix.");
+      } else if (!console && mode() == ChatMode.ASK) {
         setMode(ChatMode.AGENT);
         listener.note("Note", "Switched to Agent mode so the AI can propose fixes. Pick Ask to only get an"
             + " explanation.");
       }
+      input.setText(!console ? FIX_PROBLEMS_PROMPT
+          : mode() == ChatMode.DIAGNOSE ? DIAGNOSE_CONSOLE_PROMPT : FIX_CONSOLE_PROMPT);
+      input.setSelection(input.getText().length());
     }
     showAttached();
     input.setFocus();

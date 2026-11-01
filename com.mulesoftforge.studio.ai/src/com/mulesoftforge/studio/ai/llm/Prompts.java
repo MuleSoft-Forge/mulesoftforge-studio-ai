@@ -8,9 +8,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 // The system prompt, from the files in prompts/. guidance.md and mule-edits.md are general advice that the user's
-// instructions may override; rules.md, about.md and the mode files (ask, agent, plan) are what the plugin relies on
-// (masked values, tools, offer_changes, proposals, and answering "what can you do" as this product), which no
-// instructions can override.
+// instructions may override; rules.md, about.md and the mode files (ask, agent, plan, diagnose) are what the plugin
+// relies on (masked values, tools, offer_changes, proposals, and answering "what can you do" as this product), which
+// no instructions can override.
 public final class Prompts {
   public static final String AGENTS_FILE = "AGENTS.md";
   public static final int MAX_INSTRUCTIONS = 8_000;
@@ -89,6 +89,7 @@ public final class Prompts {
         + "\nAgent mode, with a project open (always applies)\n\n" + mode(ChatMode.AGENT, "<project>")
         + "\nAgent mode, Mule guidance (your instructions can override this)\n\n" + file("mule-edits.md")
         + "\nPlan mode, with a project open (always applies)\n\n" + mode(ChatMode.PLAN, "<project>")
+        + "\nDiagnose mode, with a project open (always applies)\n\n" + mode(ChatMode.DIAGNOSE, "<project>")
         + "\nWhile Studio's debugger is stopped (always applies)\n\n" + file("debug.md")
         + "\nWith the DataWeave CLI (always applies)\n\n" + file("dataweave.md")
         + "\nCalling the local app and reading documentation (always applies)\n\n" + file("http.md")

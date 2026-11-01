@@ -1464,6 +1464,8 @@ public class Harness {
         .equals("strong-model"));
     failed += check("plan mode goes strong", AutoRouter.choose(ChatMode.PLAN, "hi", none, false, pair).model()
         .equals("strong-model"));
+    failed += check("diagnose mode goes strong", AutoRouter.choose(ChatMode.DIAGNOSE, "hi", none, false, pair)
+        .model().equals("strong-model"));
     failed += check("review question goes strong", AutoRouter.choose(ChatMode.ASK, "Review this flow please", none,
         false, pair).model().equals("strong-model"));
     failed += check("error question goes strong", AutoRouter.choose(ChatMode.ASK, "why do I get this error?", none,
@@ -1698,6 +1700,26 @@ public class Harness {
         && builtIn.contains("When asked what MuleSoftForge AI can do") && builtIn.contains("Ask mode")
         && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
         && builtIn.contains("8,000 characters"));
+    String diagnose = Prompts.system(ChatMode.DIAGNOSE, "demo", "", "");
+    failed += check("Diagnose prompt: reproduce, evidence, one checked cause, fixes offered for Agent",
+        diagnose.contains("You are in Diagnose mode") && diagnose.contains("1. Reproduce")
+            && diagnose.contains("Element: my-flow/processors/2") && diagnose.contains("## Evidence")
+            && diagnose.contains("## How it was checked") && diagnose.contains("offer_changes"));
+    failed += check("Diagnose prompt has no Mule edit guidance", !diagnose.contains("Mule rules for changes"));
+    failed += check("Show built-in prompt lists Diagnose mode", builtIn.contains("Diagnose mode, with a project open"));
+    failed += check("Diagnose: read-only files, any request to the local app", !ChatMode.DIAGNOSE.canEdit
+        && ChatMode.DIAGNOSE.canChangeApp && ChatMode.AGENT.canChangeApp && !ChatMode.ASK.canChangeApp
+        && !ChatMode.PLAN.canChangeApp);
+    failed += check("Diagnose: a saved mode name loads back", ChatMode.fromName("DIAGNOSE") == ChatMode.DIAGNOSE);
+    failed += check("problem reports are recognised", ChatMode.reportsProblem("Why does /orders return 500?")
+        && ChatMode.reportsProblem("the app doesn't deploy") && ChatMode.reportsProblem("I get an exception")
+        && ChatMode.reportsProblem("the request times out") && ChatMode.reportsProblem("DB:CONNECTIVITY error"));
+    failed += check("questions are not problem reports", !ChatMode.reportsProblem("What does this flow do?")
+        && !ChatMode.reportsProblem("Add a health endpoint") && !ChatMode.reportsProblem("explain the error handler")
+        && !ChatMode.reportsProblem("add an on-error-propagate for HTTP error types")
+        && !ChatMode.reportsProblem("review this project") && !ChatMode.reportsProblem(null));
+    failed += check("an error-handling word does not hide a real report",
+        ChatMode.reportsProblem("the error handler returns 500"));
 
     List<String> bodies = new ArrayList<>();
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

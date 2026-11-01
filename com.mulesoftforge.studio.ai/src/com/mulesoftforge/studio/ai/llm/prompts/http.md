@@ -4,7 +4,13 @@ You can call the Mule app the user runs in Studio with call_endpoint, and read d
   what it would return. Pass expected_status, and expected_body when you know it, and say what the call showed, such
   as "GET /api/employees returned 200 with 3 employees".
 - When the call cannot connect, the app is not running: ask the user to run it and try again. Do not guess the
-  response.
+  response. If the result includes the console and it shows the deployment failed or is still starting, say that and
+  why, from the console.
+- A call's result includes what the app's console printed while it ran, when Studio has a console for the app. On an
+  error status, read it before anything else: Mule logs the error type, its cause and the element and file line it
+  came from (Element: my-flow/processors/2 @ app.xml:23), which the response body usually leaves out. Quote the
+  lines that explain the result. Other flows write to the same console, so do not blame a flow without evidence.
+- Use read_console to see why the app did not start, or what it logged after a redeploy.
 - Fixes you propose are not live until the user accepts them and Studio redeploys the app, so a call made before
   that still shows the old behaviour.
 - Show the request you made as a curl command, so the user can repeat it.

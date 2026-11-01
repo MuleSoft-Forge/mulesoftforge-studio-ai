@@ -20,6 +20,7 @@ import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
+import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -97,6 +98,9 @@ public class ChatSession {
       if (called > 0) {
         parts.add("called the app " + (called == 1 ? "once" : called + " times"));
       }
+      if (toolCounts.getOrDefault(HttpTools.CONSOLE, 0) > 0) {
+        parts.add("read the app's console");
+      }
       int pages = toolCounts.getOrDefault(HttpTools.DOCS, 0);
       if (pages > 0) {
         parts.add("read " + plural(pages, "docs page"));
@@ -128,6 +132,7 @@ public class ChatSession {
   private volatile boolean maskPersonal = true;
   private volatile DebugSession debugger;
   private volatile DataWeaveCli dataWeave;
+  private volatile AppConsole appConsole;
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
   private volatile List<String> docsHosts = List.of();
@@ -152,6 +157,11 @@ public class ChatSession {
   // The DataWeave CLI, so proposals' DataWeave is compiled and the DataWeave tools are offered; null without it.
   public void dataWeave(DataWeaveCli cli) {
     dataWeave = cli;
+  }
+
+  // The running app's console, so calls to the app report what it printed and read_console is offered; null without.
+  public void appConsole(AppConsole console) {
+    appConsole = console;
   }
 
   // The user's own instructions from Preferences, sent with every message.
@@ -296,7 +306,8 @@ public class ChatSession {
     DataWeaveCli cli = dataWeave;
     DataWeaveTools dataWeaveTools = cli == null ? null : new DataWeaveTools(cli, project, secrets);
     HttpTools httpTools = project == null ? null
-        : new HttpTools(project, secrets, personalMask, mode.canEdit, currentDocsHosts, HttpTools.TIMEOUT);
+        : new HttpTools(project, secrets, personalMask, mode.canChangeApp, currentDocsHosts, HttpTools.TIMEOUT,
+            appConsole);
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());

@@ -80,6 +80,9 @@ public final class AutoRouter {
       case PLAN -> {
         return "Plan mode";
       }
+      case DIAGNOSE -> {
+        return "Diagnose mode";
+      }
       case ASK -> {
         // Questions are routed below.
       }

@@ -3,9 +3,11 @@ package com.mulesoftforge.studio.ai.ui;
 import java.lang.ref.WeakReference;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -48,6 +50,7 @@ import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.UsageLog;
+import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
@@ -84,11 +87,22 @@ public class ChatView extends ViewPart {
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
   private static final String OPEN_RAW = "raw-log";
+  private static final String DIAGNOSE_INSTEAD = "diagnose-instead";
+  private static final String VERIFY_FIX = "verify-fix";
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
   // Checklists of changes the AI offered to make, by the index in their Draft selected changes button.
   private final List<List<ChangeOffer>> offers = new ArrayList<>();
+  // Checklists that came from Diagnose mode; drafting one offers to check the fix afterwards.
+  private final Set<Integer> diagnosedOffers = new HashSet<>();
+  // The next message builds a fix from a diagnosis.
+  private boolean buildingDiagnosis;
+  // Diagnose mode is suggested once per chat, for this message.
+  private String diagnosePrompt;
+  private boolean diagnoseSuggested;
+  // The app console Diagnose mode last attached by itself, so the same output is not sent again.
+  private String autoConsole;
 
   private final ChatSession session = new ChatSession();
   private final CostMeter chatCost = new CostMeter();
@@ -415,9 +429,15 @@ public class ChatView extends ViewPart {
         sendInAgentMode(ChatMode.MAKE_CHANGES_PROMPT);
       } else if (SUGGEST.equals(id)) {
         sendInCurrentMode(ChatMode.SUGGEST_PROMPT);
+      } else if (DIAGNOSE_INSTEAD.equals(id) && diagnosePrompt != null) {
+        sendInMode(ChatMode.DIAGNOSE, diagnosePrompt);
+      } else if (VERIFY_FIX.equals(id)) {
+        sendInMode(ChatMode.DIAGNOSE, ChatMode.VERIFY_PROMPT);
       } else if (id.startsWith(OFFER)) {
-        List<ChangeOffer> picked = pickedOffers(id.substring(OFFER.length()));
-        if (picked != null) {
+        String value = id.substring(OFFER.length());
+        List<ChangeOffer> picked = pickedOffers(value);
+        if (picked != null && running == null) {
+          buildingDiagnosis = diagnosedOffers.contains(checklist(value));
           sendInAgentMode(ChangeOffer.prompt(picked));
         }
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
@@ -489,6 +509,11 @@ public class ChatView extends ViewPart {
     changes.clear();
     dataWeaveFixes.clear();
     offers.clear();
+    diagnosedOffers.clear();
+    buildingDiagnosis = false;
+    diagnosePrompt = null;
+    diagnoseSuggested = false;
+    autoConsole = null;
     chatCost.reset();
     chatCounted = false;
     entries.clear();
@@ -645,6 +670,9 @@ public class ChatView extends ViewPart {
       }
       attachments.addAll(attached);
       project = EclipseProject.find(getSite().getPage());
+      if (mode == ChatMode.DIAGNOSE && project != null) {
+        attachments.addAll(diagnoseContext(project, attachments));
+      }
       if (AutoRouter.isAuto(model)) {
         auto = AutoRouter.choose(mode, prompt, attachments, fix != null, AiSettings.autoModels(provider));
       }
@@ -654,6 +682,8 @@ public class ChatView extends ViewPart {
       return;
     }
 
+    boolean checkFixAfter = buildingDiagnosis && mode == ChatMode.AGENT;
+    buildingDiagnosis = false;
     turns++;
     if (chatId == null) {
       chatId = id;
@@ -738,7 +768,14 @@ public class ChatView extends ViewPart {
                 appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
                     + ". Review the diffs below; nothing is written until you accept.");
               }
+              if (checkFixAfter && drafted > 0) {
+                transcript.action("After you accept and Studio redeploys, check the fix in Diagnose mode",
+                    VERIFY_FIX);
+              }
               if (project != null && !result.offers().isEmpty()) {
+                if (mode == ChatMode.DIAGNOSE) {
+                  diagnosedOffers.add(offers.size());
+                }
                 transcript.offer(String.valueOf(offers.size()),
                     result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
                 offers.add(result.offers());
@@ -750,6 +787,13 @@ public class ChatView extends ViewPart {
                 } else if (result.text().contains("```") || result.toolCounts().containsKey(HttpTools.CALL)) {
                   transcript.action("See possible improvements", SUGGEST);
                 }
+              }
+              if (!diagnoseSuggested && project != null && fixTarget == null && result.changes().isEmpty()
+                  && (mode == ChatMode.ASK || mode == ChatMode.AGENT) && ChatMode.reportsProblem(prompt)) {
+                diagnoseSuggested = true;
+                diagnosePrompt = prompt;
+                transcript.action("Find the cause in Diagnose mode (reproduces it and reads the console)",
+                    DIAGNOSE_INSTEAD);
               }
               if (fixTarget != null) {
                 offerDataWeaveFix(fixTarget, result.text());
@@ -763,6 +807,28 @@ public class ChatView extends ViewPart {
         });
     running = job;
     job.schedule();
+  }
+
+  // What Diagnose mode reads with every message without being asked: Studio's problems in the project, and the
+  // app's console when it shows a failure and has changed since it was last sent. Nothing the user attached is
+  // added twice.
+  private List<Attachment> diagnoseContext(EclipseProject project, List<Attachment> attached) {
+    List<Attachment> out = new ArrayList<>();
+    if (attached.stream().noneMatch(a -> a.kind() == Attachment.Kind.PROBLEMS)
+        && Problems.count(project.resource()) > 0) {
+      out.addAll(Problems.attach(project.resource()).attached());
+    }
+    if (attached.stream().noneMatch(a -> a.kind() == Attachment.Kind.CONSOLE)) {
+      AppConsole.Text console = Consoles.muleApp(project.name());
+      if (console != null && !console.text().equals(autoConsole)) {
+        Attachment output = Attachment.console(console.name(), console.text(), false);
+        if (output.reportsFailure()) {
+          autoConsole = console.text();
+          out.add(output);
+        }
+      }
+    }
+    return out;
   }
 
   private void offerDataWeaveFix(DataWeaveScript script, String answer) {
@@ -782,13 +848,27 @@ public class ChatView extends ViewPart {
   }
 
   private void sendInAgentMode(String prompt) {
+    sendInMode(ChatMode.AGENT, prompt);
+  }
+
+  private void sendInMode(ChatMode mode, String prompt) {
     if (running != null) {
       append("Note", "Wait for the current answer, or cancel it, then click again.");
       return;
     }
-    composer.setMode(ChatMode.AGENT);
+    composer.setMode(mode);
     composer.setPrompt(prompt);
     send();
+  }
+
+  // The checklist index in "<checklist index>:<ticked indices>", or -1.
+  private static int checklist(String value) {
+    int colon = value.indexOf(':');
+    try {
+      return Integer.parseInt(colon < 0 ? value : value.substring(0, colon));
+    } catch (NumberFormatException e) {
+      return -1;
+    }
   }
 
   // offer_changes works in every mode, so asking for suggestions does not switch to Agent.

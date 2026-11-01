@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.debug.PersonalData;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
+import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.Endpoints;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.http.PageText;
@@ -40,6 +41,7 @@ final class HttpChecks {
     int failed = endpoints();
     failed += rules();
     failed += calls();
+    failed += console();
     failed += pages();
     failed += loop();
     if ("1".equals(System.getenv("MSF_LIVE_DOCS"))) {
@@ -283,6 +285,109 @@ final class HttpChecks {
     return failed;
   }
 
+  // A Mule console that keeps at most limit characters, dropping the oldest, like Studio's.
+  private static final class FakeConsole implements AppConsole {
+    private final String name;
+    private final int limit;
+    private final StringBuilder text = new StringBuilder();
+    volatile String askedFor;
+
+    FakeConsole(String name, int limit) {
+      this.name = name;
+      this.limit = limit;
+    }
+
+    synchronized void log(String line) {
+      text.append(line).append('\n');
+      if (text.length() > limit) {
+        text.delete(0, text.length() - limit);
+      }
+    }
+
+    @Override
+    public synchronized Text read(String project) {
+      askedFor = project;
+      return new Text(name, text.toString());
+    }
+  }
+
+  private static int console() throws Exception {
+    int failed = 0;
+    FakeConsole console = new FakeConsole("demo [Mule Applications] Mule Server 4.9.0 EE", 600);
+    console.log("INFO  DEPLOYED demo");
+    console.log("INFO  earlier request: nothing to do with this call");
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.setExecutor(Executors.newCachedThreadPool());
+    server.createContext("/api/orders", exchange -> {
+      console.log("INFO  \u001B[32mget-orders\u001B[0m received GET /api/orders");
+      respond(exchange, 500, "text/plain", "Internal Server Error".getBytes(StandardCharsets.UTF_8));
+      // Mule's asynchronous log lands after the response.
+      new Thread(() -> {
+        try {
+          Thread.sleep(150);
+        } catch (InterruptedException ignored) {
+          return;
+        }
+        console.log("ERROR Message: Cannot connect to db with password=ConsoleP4ss");
+        console.log("Error type: DB:CONNECTIVITY");
+        console.log("Element: get-orders/processors/2 @ demo:orders.xml:23");
+      }).start();
+    });
+    server.createContext("/api/quiet", exchange -> respond(exchange, 200, "text/plain",
+        "ok".getBytes(StandardCharsets.UTF_8)));
+    server.start();
+    try {
+      String base = "http://localhost:" + server.getAddress().getPort();
+      ProjectFiles project = DebugChecks.project(Files.createTempDirectory("studio-ai-console"), "demo");
+      HttpTools tools = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2),
+          console);
+
+      String out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/api/orders")));
+      failed += check("console: lines logged after the response are waited for", out.startsWith("STATUS 500")
+          && out.contains("printed while the call ran") && out.contains("Error type: DB:CONNECTIVITY")
+          && out.contains("Element: get-orders/processors/2 @ demo:orders.xml:23"));
+      failed += check("console: only what the call printed, colour codes removed",
+          !out.contains("earlier request") && out.contains("get-orders received GET /api/orders"));
+      failed += check("console: secrets in log lines are masked", !out.contains("ConsoleP4ss")
+          && out.contains("password="));
+      failed += check("console: asked for the project's own app", "demo".equals(console.askedFor));
+
+      for (int i = 0; i < 30; i++) {
+        console.log("INFO  filler line " + i + " to push the console past its limit");
+      }
+      out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/api/quiet")));
+      failed += check("console: a call that logs nothing says so", out.startsWith("STATUS 200")
+          && out.contains("nothing new while the call ran") && !out.contains("filler line"));
+      out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/api/orders")));
+      failed += check("console: new lines found when the full console drops its oldest during the call",
+          out.contains("Element: get-orders/processors/2") && !out.contains("filler line"));
+
+      console.log("ERROR DEPLOYMENT FAILED: demo (property ${db.url} not found)");
+      out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url",
+          "http://localhost:" + freePort() + "/api/orders")));
+      failed += check("console: when nothing answers, the end of the console comes back",
+          out.contains("nothing is answering") && out.contains("last part") && out.contains("DEPLOYMENT FAILED"));
+
+      out = tools.execute(request(HttpTools.CONSOLE, Map.of()));
+      failed += check("read_console: the end of the console", out.startsWith("CONSOLE (demo [Mule Applications]")
+          && out.contains("DEPLOYMENT FAILED"));
+      failed += check("read_console: offered only with a console", tools.specifications().stream()
+          .anyMatch(s -> s.name().equals(HttpTools.CONSOLE)) && new HttpTools(project, new SecretMask(), null, true)
+          .specifications().stream().noneMatch(s -> s.name().equals(HttpTools.CONSOLE)));
+      out = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2), p -> null)
+          .execute(request(HttpTools.CONSOLE, Map.of()));
+      failed += check("read_console: no console says to run the app", out.startsWith("ERROR: no Mule app console"));
+      out = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2), p -> {
+        throw new IllegalStateException("console gone");
+      }).execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/api/quiet")));
+      failed += check("console: a console that cannot be read does not break the call",
+          out.startsWith("STATUS 200") && !out.contains("CONSOLE"));
+    } finally {
+      server.stop(0);
+    }
+    return failed;
+  }
+
   private static int pages() {
     int failed = 0;
     String html = """
@@ -355,6 +460,12 @@ final class HttpChecks {
       failed += check("loop: the app's reply went back to the model", bodies.size() == 2
           && bodies.get(1).contains("STATUS 200") && bodies.get(1).contains("UP"));
       failed += check("loop: activity says the app was called", turn.activity().contains("called the app once"));
+      bodies.clear();
+      new ChatSession().send(ChatModels.create(connection), ChatMode.DIAGNOSE, "Why does it fail?", List.of(),
+          DebugChecks.project("employees-app"), Progress.NONE);
+      failed += check("loop: Diagnose can send any method but has no edit tools", bodies.get(0).contains("\"POST\"")
+          && !DebugChecks.tool(bodies.get(0), "edit_file") && !DebugChecks.tool(bodies.get(0), "write_file")
+          && DebugChecks.tool(bodies.get(0), "offer_changes") && bodies.get(0).contains("You are in Diagnose mode"));
       bodies.clear();
       new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT, "Hi", List.of(), null, Progress.NONE);
       failed += check("loop: no HTTP tools without a project", !DebugChecks.tool(bodies.get(0), HttpTools.CALL)
