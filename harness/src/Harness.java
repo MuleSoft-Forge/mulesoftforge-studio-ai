@@ -59,6 +59,8 @@ import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 import com.mulesoftforge.studio.ai.llm.Updates;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
+import com.mulesoftforge.studio.ai.render.ChangesPage;
+import com.mulesoftforge.studio.ai.render.ComposerPage;
 import com.mulesoftforge.studio.ai.render.Highlighter;
 import com.mulesoftforge.studio.ai.render.HtmlPage;
 import com.mulesoftforge.studio.ai.render.HtmlRenderer;
@@ -1118,8 +1120,60 @@ public class Harness {
     failed += check("raw blocks are text, collapsed and hideable", page.contains("function msfRaw(")
         && page.contains("pre.textContent = part[1]") && page.contains("function msfShowRaw(")
         && page.contains(".raw.hidden { display: none; }"));
+    String composer = ComposerPage.page(new HtmlPage.Theme(Palette.LIGHT, new Palette.Rgb(245, 250, 252),
+        new Palette.Rgb(0, 0, 0), "Helvetica", 12, "Menlo", 11), "Ask <me>", "Attach \"things\"", "Speak");
+    failed += check("composer page has a content security policy", composer.contains("default-src 'none'"));
+    failed += check("composer page values filled in and escaped", !composer.contains("%s")
+        && !composer.contains("%d") && composer.contains("Ask &lt;me&gt;") && composer.contains("&quot;things&quot;"));
+    boolean bridge = true;
+    for (String fn : List.of("msfSetText", "msfFocus", "msfInsert", "msfModes", "msfSelectMode", "msfModels",
+        "msfModelText", "msfModelHelp", "msfAttached", "msfBusy", "msfCancelling", "msfTheme")) {
+      bridge &= composer.contains("function " + fn + "(");
+    }
+    failed += check("composer page defines every Java-to-page call", bridge);
+    boolean kinds = true;
+    for (String kind : List.of(ComposerPage.SEND, ComposerPage.ENTER, ComposerPage.TEXT, ComposerPage.MODE,
+        ComposerPage.MODEL_MENU, ComposerPage.CONTEXT, ComposerPage.INCLUDE, ComposerPage.NEW_CHAT, ComposerPage.MIC,
+        ComposerPage.REMOVE, ComposerPage.HEIGHT)) {
+      kinds &= composer.contains("'" + kind + "'");
+    }
+    failed += check("composer page sends every event kind Java handles", kinds);
+    String changesPage = ChangesPage.page(new HtmlPage.Theme(Palette.LIGHT, new Palette.Rgb(245, 250, 252),
+        new Palette.Rgb(30, 30, 30), "Helvetica", 12, "Menlo", 11));
+    failed += check("changes page has a content security policy", changesPage.contains("default-src 'none'")
+        && !changesPage.contains("%s"));
+    boolean changeKinds = changesPage.contains("function msfRows(") && changesPage.contains("function msfTheme(");
+    for (String kind : List.of(ChangesPage.REVIEW, ChangesPage.ACCEPT, ChangesPage.REJECT, ChangesPage.ACCEPT_ALL,
+        ChangesPage.REJECT_ALL)) {
+      changeKinds &= changesPage.contains("'" + kind + "'");
+    }
+    failed += check("changes page sends every event kind Java handles", changeKinds);
+    failed += check("changes page sets file names as text", changesPage.contains("name.textContent = item.name")
+        && changesPage.contains("folder.textContent = item.folder"));
     if (preview != null) {
-      String demo = page.replace("</script></body>", """
+      Path changesPreview = preview.resolveSibling("changes-" + preview.getFileName());
+      String rows = new ObjectMapper().writeValueAsString(List.of(
+          new ChangesPage.Row("json-black-hole.xml", "src/main/mule/", 1, 1, false),
+          new ChangesPage.Row("global.xml", "src/main/mule/", 12, 0, false),
+          new ChangesPage.Row("dev.yaml", "src/main/resources/config/", 0, 0, true)));
+      Files.writeString(changesPreview, changesPage.replace("</script></body>", """
+          function msfChanges(kind, value) { console.log(kind, value); }
+          msfRows(%s);
+          </script></body>""".formatted(rows)));
+      System.out.println("Changes preview written to " + changesPreview.toAbsolutePath());
+    }
+    if (preview != null) {
+      Path composerPreview = preview.resolveSibling("composer-" + preview.getFileName());
+      Files.writeString(composerPreview, composer.replace("</script></body>", """
+          function msfComposer(kind, value) { console.log(kind, value); }
+          msfModes(['Ask', 'Agent', 'Diagnose'], 1, 'Modes');
+          msfModels(['auto', 'openai/gpt-5-mini', 'anthropic/claude-sonnet-4.5'], 'openai/gpt-5-mini');
+          msfAttached(['src/main/mule/app.xml', 'Problems in employees-app (3)'], 'Sent with your next message');
+          </script></body>"""));
+      System.out.println("Composer preview written to " + composerPreview.toAbsolutePath());
+    }
+    if (preview != null) {
+      String script = """
           msfMessage('you', 'You', %s, 'Agent, open file src/main/mule/app.xml, project employees-app');
           msfStep('Waiting for the model…'); msfStep('Reading src/main/mule/app.xml'); msfStep('Model answered in 4 s · $0.0012');
           msfMessage('ai', 'AI', %s, null);
@@ -1137,9 +1191,13 @@ public class Harness {
              request: '{ }', response: '{ }'}], 'raw-log');
           document.querySelectorAll('.raw, .raw details').forEach(function (d) { d.open = true; });
           function msfClick(a) { console.log(a); }
-          </script></body>""".formatted(jsString("How do I log the payload?"), jsString(h)));
-      Files.writeString(preview, demo);
-      System.out.println("Preview written to " + preview.toAbsolutePath());
+          </script></body>""".formatted(jsString("How do I log the payload?"), jsString(h));
+      Files.writeString(preview, HtmlPage.page(new HtmlPage.Theme(Palette.LIGHT, new Palette.Rgb(245, 250, 252),
+          new Palette.Rgb(30, 30, 30), "Helvetica", 12, "Menlo", 11)).replace("</script></body>", script));
+      Path dark = preview.resolveSibling("dark-" + preview.getFileName());
+      Files.writeString(dark, HtmlPage.page(new HtmlPage.Theme(Palette.DARK, new Palette.Rgb(7, 11, 20),
+          new Palette.Rgb(230, 236, 245), "Helvetica", 12, "Menlo", 11)).replace("</script></body>", script));
+      System.out.println("Preview written to " + preview.toAbsolutePath() + " and " + dark.toAbsolutePath());
     }
     System.exit(failed == 0 ? 0 : 1);
   }

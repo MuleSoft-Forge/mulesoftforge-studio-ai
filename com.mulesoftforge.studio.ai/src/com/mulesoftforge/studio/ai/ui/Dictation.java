@@ -6,7 +6,6 @@ import java.lang.reflect.Method;
 
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Text;
 
 import com.mulesoftforge.studio.ai.Activator;
 
@@ -23,9 +22,9 @@ final class Dictation {
     };
   }
 
-  // Null when dictation started; otherwise what to tell the user.
-  static String start(Text input) {
-    input.setFocus();
+  // Call once the message box has focus, so the dictated text goes there. Null when dictation started; otherwise
+  // what to tell the user.
+  static String start() {
     try {
       return switch (Platform.getOS()) {
         case Platform.OS_MACOSX -> startMac() ? null

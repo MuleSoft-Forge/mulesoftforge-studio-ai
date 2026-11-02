@@ -34,7 +34,7 @@ final class TranscriptStyles {
     link = ThemeStyles.swt(next.link());
   }
 
-  // The grey for panels and dividers that suits the current theme.
+  // The panel and divider colours that suit the current theme.
   static Color panel(Control control) {
     return ThemeStyles.swt(PANEL_ID());
   }

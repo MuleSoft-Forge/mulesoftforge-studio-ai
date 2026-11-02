@@ -42,6 +42,7 @@ final class DataWeaveChecks {
     int failed = parsing();
     failed += extraction();
     failed += download();
+    failed += lookup();
     Path dw = DataWeaveCli.find(System.getenv("DW_CLI"));
     if (dw == null) {
       System.out.println("SKIP  DataWeave CLI not found: set DW_CLI or install dw in ~/.dw/bin");
@@ -306,6 +307,32 @@ final class DataWeaveChecks {
     } finally {
       server.stop(0);
     }
+    return failed;
+  }
+
+  // A dw that is missing, at a path that is not a path, or that does not run gives no cli and says why.
+  private static int lookup() throws Exception {
+    int failed = 0;
+    DataWeaveCli.Lookup missing = DataWeaveCli.lookup("/no/such/dw", false);
+    failed += check("a configured dw that is not there gives no cli and names the path", missing.cli() == null
+        && missing.problem().contains("/no/such/dw"));
+    DataWeaveCli.Lookup invalid = DataWeaveCli.lookup("bad\u0000path", false);
+    failed += check("a configured path that is not a valid path gives no cli instead of throwing",
+        invalid.cli() == null && invalid.problem() != null);
+    if (System.getProperty("os.name").toLowerCase().startsWith("windows")) {
+      return failed;
+    }
+    Path dir = Files.createTempDirectory("studio-ai-dwcli");
+    Path broken = dir.resolve("dw");
+    Files.writeString(broken, "#!/bin/sh\necho 'Bad CPU type in executable'\nexit 126\n");
+    broken.toFile().setExecutable(true);
+    DataWeaveCli.Lookup wontRun = DataWeaveCli.lookup(broken.toString(), true);
+    failed += check("a dw that exits with an error gives no cli and says what it printed", wontRun.cli() == null
+        && wontRun.problem().contains("exited with 126") && wontRun.problem().contains("Bad CPU type"));
+    Files.writeString(broken, "#!/bin/sh\necho 'Command Line : V9.9.9'\n");
+    DataWeaveCli.Lookup fixed = DataWeaveCli.lookup(broken.toString(), true);
+    failed += check("rechecking after it is fixed gives the cli and its version", fixed.cli() != null
+        && "9.9.9".equals(fixed.version()) && fixed.problem() == null);
     return failed;
   }
 

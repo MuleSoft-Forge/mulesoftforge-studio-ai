@@ -79,7 +79,7 @@ final class ThemeStyles {
   }
 
   static Palette.Rgb foreground() {
-    return background().isDark() ? Palette.rgb(220, 220, 220) : Palette.rgb(30, 30, 30);
+    return background().isDark() ? Palette.rgb(230, 236, 245) : Palette.rgb(30, 30, 30);
   }
 
   static Color swt(String id) {

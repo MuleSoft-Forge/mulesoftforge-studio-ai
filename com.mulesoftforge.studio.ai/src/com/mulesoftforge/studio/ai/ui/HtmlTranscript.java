@@ -108,7 +108,7 @@ final class HtmlTranscript implements Transcript {
 
   @Override
   public void message(String speaker, String text, String context) {
-    run("msfMessage(" + js(kind(speaker)) + "," + js(speaker) + "," + js(HtmlRenderer.plain(text)) + ","
+    run("msfMessage(" + js(kind(speaker)) + "," + js(Transcript.label(speaker)) + "," + js(HtmlRenderer.plain(text)) + ","
         + js(context) + ")");
   }
 
@@ -116,7 +116,7 @@ final class HtmlTranscript implements Transcript {
   public void markdown(String speaker, String markdown) {
     HtmlRenderer.Html html = HtmlRenderer.markdown(markdown, codeBlocks.size());
     codeBlocks.addAll(html.codeBlocks());
-    run("msfMessage(" + js(kind(speaker)) + "," + js(speaker) + "," + js(html.html()) + ",null)");
+    run("msfMessage(" + js(kind(speaker)) + "," + js(Transcript.label(speaker)) + "," + js(html.html()) + ",null)");
   }
 
   @Override

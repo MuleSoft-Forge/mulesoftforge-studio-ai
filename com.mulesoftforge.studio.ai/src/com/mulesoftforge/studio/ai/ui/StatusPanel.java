@@ -33,6 +33,9 @@ final class StatusPanel {
   private final Label pricesHelp;
   private final ScrolledComposite pricesScroll;
   private final Composite pricesRows;
+  private final Composite pricesHeading;
+  private final Link pricesToggle;
+  private boolean pricesShown;
   private Color muted;
 
   StatusPanel(Composite parent, Runnable refreshPrices) {
@@ -55,7 +58,12 @@ final class StatusPanel {
     monthCost = value(false);
     gap();
 
-    Composite pricesHeading = new Composite(panel, SWT.NONE);
+    // The full price list is reference material, so it stays folded away until asked for.
+    pricesToggle = new Link(panel, SWT.NONE);
+    pricesToggle.setToolTipText("List prices per 1M tokens for every model in the picker");
+    pricesToggle.addListener(SWT.Selection, e -> setPricesShown(!pricesShown));
+
+    pricesHeading = new Composite(panel, SWT.NONE);
     GridLayout headingLayout = new GridLayout(3, false);
     headingLayout.marginWidth = 0;
     headingLayout.marginHeight = 0;
@@ -91,7 +99,22 @@ final class StatusPanel {
     pricesRows.setLayout(rowsLayout);
     pricesScroll.setContent(pricesRows);
     pricesScroll.addListener(SWT.Resize, e -> fitPrices());
+    matchPanelBackground();
     showPrices(null);
+    setPricesShown(false);
+  }
+
+  private void setPricesShown(boolean shown) {
+    pricesShown = shown;
+    pricesToggle.setText(shown ? "<a>Hide prices ▾</a>" : "<a>Show prices ▸</a>");
+    for (Control part : new Control[] {pricesHeading, pricesNote, pricesScroll}) {
+      part.setVisible(shown);
+      ((GridData) part.getLayoutData()).exclude = !shown;
+    }
+    if (shown) {
+      fitPrices();
+    }
+    relayout();
   }
 
   Control control() {
@@ -156,7 +179,16 @@ final class StatusPanel {
     ThemeStyles.applyClass(panel, "MsfPanel");
     muted = ThemeStyles.swt(ThemeStyles.MUTED);
     pricesNote.setForeground(muted);
+    matchPanelBackground();
     panel.layout(true, true);
+  }
+
+  // A ScrolledComposite paints its own grey on macOS, which reads as a box inside the panel.
+  private void matchPanelBackground() {
+    Color background = ThemeStyles.swt(ThemeStyles.PANEL);
+    pricesScroll.setBackground(background);
+    pricesRows.setBackground(background);
+    pricesRows.setBackgroundMode(SWT.INHERIT_DEFAULT);
   }
 
   private void heading(String text) {

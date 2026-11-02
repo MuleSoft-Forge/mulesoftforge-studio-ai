@@ -1,6 +1,5 @@
 package com.mulesoftforge.studio.ai.ui;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
@@ -113,8 +112,7 @@ public final class ChatJob extends Job {
       StudioDebugger debugger = StudioDebugger.get();
       session.debugger(debugger.available() ? debugger : null);
       session.appConsole(Consoles.MULE_APP);
-      Path dataWeave = DataWeaveCli.find(AiSettings.dataWeaveCli());
-      session.dataWeave(dataWeave == null ? null : DataWeaveCli.at(dataWeave));
+      session.dataWeave(DataWeaveCli.lookup(AiSettings.dataWeaveCli(), false).cli());
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
       cancelled = true;

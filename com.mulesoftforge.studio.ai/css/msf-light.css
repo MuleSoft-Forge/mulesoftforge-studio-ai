@@ -1,8 +1,8 @@
 /* MuleSoftForge AI — light theme overrides for Studio Light and Eclipse default. */
 IEclipsePreferences#org-eclipse-ui-workbench:com-mulesoftforge-studio-ai {
   preferences:
-    'com.mulesoftforge.studio.ai.panel=240,241,243'
-    'com.mulesoftforge.studio.ai.divider=200,204,210'
+    'com.mulesoftforge.studio.ai.panel=245,250,252'
+    'com.mulesoftforge.studio.ai.divider=208,216,224'
     'com.mulesoftforge.studio.ai.codeBackground=244,245,247'
     'com.mulesoftforge.studio.ai.inlineCode=232,234,238'
     'com.mulesoftforge.studio.ai.muted=110,110,110'
@@ -28,13 +28,18 @@ IEclipsePreferences#org-eclipse-ui-workbench:com-mulesoftforge-studio-ai {
 }
 
 .MsfPanel {
-  background-color: #f0f1f3;
+  background-color: #f5fafc;
 }
 
 .MsfDivider {
-  background-color: #c8ccd2;
+  background-color: #d0d8e0;
 }
 
 .MsfRoot {
-  background-color: #ffffff;
+  background-color: #f5fafc;
+}
+
+.MsfBanner {
+  background-color: #0b3a6e;
+  color: #ffffff;
 }

@@ -50,4 +50,9 @@ interface Transcript {
 
   // Re-apply colours after a Studio theme switch.
   default void applyTheme(Palette palette, Palette.Rgb background, Palette.Rgb foreground) {}
+
+  // The name shown above a message. Speakers stay short ids because saved chats store them.
+  static String label(String speaker) {
+    return "AI".equals(speaker) ? "MuleSoftForge AI" : speaker;
+  }
 }

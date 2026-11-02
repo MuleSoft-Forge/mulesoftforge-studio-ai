@@ -24,10 +24,14 @@ import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
@@ -120,6 +124,7 @@ public class ChatView extends ViewPart {
   // Messages sent in this chat; raw log calls carry the number of the turn they belong to.
   private int turns;
 
+  private Composite banner;
   private Label header;
   private Button rawToggle;
   private StatusPanel status;
@@ -137,14 +142,20 @@ public class ChatView extends ViewPart {
   @Override
   public void createPartControl(Composite parent) {
     root = parent;
-    parent.setLayout(new GridLayout(1, false));
+    GridLayout rootLayout = new GridLayout(1, false);
+    rootLayout.marginWidth = 0;
+    rootLayout.marginHeight = 0;
+    rootLayout.verticalSpacing = 0;
+    parent.setLayout(rootLayout);
     IWorkbenchPage page = getSite().getPage();
     ThemeStyles.applyClass(parent, "MsfRoot");
 
-    // Provider and Settings on the left; version, Raw, History and Feedback on the right.
+    // A dark-blue banner: provider and Settings on the left; version, Raw, History and Feedback on the right.
     Composite top = new Composite(parent, SWT.NONE);
+    banner = top;
     GridLayout topLayout = new GridLayout(7, false);
-    topLayout.marginHeight = 2;
+    topLayout.marginHeight = 6;
+    topLayout.marginWidth = 10;
     top.setLayout(topLayout);
     top.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     header = new Label(top, SWT.NONE);
@@ -170,6 +181,21 @@ public class ChatView extends ViewPart {
     feedback.setText("<a>Feedback</a>");
     feedback.setToolTipText("Report a bug or send feedback to the MuleSoftForge team, as a public GitHub issue");
     feedback.addListener(SWT.Selection, e -> new FeedbackDialog(getSite().getShell()).open());
+    styleBanner();
+
+    // The product site's blue-to-purple line under the banner.
+    Canvas accent = new Canvas(parent, SWT.NO_BACKGROUND);
+    GridData accentData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    accentData.heightHint = 2;
+    accent.setLayoutData(accentData);
+    Color accentFrom = new Color(0, 163, 224);
+    Color accentTo = new Color(109, 93, 252);
+    accent.addPaintListener(e -> {
+      Rectangle area = accent.getClientArea();
+      e.gc.setForeground(accentFrom);
+      e.gc.setBackground(accentTo);
+      e.gc.fillGradientRectangle(0, 0, area.width, area.height, false);
+    });
 
     // The transcript and, beside it, the model and cost. Drag the divider to resize.
     SashForm middle = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
@@ -179,9 +205,9 @@ public class ChatView extends ViewPart {
     transcript.showRaw(AiSettings.rawLog());
     status = new StatusPanel(middle, () -> composer.refreshPrices());
     middle.setWeights(78, 22);
-    middle.setSashWidth(3);
+    middle.setSashWidth(1);
 
-    changes = new ChangesPanel(parent, page, new ChangesPanel.Listener() {
+    changes = new ChangesPanel(parent, page, AiSettings.richTranscript(), new ChangesPanel.Listener() {
       @Override
       public void note(String speaker, String text) {
         append(speaker, text);
@@ -199,7 +225,7 @@ public class ChatView extends ViewPart {
     });
 
     debugBar = new DebugBar(parent, this::askAboutDebugEvent);
-    composer = new Composer(parent, page, new Composer.Listener() {
+    composer = new Composer(parent, page, AiSettings.richTranscript(), new Composer.Listener() {
       @Override
       public void send() {
         ChatView.this.send();
@@ -279,6 +305,25 @@ public class ChatView extends ViewPart {
     }
     if (composer != null) {
       composer.applyTheme();
+    }
+    if (changes != null) {
+      changes.applyTheme();
+    }
+    styleBanner();
+  }
+
+  // The theme's CSS gives the banner and its labels their colours; link colours are not CSS, so white is set here.
+  private void styleBanner() {
+    if (banner == null || banner.isDisposed()) {
+      return;
+    }
+    ThemeStyles.applyClass(banner, "MsfBanner");
+    Color white = banner.getDisplay().getSystemColor(SWT.COLOR_WHITE);
+    for (Control child : banner.getChildren()) {
+      ThemeStyles.applyClass(child, "MsfBanner");
+      if (child instanceof Link link) {
+        link.setLinkForeground(white);
+      }
     }
   }
 

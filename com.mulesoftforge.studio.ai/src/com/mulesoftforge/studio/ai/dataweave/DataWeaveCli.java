@@ -3,6 +3,7 @@ package com.mulesoftforge.studio.ai.dataweave;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -61,9 +62,66 @@ public final class DataWeaveCli {
     return executable;
   }
 
+  // A runnable cli and its version (null when it does not say), or, with cli null, why there is none.
+  public record Lookup(DataWeaveCli cli, String version, String problem) {}
+
+  private record Probed(String key, Lookup lookup) {}
+
+  private static volatile Probed probed;
+
+  // Never throws. A dw that is found but does not run counts as missing, so the tools that need it are left out.
+  // The answer is kept until the path or the binary changes, unless recheck.
+  public static Lookup lookup(String configured, boolean recheck) {
+    Path path = find(configured);
+    if (path == null) {
+      return new Lookup(null, null, configured != null && !configured.isBlank()
+          ? "No runnable dw at " + configured.strip() + "."
+          : "dw was not found on the PATH, in ~/.dw/bin or in Homebrew.");
+    }
+    String key = path + "\n" + modified(path);
+    Probed last = probed;
+    if (!recheck && last != null && last.key().equals(key)) {
+      return last.lookup();
+    }
+    Lookup found;
+    try {
+      Output out = exec(List.of(path.toString(), "--version"), null, Duration.ofSeconds(15), () -> false);
+      Matcher m = VERSION.matcher(out.text());
+      String version = m.find() ? m.group(1) : null;
+      if (out.exit() == 0 || version != null) {
+        found = new Lookup(at(path), version, null);
+      } else {
+        String said = clean(out.text()).lines().findFirst().orElse("").strip();
+        found = new Lookup(null, null, "dw at " + path + " does not run: it exited with " + out.exit()
+            + (said.isEmpty() ? "." : " (" + said + ")."));
+      }
+    } catch (Exception e) {
+      found = new Lookup(null, null, "dw at " + path + " does not run: "
+          + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+    }
+    probed = new Probed(key, found);
+    return found;
+  }
+
+  private static long modified(Path path) {
+    try {
+      return Files.getLastModifiedTime(path).toMillis();
+    } catch (IOException e) {
+      return 0;
+    }
+  }
+
   // The configured path when it is a runnable file, otherwise dw on the PATH, in ~/.dw/bin or from Homebrew; null
-  // when there is none.
+  // when there is none, including when the configured path is not a valid path.
   public static Path find(String configured) {
+    try {
+      return search(configured);
+    } catch (RuntimeException e) {
+      return null;
+    }
+  }
+
+  private static Path search(String configured) {
     if (configured != null && !configured.isBlank()) {
       Path path = Path.of(configured.strip());
       if (Files.isDirectory(path)) {
@@ -76,7 +134,11 @@ public final class DataWeaveCli {
     if (pathEnv != null) {
       for (String dir : pathEnv.split(java.io.File.pathSeparator)) {
         if (!dir.isBlank()) {
-          candidates.add(Path.of(dir, binaryName()));
+          try {
+            candidates.add(Path.of(dir, binaryName()));
+          } catch (InvalidPathException skipped) {
+            // Another PATH entry may still hold dw.
+          }
         }
       }
     }

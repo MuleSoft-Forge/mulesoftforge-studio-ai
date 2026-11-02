@@ -225,7 +225,7 @@ final class PlainTranscript implements Transcript {
   // Returns the offset where the body starts.
   private int label(String speaker, boolean bodyOnNewLine) {
     int start = text.getCharCount();
-    String label = speaker + ":";
+    String label = Transcript.label(speaker) + ":";
     text.append((start == 0 ? "" : "\n\n") + label + (bodyOnNewLine ? "\n" : " "));
     StyleRange style = new StyleRange();
     style.start = start == 0 ? 0 : start + 2;

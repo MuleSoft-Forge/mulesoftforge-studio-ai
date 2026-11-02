@@ -4,7 +4,9 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.eclipse.core.resources.IFile;
@@ -14,26 +16,17 @@ import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.Viewer;
 import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.accessibility.AccessibleAdapter;
-import org.eclipse.swt.accessibility.AccessibleEvent;
-import org.eclipse.swt.custom.StyledText;
-import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Combo;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
-import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.console.TextConsole;
@@ -74,154 +67,142 @@ final class Composer {
   static final String EXPLAIN_EVENT_PROMPT = "Explain what is happening at this processor.";
   static final String FIX_CONSOLE_PROMPT = "Explain the error in this console output and fix its cause.";
   static final String DIAGNOSE_CONSOLE_PROMPT = "Find the cause of the error in this console output.";
+  static final String PLACEHOLDER = "Ask about this Mule project, or ask for a change. Enter sends, Shift+Enter"
+      + " adds a line, the mic dictates.";
+  static final String CONTEXT_HELP = "Attach files, folders, the editor selection, the project's file list,"
+      + " Studio's problems, Console output, or a clipboard image. Pasting an image into the message box attaches"
+      + " it too.";
   private static final int MAX_CONSOLES_LISTED = 6;
 
   private final Composite root;
-  private final Composite panel;
   private final IWorkbenchPage page;
   private final Listener listener;
   private final List<Attachment> attached = new ArrayList<>();
-  private final Composite attachedRow;
-  private final Label attachedLabel;
-  private final Text input;
-  private final Combo modePicker;
-  private final Combo modelPicker;
-  private final ColorButton send;
-  private final Button includeFile;
+  private final ComposerUi ui;
+  private List<String> pickerModels = List.of();
+  private Map<String, String> shortPrices = Map.of();
+  private ChatMode mode = AiSettings.chatMode();
   private boolean busy;
 
-  Composer(Composite root, IWorkbenchPage page, Listener listener) {
+  // html: show the message box as a page in Eclipse's browser, falling back to SWT controls if it cannot start.
+  Composer(Composite root, IWorkbenchPage page, boolean html, Listener listener) {
     this.root = root;
     this.page = page;
     this.listener = listener;
+    ui = createUi(root, html, new ComposerUi.Events() {
+      @Override
+      public void sendPressed() {
+        if (busy) {
+          listener.cancel();
+        } else {
+          listener.send();
+        }
+      }
 
-    // A grey panel behind the message box and its controls; text boxes and pickers keep their own white.
-    panel = new Composite(root, SWT.NONE);
-    GridLayout panelLayout = new GridLayout(1, false);
-    panelLayout.marginWidth = 6;
-    panelLayout.marginHeight = 6;
-    panel.setLayout(panelLayout);
-    panel.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
-    ThemeStyles.applyClass(panel, "MsfPanel");
-    panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
-
-    attachedRow = new Composite(panel, SWT.NONE);
-    GridLayout attachedLayout = new GridLayout(2, false);
-    attachedLayout.marginHeight = 0;
-    attachedRow.setLayout(attachedLayout);
-    attachedRow.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
-    attachedLabel = new Label(attachedRow, SWT.WRAP);
-    attachedLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-    Link removeAttached = new Link(attachedRow, SWT.NONE);
-    removeAttached.setText("<a>Remove</a>");
-    removeAttached.setToolTipText("Do not send these with the next message");
-    removeAttached.addListener(SWT.Selection, e -> clearAttached());
-
-    input = new Text(panel, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
-    GridData inputData = new GridData(SWT.FILL, SWT.BOTTOM, true, false);
-    inputData.heightHint = input.getLineHeight() * 4;
-    input.setLayoutData(inputData);
-    input.setMessage("Ask about this Mule project, or ask for a change. Enter sends, Shift+Enter adds a line,"
-        + " the mic dictates.");
-    input.addListener(SWT.KeyDown, e -> {
-      boolean enter = e.keyCode == SWT.CR || e.keyCode == SWT.KEYPAD_CR;
-      if (enter && (e.stateMask & SWT.SHIFT) == 0) {
-        e.doit = false;
+      @Override
+      public void enterPressed() {
         if (!busy) {
           listener.send();
         }
       }
-    });
 
-    Composite actions = new Composite(panel, SWT.NONE);
-    GridLayout actionsLayout = new GridLayout(8, false);
-    actionsLayout.verticalSpacing = 2;
-    actions.setLayout(actionsLayout);
-    actions.setLayoutData(new GridData(SWT.FILL, SWT.BOTTOM, true, false));
-    modePicker = new Combo(actions, SWT.DROP_DOWN | SWT.READ_ONLY);
-    for (ChatMode mode : ChatMode.values()) {
-      modePicker.add(mode.label);
-    }
-    modePicker.select(AiSettings.chatMode().ordinal());
-    modePicker.addListener(SWT.Selection, e -> saveMode());
-    StringBuilder modeHelp = new StringBuilder();
-    for (ChatMode mode : ChatMode.values()) {
-      modeHelp.append(mode.label).append(": ").append(mode.description).append('\n');
-    }
-    modePicker.setToolTipText(modeHelp.toString().trim());
-
-    modelPicker = new Combo(actions, SWT.DROP_DOWN);
-    GridData pickerData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-    pickerData.widthHint = 200;
-    modelPicker.setLayoutData(pickerData);
-    modelPicker.addListener(SWT.Selection, e -> chooseModel());
-    modelPicker.addListener(SWT.DefaultSelection, e -> chooseModel());
-    modelPicker.addListener(SWT.FocusOut, e -> chooseModel());
-
-    Button addContext = new Button(actions, SWT.PUSH);
-    addContext.setText("+ Context");
-    addContext.setToolTipText("Attach files, folders, the editor selection, the project's file list, Studio's problems,"
-        + " Console output, or a clipboard image. Pasting an image into the message box attaches it too.");
-    addContext.addListener(SWT.Selection, e -> showContextMenu(addContext));
-    includeFile = new Button(actions, SWT.CHECK);
-    includeFile.setText("Include open file");
-    includeFile.setSelection(true);
-    new Label(actions, SWT.NONE).setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-    Button clear = new Button(actions, SWT.PUSH);
-    clear.setText("New chat");
-    clear.addListener(SWT.Selection, e -> {
-      if (!busy) {
-        listener.newChat();
-      }
-    });
-    Button mic = new Button(actions, SWT.PUSH);
-    mic.setImage(Activator.image("icons/mic16.png"));
-    mic.setToolTipText(Dictation.hint());
-    mic.getAccessible().addAccessibleListener(new AccessibleAdapter() {
       @Override
-      public void getName(AccessibleEvent e) {
-        e.result = "Dictate";
+      public void newChat() {
+        if (!busy) {
+          listener.newChat();
+        }
       }
-    });
-    mic.addListener(SWT.Selection, e -> dictate());
-    send = new ColorButton(actions);
-    send.setText("Send");
-    send.setTone(ColorButton.Tone.GO);
-    send.addListener(SWT.Selection, e -> {
-      if (busy) {
-        listener.cancel();
-      } else {
-        listener.send();
+
+      @Override
+      public void contextMenu(Point where) {
+        showContextMenu(where);
+      }
+
+      @Override
+      public void modeChosen(int index) {
+        if (index >= 0 && index < ChatMode.values().length) {
+          mode = ChatMode.values()[index];
+          saveMode();
+        }
+      }
+
+      @Override
+      public void modelChosen(String model) {
+        chooseModel(model);
+      }
+
+      @Override
+      public void modelMenu(Point where) {
+        showModelMenu(where);
+      }
+
+      @Override
+      public void includeFileChanged(boolean include) {
+        // Read when sending.
+      }
+
+      @Override
+      public void dictate() {
+        Composer.this.dictate();
+      }
+
+      @Override
+      public void removeAttached(int index) {
+        if (index < 0) {
+          clearAttached();
+        } else if (index < attached.size()) {
+          attached.remove(index);
+          showAttached();
+        }
       }
     });
 
+    List<String> labels = new ArrayList<>();
+    StringBuilder modeHelp = new StringBuilder();
+    for (ChatMode each : ChatMode.values()) {
+      labels.add(each.label);
+      modeHelp.append(each.label).append(": ").append(each.description).append('\n');
+    }
+    ui.setModes(labels, mode.ordinal(), modeHelp.toString().trim());
     showAttached();
     refreshModels();
   }
 
+  private static ComposerUi createUi(Composite root, boolean html, ComposerUi.Events events) {
+    if (html) {
+      try {
+        return new HtmlComposerUi(root, events);
+      } catch (Throwable e) {
+        Activator.logError("Rich message box unavailable; using the plain one", e);
+      }
+    }
+    return new SwtComposerUi(root, events);
+  }
+
   String prompt() {
-    return input.getText().trim();
+    return ui.text().trim();
   }
 
   void setPrompt(String text) {
-    input.setText(text);
+    ui.setText(text);
   }
 
   void focus() {
-    input.setFocus();
+    ui.focus();
   }
 
   ChatMode mode() {
-    return ChatMode.values()[modePicker.getSelectionIndex()];
+    return mode;
   }
 
-  void setMode(ChatMode mode) {
-    modePicker.select(mode.ordinal());
+  void setMode(ChatMode next) {
+    mode = next;
+    ui.selectMode(next.ordinal());
     saveMode();
   }
 
   boolean includeOpenFile() {
-    return includeFile.getSelection();
+    return ui.includeFile();
   }
 
   List<Attachment> attached() {
@@ -243,11 +224,10 @@ final class Composer {
         .orElse(null);
     if (event != null) {
       if (prompt().isEmpty()) {
-        input.setText(event.reportsFailure() ? WHY_FAILED_PROMPT : EXPLAIN_EVENT_PROMPT);
-        input.setSelection(input.getText().length());
+        ui.setText(event.reportsFailure() ? WHY_FAILED_PROMPT : EXPLAIN_EVENT_PROMPT);
       }
       showAttached();
-      input.setFocus();
+      ui.focus();
       return;
     }
     Attachment failure = result.attached().stream().filter(Attachment::reportsFailure).findFirst().orElse(null);
@@ -263,12 +243,11 @@ final class Composer {
         listener.note("Note", "Switched to Agent mode so the AI can propose fixes. Pick Ask to only get an"
             + " explanation.");
       }
-      input.setText(!console ? FIX_PROBLEMS_PROMPT
+      ui.setText(!console ? FIX_PROBLEMS_PROMPT
           : mode() == ChatMode.DIAGNOSE ? DIAGNOSE_CONSOLE_PROMPT : FIX_CONSOLE_PROMPT);
-      input.setSelection(input.getText().length());
     }
     showAttached();
-    input.setFocus();
+    ui.focus();
   }
 
   private static boolean sameTarget(Attachment a, Attachment b) {
@@ -293,16 +272,7 @@ final class Composer {
       attachClipboardImage();
       return;
     }
-    Control focus = display.getFocusControl();
-    if (focus instanceof Text text) {
-      text.paste();
-    } else if (focus instanceof Combo combo) {
-      combo.paste();
-    } else if (focus instanceof StyledText styled) {
-      styled.paste();
-    } else {
-      input.paste();
-    }
+    ui.paste();
   }
 
   private void attachClipboardImage() {
@@ -333,24 +303,17 @@ final class Composer {
 
   void setBusy(boolean busy) {
     this.busy = busy;
-    send.setEnabled(true);
-    send.setText(busy ? "Cancel" : "Send");
-    send.setTone(busy ? ColorButton.Tone.STOP : ColorButton.Tone.GO);
-    modelPicker.setEnabled(!busy);
-    modePicker.setEnabled(!busy);
+    ui.setBusy(busy);
   }
 
   void setCancelling() {
-    send.setEnabled(false);
-    send.setText("Cancelling…");
+    ui.setCancelling();
   }
 
   void applyTheme() {
-    if (panel.isDisposed()) {
-      return;
+    if (!ui.control().isDisposed()) {
+      ui.applyTheme();
     }
-    ThemeStyles.applyClass(panel, "MsfPanel");
-    send.redraw();
   }
 
   // The curated models for the current provider, those Refresh models last fetched, and whatever is chosen,
@@ -365,26 +328,26 @@ final class Composer {
   }
 
   private void refreshModels(boolean refetchPrices) {
-    if (modelPicker.isDisposed()) {
+    if (ui.control().isDisposed()) {
       return;
     }
     Provider provider = AiSettings.provider();
     String current = AiSettings.model(provider);
     List<String> models = ModelLists.forPicker(provider, AiSettings.fetchedModels(provider), current);
-    modelPicker.setItems(models.toArray(String[]::new));
-    modelPicker.setText(current);
+    pickerModels = models;
+    ui.setModels(models, current);
     showPrices(provider, current, models, refetchPrices);
   }
 
-  // Focus first, then start dictation once the text box is the focused control, so it types there.
+  // Focus first, then start dictation once the message box is focused, so it types there.
   private void dictate() {
-    input.setFocus();
-    input.setSelection(input.getText().length());
-    input.getDisplay().asyncExec(() -> {
-      if (input.isDisposed()) {
+    ui.focus();
+    Control control = ui.control();
+    control.getDisplay().asyncExec(() -> {
+      if (control.isDisposed()) {
         return;
       }
-      String problem = Dictation.start(input);
+      String problem = Dictation.start();
       if (problem != null) {
         listener.note("Note", problem);
       }
@@ -399,12 +362,12 @@ final class Composer {
     }
   }
 
-  private void chooseModel() {
+  private void chooseModel(String typed) {
     Provider provider = AiSettings.provider();
     String current = AiSettings.model(provider);
-    String chosen = modelPicker.getText().trim();
+    String chosen = typed == null ? "" : typed.trim();
     if (chosen.isEmpty()) {
-      modelPicker.setText(current);
+      ui.setModelText(current);
       return;
     }
     if (chosen.equals(current)) {
@@ -436,12 +399,19 @@ final class Composer {
       }
       table.append("\n\nType any other model id and press Enter.");
       StatusPanel.PriceList prices = priceList(provider, current, models, found);
-      Display display = modelPicker.getDisplay();
-      Ui.async(display, modelPicker, () -> {
-        if (!current.equals(modelPicker.getText().trim())) {
+      Control control = ui.control();
+      Ui.async(control.getDisplay(), control, () -> {
+        if (!current.equals(ui.modelText().trim())) {
           return;
         }
-        modelPicker.setToolTipText(table.toString());
+        ui.setModelHelp(table.toString());
+        Map<String, String> byModel = new HashMap<>();
+        for (int i = 0; i < models.size(); i++) {
+          if (found.get(i) != null) {
+            byModel.put(models.get(i), found.get(i));
+          }
+        }
+        shortPrices = byModel;
         listener.modelShown(current, price, table.toString(), prices);
       });
       return Status.OK_STATUS;
@@ -508,19 +478,47 @@ final class Composer {
   }
 
   private void showAttached() {
-    boolean any = !attached.isEmpty();
-    if (any) {
-      List<String> labels = attached.stream().map(Attachment::label).toList();
-      attachedLabel.setText("Attached: " + String.join(", ", labels));
-      attachedLabel.setToolTipText("Sent with your next message, then cleared:\n" + String.join("\n", labels));
-    }
-    ((GridData) attachedRow.getLayoutData()).exclude = !any;
-    attachedRow.setVisible(any);
-    root.layout(true, true);
+    List<String> labels = attached.stream().map(Attachment::label).toList();
+    ui.showAttached(labels, "Sent with your next message, then cleared:\n" + String.join("\n", labels));
   }
 
-  private void showContextMenu(Control anchor) {
-    Menu menu = new Menu(anchor);
+  // The picker's models with their list prices, then a way to type any other id.
+  private void showModelMenu(Point where) {
+    if (busy) {
+      return;
+    }
+    Provider provider = AiSettings.provider();
+    String current = AiSettings.model(provider);
+    Menu menu = new Menu(ui.control());
+    Menus.disposeOnHide(menu);
+    for (String model : pickerModels) {
+      MenuItem item = new MenuItem(menu, SWT.RADIO);
+      String price = shortPrices.get(model);
+      item.setText(model.replace("&", "&&") + (price == null ? "" : "\t" + price));
+      item.setSelection(model.equals(current));
+      item.addListener(SWT.Selection, e -> {
+        if (item.getSelection()) {
+          chooseModel(model);
+        }
+      });
+    }
+    new MenuItem(menu, SWT.SEPARATOR);
+    MenuItem other = new MenuItem(menu, SWT.PUSH);
+    other.setText("Other model id…");
+    other.addListener(SWT.Selection, e -> {
+      InputDialog dialog = new InputDialog(root.getShell(), "Model",
+          "Type a " + provider.label + " model id, for example one from Refresh models in Preferences.", current,
+          null);
+      if (dialog.open() == Window.OK) {
+        chooseModel(dialog.getValue());
+      }
+    });
+    menu.setLocation(where);
+    menu.setVisible(true);
+  }
+
+  private void showContextMenu(Point where) {
+    Menu menu = new Menu(ui.control());
     Menus.disposeOnHide(menu);
     MenuItem files = new MenuItem(menu, SWT.PUSH);
     files.setText("Files or folders…");
@@ -570,8 +568,7 @@ final class Composer {
       item.setEnabled(!Consoles.isEmpty(console));
       item.addListener(SWT.Selection, e -> attach(Consoles.attach(console)));
     }
-    Rectangle bounds = anchor.getBounds();
-    menu.setLocation(anchor.getParent().toDisplay(bounds.x, bounds.y + bounds.height));
+    menu.setLocation(where);
     menu.setVisible(true);
   }
 

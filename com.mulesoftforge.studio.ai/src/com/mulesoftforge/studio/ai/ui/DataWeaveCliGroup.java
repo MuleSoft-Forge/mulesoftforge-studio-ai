@@ -93,26 +93,23 @@ final class DataWeaveCliGroup {
 
   private void detect() {
     String configured = path();
+    status.setForeground(null);
     status.setText("Looking for the DataWeave CLI…");
     Display display = status.getDisplay();
     Job.create("Look for the DataWeave CLI", monitor -> {
+      DataWeaveCli.Lookup lookup = DataWeaveCli.lookup(configured, true);
       String text;
-      Path found = DataWeaveCli.find(configured);
-      if (found == null) {
-        text = !configured.isEmpty() ? "No runnable dw at " + configured + "."
-            : CliDownload.current() == null ? "Not found, and MuleSoft publishes no DataWeave CLI for this computer."
-                + " Proposals are still checked, without compiling their DataWeave."
-            : "Not found. Download it, or install it and give its path.";
+      if (lookup.cli() == null) {
+        text = lookup.problem() + " The DataWeave tools (run_dataweave, validate_dataweave) are off, and proposals"
+            + " are checked without compiling their DataWeave. "
+            + (CliDownload.current() == null ? "MuleSoft publishes no DataWeave CLI for this computer."
+                : "Download it, or install it and give its path.");
       } else {
-        String version = null;
-        try {
-          version = DataWeaveCli.at(found).version();
-        } catch (Exception e) {
-          Activator.logFailure("Could not read the DataWeave CLI version", e);
-        }
-        text = "Found dw " + (version == null ? "" : version + " ") + "at " + found + ".";
+        text = "Found dw " + (lookup.version() == null ? "" : lookup.version() + " ") + "at "
+            + lookup.cli().executable() + ".";
       }
       Ui.async(display, status, () -> {
+        status.setForeground(lookup.cli() == null ? display.getSystemColor(SWT.COLOR_RED) : null);
         status.setText(text);
         status.getParent().layout(true, true);
       });
