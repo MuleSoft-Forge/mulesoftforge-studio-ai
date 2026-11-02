@@ -5,7 +5,7 @@
     <category id="com.mulesoftforge.studio.ai.category" name="MuleSoftForge"/>
     <view
         id="com.mulesoftforge.studio.ai.chat"
-        name="MuleSoftForge AI"
+        name="MuleSoftForge Studio AI"
         category="com.mulesoftforge.studio.ai.category"
         class="com.mulesoftforge.studio.ai.ui.ChatView"
         icon="icons/forge16.png"
@@ -14,20 +14,20 @@
   <extension point="org.eclipse.ui.preferencePages">
     <page
         id="com.mulesoftforge.studio.ai.prefs"
-        name="MuleSoftForge AI"
+        name="MuleSoftForge Studio AI"
         class="com.mulesoftforge.studio.ai.ui.AiPreferencePage"/>
   </extension>
 
   <extension point="org.eclipse.ui.commands">
     <command
         id="com.mulesoftforge.studio.ai.ask"
-        name="Send to MuleSoftForge AI"
-        description="Open MuleSoftForge AI with the selected lines, files, folders or processors attached"
+        name="Send to MuleSoftForge Studio AI"
+        description="Open MuleSoftForge Studio AI with the selected lines, files, folders or processors attached"
         categoryId="com.mulesoftforge.studio.ai.commands"/>
     <command
         id="com.mulesoftforge.studio.ai.askDebugEvent"
-        name="Ask MuleSoftForge AI about this event"
-        description="Open MuleSoftForge AI with the event Studio's Mule debugger is stopped at attached"
+        name="Ask MuleSoftForge Studio AI about this event"
+        description="Open MuleSoftForge Studio AI with the event Studio's Mule debugger is stopped at attached"
         categoryId="com.mulesoftforge.studio.ai.commands"/>
     <category id="com.mulesoftforge.studio.ai.commands" name="MuleSoftForge"/>
   </extension>
@@ -52,11 +52,11 @@
 
   <extension point="org.eclipse.ui.menus">
     <menuContribution locationURI="toolbar:org.eclipse.ui.main.toolbar?after=additions">
-      <toolbar id="com.mulesoftforge.studio.ai.toolbar" label="MuleSoftForge AI">
+      <toolbar id="com.mulesoftforge.studio.ai.toolbar" label="MuleSoftForge Studio AI">
         <command
             commandId="com.mulesoftforge.studio.ai.ask"
             label="Send to AI"
-            tooltip="Send the selection to MuleSoftForge AI"
+            tooltip="Send the selection to MuleSoftForge Studio AI"
             style="push"/>
       </toolbar>
     </menuContribution>
@@ -64,13 +64,13 @@
     <menuContribution locationURI="toolbar:org.mule.tooling.ui.contribution.debugger.view?after=additions">
       <command
           commandId="com.mulesoftforge.studio.ai.askDebugEvent"
-          tooltip="Ask MuleSoftForge AI about the event the debugger is stopped at"
+          tooltip="Ask MuleSoftForge Studio AI about the event the debugger is stopped at"
           style="push"/>
     </menuContribution>
     <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
       <command
           commandId="com.mulesoftforge.studio.ai.ask"
-          label="Send to MuleSoftForge AI"
+          label="Send to MuleSoftForge Studio AI"
           style="push">
         <visibleWhen checkEnabled="false">
           <or>
@@ -135,7 +135,7 @@
   </extension>
 
   <extension point="org.eclipse.ui.themes">
-    <themeElementCategory id="com.mulesoftforge.studio.ai.theme" label="MuleSoftForge AI"/>
+    <themeElementCategory id="com.mulesoftforge.studio.ai.theme" label="MuleSoftForge Studio AI"/>
     <colorDefinition id="com.mulesoftforge.studio.ai.panel" categoryId="com.mulesoftforge.studio.ai.theme"
         label="Panel background" value="240,241,243"/>
     <colorDefinition id="com.mulesoftforge.studio.ai.divider" categoryId="com.mulesoftforge.studio.ai.theme"

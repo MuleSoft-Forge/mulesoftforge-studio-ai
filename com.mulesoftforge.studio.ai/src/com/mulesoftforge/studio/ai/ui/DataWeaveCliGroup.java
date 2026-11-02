@@ -22,7 +22,7 @@ import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 
-// Preferences > MuleSoftForge AI > DataWeave CLI: where dw is, whether it was found and which version, and a
+// Preferences > MuleSoftForge Studio AI > DataWeave CLI: where dw is, whether it was found and which version, and a
 // download of MuleSoft's release for this computer. Looking and downloading run in jobs.
 final class DataWeaveCliGroup {
   private final Text path;

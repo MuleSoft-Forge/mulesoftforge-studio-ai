@@ -25,7 +25,7 @@ public class DataWeaveAction extends Action implements ISourceViewerAware, IExec
   private ISourceViewer viewer;
 
   public DataWeaveAction() {
-    super("Send to MuleSoftForge AI");
+    super("Send to MuleSoftForge Studio AI");
     setImageDescriptor(AbstractUIPlugin.imageDescriptorFromPlugin(Activator.PLUGIN_ID, "icons/forge16.png"));
   }
 
@@ -33,10 +33,10 @@ public class DataWeaveAction extends Action implements ISourceViewerAware, IExec
   public void setInitializationData(IConfigurationElement config, String propertyName, Object data) {
     fix = "fix".equals(data);
     if (fix) {
-      setText("Fix with MuleSoftForge AI");
-      setToolTipText("Send this script and its errors to MuleSoftForge AI, then review and apply the fix");
+      setText("Fix with MuleSoftForge Studio AI");
+      setToolTipText("Send this script and its errors to MuleSoftForge Studio AI, then review and apply the fix");
     } else {
-      setToolTipText("Attach the selected DataWeave, or the whole script, to the MuleSoftForge AI chat");
+      setToolTipText("Attach the selected DataWeave, or the whole script, to the MuleSoftForge Studio AI chat");
     }
   }
 
@@ -71,8 +71,8 @@ public class DataWeaveAction extends Action implements ISourceViewerAware, IExec
         view.attach(new Attachments.Result(List.of(script.attachment(true)), List.of()));
       }
     } catch (Exception e) {
-      Activator.logError("MuleSoftForge AI could not use the DataWeave editor", e);
-      MessageDialog.openError(window.getShell(), "MuleSoftForge AI",
+      Activator.logError("MuleSoftForge Studio AI could not use the DataWeave editor", e);
+      MessageDialog.openError(window.getShell(), "MuleSoftForge Studio AI",
           "Could not send the DataWeave script: " + Errors.describe(e));
     }
   }

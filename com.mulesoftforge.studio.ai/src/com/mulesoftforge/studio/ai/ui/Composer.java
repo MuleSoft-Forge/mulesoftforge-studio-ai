@@ -385,7 +385,7 @@ final class Composer {
   // The price list is fetched over the network the first time, so prices are looked up in a job.
   private void showPrices(Provider provider, String current, List<String> models, boolean refetch) {
     listener.modelShown(current, null, null, null);
-    Job job = Job.create("MuleSoftForge AI model prices", monitor -> {
+    Job job = Job.create("MuleSoftForge Studio AI model prices", monitor -> {
       if (refetch) {
         Pricing.refresh();
       }

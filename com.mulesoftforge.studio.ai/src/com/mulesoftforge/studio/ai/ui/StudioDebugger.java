@@ -192,7 +192,7 @@ public final class StudioDebugger implements DebugSession {
     } catch (Throwable e) {
       if (!warned) {
         warned = true;
-        Activator.logError("MuleSoftForge AI cannot follow Studio's Mule debugger in this Studio (" + reason + ")", e);
+        Activator.logError("MuleSoftForge Studio AI cannot follow Studio's Mule debugger in this Studio (" + reason + ")", e);
       }
       return false;
     }
@@ -200,7 +200,7 @@ public final class StudioDebugger implements DebugSession {
 
   private Object handler(Class<?> type) {
     InvocationHandler invocation = (proxy, method, args) -> switch (method.getName()) {
-      case "toString" -> "MuleSoftForge AI debugger listener";
+      case "toString" -> "MuleSoftForge Studio AI debugger listener";
       case "hashCode" -> System.identityHashCode(proxy);
       case "equals" -> proxy == args[0];
       case "onMessageArrived" -> {
@@ -237,7 +237,7 @@ public final class StudioDebugger implements DebugSession {
       try {
         listener.run();
       } catch (RuntimeException e) {
-        Activator.logError("MuleSoftForge AI debugger listener failed", e);
+        Activator.logError("MuleSoftForge Studio AI debugger listener failed", e);
       }
     }
   }
@@ -254,7 +254,7 @@ public final class StudioDebugger implements DebugSession {
   private Object callback(BiConsumer<String, Object[]> onEvent) throws ClassNotFoundException {
     Class<?> type = bundle.loadClass(CALLBACK);
     InvocationHandler invocation = (proxy, method, args) -> switch (method.getName()) {
-      case "toString" -> "MuleSoftForge AI debugger callback";
+      case "toString" -> "MuleSoftForge Studio AI debugger callback";
       case "hashCode" -> System.identityHashCode(proxy);
       case "equals" -> proxy == args[0];
       default -> {

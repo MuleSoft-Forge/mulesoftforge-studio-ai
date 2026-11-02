@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for reporting. Issues here are public. **Never paste API keys, client secrets or tokens**, and
         leave out customer data. Error dumps from the plugin show HTTP headers and bodies; check them before
-        pasting. You can also report from Studio: **Feedback** in the MuleSoftForge AI view.
+        pasting. You can also report from Studio: **Feedback** in the MuleSoftForge Studio AI view.
   - type: textarea
     id: what-happened
     attributes:
@@ -33,7 +33,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      description: Shown in the MuleSoftForge AI view header, for example v0.5.7.
+      description: Shown in the MuleSoftForge Studio AI view header, for example v0.5.7.
     validations:
       required: true
   - type: dropdown

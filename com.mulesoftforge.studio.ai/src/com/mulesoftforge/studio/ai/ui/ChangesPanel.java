@@ -200,7 +200,7 @@ final class ChangesPanel {
         }
         ready.add(p);
       } catch (Exception e) {
-        Activator.logFailure("MuleSoftForge AI could not check " + p.change().path(), e);
+        Activator.logFailure("MuleSoftForge Studio AI could not check " + p.change().path(), e);
         listener.note("Error", "Not written: " + Errors.describe(e));
       }
     }
@@ -219,7 +219,7 @@ final class ChangesPanel {
       List<FileChange> changes = batch.stream().map(Pending::change).toList();
       entry.getKey().applyAsync(changes, page, error -> Ui.async(display, control, () -> {
         if (error != null) {
-          Activator.logFailure("MuleSoftForge AI could not write changes", error);
+          Activator.logFailure("MuleSoftForge Studio AI could not write changes", error);
           listener.note("Error", "Not written: " + Errors.describe(error));
           return;
         }

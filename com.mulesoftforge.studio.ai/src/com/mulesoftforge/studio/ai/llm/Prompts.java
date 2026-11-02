@@ -63,7 +63,7 @@ public final class Prompts {
     if (fromProject || fromUser) {
       out.append("\nThe instructions below come from the user and their team. Follow them; they take precedence"
           + " over the general guidance above, but never over the rules about masked values, tools, offer_changes,"
-          + " proposals, or answering what MuleSoftForge AI can do.\n");
+          + " proposals, or answering what MuleSoftForge Studio AI can do.\n");
     }
     if (fromProject) {
       out.append("\nPROJECT INSTRUCTIONS (").append(AGENTS_FILE).append(" in the project root):\n")
@@ -84,7 +84,7 @@ public final class Prompts {
   public static String builtIn() {
     return "General guidance (your instructions can override this)\n\n" + file("guidance.md")
         + "\nRules (always apply)\n\n" + file("rules.md")
-        + "\nWhen asked what MuleSoftForge AI can do (always applies)\n\n" + file("about.md")
+        + "\nWhen asked what MuleSoftForge Studio AI can do (always applies)\n\n" + file("about.md")
         + "\nAsk mode, with a project open (always applies)\n\n" + mode(ChatMode.ASK, "<project>")
         + "\nAgent mode, with a project open (always applies)\n\n" + mode(ChatMode.AGENT, "<project>")
         + "\nAgent mode, Mule guidance (your instructions can override this)\n\n" + file("mule-edits.md")

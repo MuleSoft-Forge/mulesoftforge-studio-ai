@@ -53,6 +53,6 @@ interface Transcript {
 
   // The name shown above a message. Speakers stay short ids because saved chats store them.
   static String label(String speaker) {
-    return "AI".equals(speaker) ? "MuleSoftForge AI" : speaker;
+    return "AI".equals(speaker) ? "MuleSoftForge Studio AI" : speaker;
   }
 }

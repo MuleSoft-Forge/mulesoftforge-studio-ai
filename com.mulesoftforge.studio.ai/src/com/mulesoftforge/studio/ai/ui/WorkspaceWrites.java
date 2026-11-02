@@ -30,7 +30,7 @@ final class WorkspaceWrites {
   // text; done gets null, or what failed.
   static Job job(IProject project, Map<String, String> contents, Consumer<Exception> done) {
     ISchedulingRule rule = rule(project, contents.keySet());
-    Job job = new Job("Apply MuleSoftForge AI changes") {
+    Job job = new Job("Apply MuleSoftForge Studio AI changes") {
       @Override
       protected IStatus run(IProgressMonitor monitor) {
         try {

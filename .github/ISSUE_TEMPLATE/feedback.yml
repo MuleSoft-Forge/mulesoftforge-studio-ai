@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for the feedback. Issues here are public. **Never paste API keys, client secrets or tokens**, and
-        leave out customer data. You can also send feedback from Studio: **Feedback** in the MuleSoftForge AI view.
+        leave out customer data. You can also send feedback from Studio: **Feedback** in the MuleSoftForge Studio AI view.
   - type: textarea
     id: feedback
     attributes:

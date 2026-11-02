@@ -28,7 +28,7 @@ import org.eclipse.ui.IWorkbenchPage;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 
 // The script in one of Studio's DataWeave editors (Transform Message and others), captured when the user picks a
-// MuleSoftForge AI item from its context menu. Offsets are in the viewer's document; the editor may show only a
+// MuleSoftForge Studio AI item from its context menu. Offsets are in the viewer's document; the editor may show only a
 // region of it, so text and lines are taken from that region. Runs on the UI thread.
 final class DataWeaveScript {
   static final String PROBLEMS_SCOPE = "the DataWeave script";
@@ -167,17 +167,17 @@ final class DataWeaveScript {
       }
       if (showing.size() > 1) {
         return "More than one open DataWeave editor shows this script, so the fix was not applied. Choose Fix with"
-            + " MuleSoftForge AI again in the one to change.";
+            + " MuleSoftForge Studio AI again in the one to change.";
       }
       if (showing.isEmpty()) {
         return "No open DataWeave editor shows the script this fix was for. Select the component so its script shows"
             + " in Transform Message, then click Apply again. If the script has changed, choose Fix with"
-            + " MuleSoftForge AI again.";
+            + " MuleSoftForge Studio AI again.";
       }
       target = showing.get(0);
     }
     if (!script(target).equals(text)) {
-      return "The script has changed since it was sent, so the fix was not applied. Choose Fix with MuleSoftForge AI"
+      return "The script has changed since it was sent, so the fix was not applied. Choose Fix with MuleSoftForge Studio AI"
           + " again on the current script.";
     }
     IDocument document = target.getDocument();

@@ -20,7 +20,7 @@ import org.osgi.framework.Bundle;
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.llm.Errors;
 
-// "Send to MuleSoftForge AI" in the context menu of the Mule editor's canvas. Studio builds that menu itself and
+// "Send to MuleSoftForge Studio AI" in the context menu of the Mule editor's canvas. Studio builds that menu itself and
 // asks providers registered on its org.mule.tooling.messageflow.nodecontextmenu extension point (see plugin.xml)
 // to add items, every time it opens. Providers implement Studio's IContextMenuProvider; this factory implements it
 // with a proxy, so the plugin needs no compile-time or bundle dependency on Studio's internals.
@@ -39,7 +39,7 @@ public class CanvasMenu implements IExecutableExtensionFactory {
       Class<?> provider = bundle.loadClass(PROVIDER);
       return Proxy.newProxyInstance(provider.getClassLoader(), new Class<?>[] {provider}, new Handler());
     } catch (ClassNotFoundException e) {
-      throw new CoreException(Status.error("MuleSoftForge AI cannot add to the canvas menu in this Studio", e));
+      throw new CoreException(Status.error("MuleSoftForge Studio AI cannot add to the canvas menu in this Studio", e));
     }
   }
 
@@ -47,7 +47,7 @@ public class CanvasMenu implements IExecutableExtensionFactory {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) {
       return switch (method.getName()) {
-        case "toString" -> "MuleSoftForge AI canvas menu";
+        case "toString" -> "MuleSoftForge Studio AI canvas menu";
         case "hashCode" -> System.identityHashCode(proxy);
         case "equals" -> proxy == args[0];
         case "addActions" -> {
@@ -73,20 +73,20 @@ public class CanvasMenu implements IExecutableExtensionFactory {
     if (selected.attached().isEmpty()) {
       return;
     }
-    Action send = new Action("Send to MuleSoftForge AI") {
+    Action send = new Action("Send to MuleSoftForge Studio AI") {
       @Override
       public void run() {
         try {
           ((ChatView) page.showView(ChatView.ID)).attach(selected);
         } catch (Exception e) {
-          Activator.logError("Could not open the MuleSoftForge AI view", e);
-          MessageDialog.openError(window.getShell(), "MuleSoftForge AI",
-              "Could not open the MuleSoftForge AI view: " + Errors.describe(e));
+          Activator.logError("Could not open the MuleSoftForge Studio AI view", e);
+          MessageDialog.openError(window.getShell(), "MuleSoftForge Studio AI",
+              "Could not open the MuleSoftForge Studio AI view: " + Errors.describe(e));
         }
       }
     };
     send.setImageDescriptor(AbstractUIPlugin.imageDescriptorFromPlugin(Activator.PLUGIN_ID, "icons/forge16.png"));
-    send.setToolTipText("Attach the XML of the selected elements to the MuleSoftForge AI chat");
+    send.setToolTipText("Attach the XML of the selected elements to the MuleSoftForge Studio AI chat");
     if (menu.find(GROUP) != null) {
       menu.appendToGroup(GROUP, send);
     } else {

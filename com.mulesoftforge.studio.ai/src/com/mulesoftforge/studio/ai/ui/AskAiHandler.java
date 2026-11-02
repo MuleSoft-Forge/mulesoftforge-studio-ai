@@ -36,7 +36,7 @@ public class AskAiHandler extends AbstractHandler {
       try {
         ((ChatView) page.showView(ChatView.ID)).askAboutDebugEvent();
       } catch (PartInitException e) {
-        throw new ExecutionException("Could not open the MuleSoftForge AI view", e);
+        throw new ExecutionException("Could not open the MuleSoftForge Studio AI view", e);
       }
       return null;
     }
@@ -52,7 +52,7 @@ public class AskAiHandler extends AbstractHandler {
       ChatView view = (ChatView) page.showView(ChatView.ID);
       view.attach(result);
     } catch (PartInitException e) {
-      throw new ExecutionException("Could not open the MuleSoftForge AI view", e);
+      throw new ExecutionException("Could not open the MuleSoftForge Studio AI view", e);
     }
     return null;
   }

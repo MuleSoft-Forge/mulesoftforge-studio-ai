@@ -18,7 +18,7 @@ public class AskDebugEventHandler extends AbstractHandler {
     try {
       ((ChatView) page.showView(ChatView.ID)).askAboutDebugEvent();
     } catch (PartInitException e) {
-      throw new ExecutionException("Could not open the MuleSoftForge AI view", e);
+      throw new ExecutionException("Could not open the MuleSoftForge Studio AI view", e);
     }
     return null;
   }

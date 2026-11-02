@@ -290,7 +290,7 @@ public final class ModelLists {
     Provider provider = connection.provider();
     if (connection.baseUrl().isBlank()) {
       throw new IllegalStateException("Set the base URL for " + provider.label
-          + " in Preferences > MuleSoftForge AI.");
+          + " in Preferences > MuleSoftForge Studio AI.");
     }
     String credentials = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
         connection.clientSecret());

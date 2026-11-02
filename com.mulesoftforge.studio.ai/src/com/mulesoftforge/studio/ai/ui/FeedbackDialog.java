@@ -79,7 +79,7 @@ final class FeedbackDialog extends TitleAreaDialog {
   @Override
   protected void configureShell(Shell shell) {
     super.configureShell(shell);
-    shell.setText("MuleSoftForge AI Feedback");
+    shell.setText("MuleSoftForge Studio AI Feedback");
   }
 
   @Override

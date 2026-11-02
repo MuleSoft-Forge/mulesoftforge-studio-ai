@@ -7,7 +7,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// "Fix with MuleSoftForge AI" in a DataWeave editor: the request, and the corrected script in the answer.
+// "Fix with MuleSoftForge Studio AI" in a DataWeave editor: the request, and the corrected script in the answer.
 public final class DataWeaveFix {
   private static final Pattern FENCE = Pattern.compile("(?ms)^[ \\t]*```([^\\n`]*)\\n(.*?)^[ \\t]*```[ \\t]*$");
   private static final Set<String> LANGUAGES = Set.of("dw", "dwl", "dataweave", "weave");

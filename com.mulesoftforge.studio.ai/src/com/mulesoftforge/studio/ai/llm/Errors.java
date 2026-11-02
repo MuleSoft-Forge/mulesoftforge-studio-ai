@@ -58,7 +58,7 @@ public final class Errors {
     if (isCertificateProblem(error) && !text.contains(CERTIFICATE_HINT)) {
       text += "\n\n" + CERTIFICATE_HINT + " On a corporate network (Zscaler, Netskope,"
           + " a TLS-inspecting proxy) ask IT for the root CA certificate as a PEM file and set it under"
-          + " Preferences > MuleSoftForge AI > Network. Make sure \"Trust the operating system's certificates\""
+          + " Preferences > MuleSoftForge Studio AI > Network. Make sure \"Trust the operating system's certificates\""
           + " is ticked.";
     }
     return text;
@@ -99,7 +99,7 @@ public final class Errors {
       return new UserError("Cannot reach " + label + ". Check the network or proxy.", details, null);
     }
     if (isCertificateProblem(error)) {
-      return new UserError(CERTIFICATE_HINT + " Set the corporate CA under Preferences > MuleSoftForge AI > Network.",
+      return new UserError(CERTIFICATE_HINT + " Set the corporate CA under Preferences > MuleSoftForge Studio AI > Network.",
           details, null);
     }
     return new UserError(details, null, null);

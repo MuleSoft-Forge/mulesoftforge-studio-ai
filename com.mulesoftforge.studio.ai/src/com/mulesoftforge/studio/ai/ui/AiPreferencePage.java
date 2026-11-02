@@ -79,7 +79,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   @Override
   public void init(IWorkbench workbench) {
-    setDescription("Choose where MuleSoftForge AI sends requests. API keys are kept in Eclipse secure storage.");
+    setDescription("Choose where MuleSoftForge Studio AI sends requests. API keys are kept in Eclipse secure storage.");
   }
 
   @Override
@@ -189,7 +189,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     richTranscript = new Button(group, SWT.CHECK);
     richTranscript.setText("Rich chat view (uses Eclipse's built-in browser; turn off if it shows blank)");
     richTranscript.setSelection(AiSettings.richTranscript());
-    label(group, "Takes effect when the MuleSoftForge AI view is reopened.");
+    label(group, "Takes effect when the MuleSoftForge Studio AI view is reopened.");
     checkUpdates = new Button(group, SWT.CHECK);
     checkUpdates.setText("Check for updates (reads " + Updates.LATEST_URL + " once per Studio session)");
     checkUpdates.setSelection(AiSettings.checkForUpdates());
@@ -361,7 +361,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       checkResult.setText("Checking…");
       Network.Trust checkTrust = trustFromFields();
       Display display = checkResult.getDisplay();
-      Job.create("Check MuleSoftForge AI certificates", monitor -> {
+      Job.create("Check MuleSoftForge Studio AI certificates", monitor -> {
         String text = Network.report(checkTrust).describe();
         Ui.async(display, checkResult, () -> {
           checkResult.setText(text);
@@ -423,7 +423,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     deleteAll.setText("Delete all chat history…");
     deleteAll.addListener(SWT.Selection, e -> {
       if (!MessageDialog.openConfirm(getShell(), "Delete all chat history",
-          "Delete every saved MuleSoftForge AI chat and raw log in this workspace? This cannot be undone.")) {
+          "Delete every saved MuleSoftForge Studio AI chat and raw log in this workspace? This cannot be undone.")) {
         return;
       }
       try {
@@ -576,7 +576,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     // performOk applies the saved trust. The shared client still uses the last applied trust.
     testResult.setText("Testing…");
     Display display = testResult.getDisplay();
-    Job.create("Test MuleSoftForge AI connection", monitor -> {
+    Job.create("Test MuleSoftForge Studio AI connection", monitor -> {
       String result;
       try {
         String reply = ChatModels.create(connection).chat("Reply with the single word: ok");
@@ -599,7 +599,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Connection connection = fromFields();
     testResult.setText("Loading models…");
     Display display = testResult.getDisplay();
-    Job.create("Refresh MuleSoftForge AI models", monitor -> {
+    Job.create("Refresh MuleSoftForge Studio AI models", monitor -> {
       String result;
       List<String> picker = List.of();
       try {

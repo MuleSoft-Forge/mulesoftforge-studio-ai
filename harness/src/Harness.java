@@ -1257,7 +1257,7 @@ public class Harness {
     } catch (Exception e) {
       String message = Errors.describe(e);
       failed += check("untrusted certificate rejected", true);
-      failed += check("hint names Preferences > Network", message.contains("Preferences > MuleSoftForge AI > Network"));
+      failed += check("hint names Preferences > Network", message.contains("Preferences > MuleSoftForge Studio AI > Network"));
       System.out.println("  " + message.replace("\n", "\n  "));
     }
     System.exit(failed == 0 ? 0 : 1);
@@ -1735,7 +1735,7 @@ public class Harness {
     int failed = 0;
     for (ChatMode mode : ChatMode.values()) {
       String system = Prompts.system(mode, "demo", "", "");
-      failed += check(mode.label + " prompt loads from the bundle", system.contains("You are MuleSoftForge AI")
+      failed += check(mode.label + " prompt loads from the bundle", system.contains("You are MuleSoftForge Studio AI")
           && system.contains("copy the placeholder exactly") && system.contains("\"demo\"")
           && !system.contains("{project}"));
     }
@@ -1755,7 +1755,7 @@ public class Harness {
             "not as a generic MuleSoft tutorial"));
     String builtIn = Prompts.builtIn();
     failed += check("Show built-in prompt lists every part", builtIn.contains("Rules (always apply)")
-        && builtIn.contains("When asked what MuleSoftForge AI can do") && builtIn.contains("Ask mode")
+        && builtIn.contains("When asked what MuleSoftForge Studio AI can do") && builtIn.contains("Ask mode")
         && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
         && builtIn.contains("8,000 characters"));
     String diagnose = Prompts.system(ChatMode.DIAGNOSE, "demo", "", "");

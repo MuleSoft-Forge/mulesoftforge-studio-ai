@@ -62,7 +62,7 @@ public final class ChatJob extends Job {
   ChatJob(ChatSession session, ChatMode mode, String prompt, List<Attachment> attachments, ProjectFiles project,
       String chatId, int turn, boolean showModel, List<AutoRouter.Option> prebuilt, AutoRouter.Choice auto,
       Display display, Listener listener) {
-    super("MuleSoftForge AI");
+    super("MuleSoftForge Studio AI");
     this.session = session;
     this.mode = mode;
     this.prompt = prompt;
@@ -96,7 +96,7 @@ public final class ChatJob extends Job {
         try {
           Stores.raw().append(chatId, call);
         } catch (Exception e) {
-          Activator.logFailure("Could not write the MuleSoftForge AI raw log", e);
+          Activator.logFailure("Could not write the MuleSoftForge Studio AI raw log", e);
         }
       }) : null;
       List<AutoRouter.Option> models = models(connection, capture);
@@ -120,7 +120,7 @@ public final class ChatJob extends Job {
       if (sub.isCanceled() || Thread.currentThread().isInterrupted()) {
         cancelled = true;
       } else {
-        Activator.logFailure("MuleSoftForge AI request failed", e);
+        Activator.logFailure("MuleSoftForge Studio AI request failed", e);
         Errors.UserError classified = Errors.classify(e, provider);
         String message = classified.message();
         String keyProblem = null;

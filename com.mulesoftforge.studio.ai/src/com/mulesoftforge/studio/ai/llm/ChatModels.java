@@ -244,14 +244,14 @@ public final class ChatModels {
   private static void validate(Connection connection) {
     String name = connection.provider().label;
     if (connection.baseUrl().isBlank()) {
-      throw new IllegalStateException("Set the base URL for " + name + " in Preferences > MuleSoftForge AI.");
+      throw new IllegalStateException("Set the base URL for " + name + " in Preferences > MuleSoftForge Studio AI.");
     }
     if (connection.model().isBlank()) {
-      throw new IllegalStateException("Set the model for " + name + " in Preferences > MuleSoftForge AI.");
+      throw new IllegalStateException("Set the model for " + name + " in Preferences > MuleSoftForge Studio AI.");
     }
     if (AutoRouter.isAuto(connection.model())) {
       throw new IllegalStateException("Auto picks a model per message in the chat view. Choose a model here,"
-          + " or set Auto's fast and strong models in Preferences > MuleSoftForge AI.");
+          + " or set Auto's fast and strong models in Preferences > MuleSoftForge Studio AI.");
     }
     String credentials = connection.provider().credentialsProblem(connection.apiKey(), connection.clientId(),
         connection.clientSecret());

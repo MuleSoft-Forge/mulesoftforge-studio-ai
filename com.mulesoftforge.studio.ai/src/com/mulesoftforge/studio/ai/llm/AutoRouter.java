@@ -56,14 +56,14 @@ public final class AutoRouter {
     };
   }
 
-  // fix: the message asks to correct something specific, such as Fix with MuleSoftForge AI in a DataWeave editor.
+  // fix: the message asks to correct something specific, such as Fix with MuleSoftForge Studio AI in a DataWeave editor.
   public static Choice choose(ChatMode mode, String prompt, List<Attachment> attachments, boolean fix,
       Models models) {
     String fast = models.fast() == null ? "" : models.fast().trim();
     String strong = models.strong() == null ? "" : models.strong().trim();
     if (fast.isEmpty() || strong.isEmpty() || isAuto(fast) || isAuto(strong)) {
       throw new IllegalStateException("Auto needs a fast and a strong model. Set them in Preferences >"
-          + " MuleSoftForge AI, next to Model.");
+          + " MuleSoftForge Studio AI, next to Model.");
     }
     String reason = strongReason(mode, prompt == null ? "" : prompt, attachments, fix);
     String model = reason == null ? fast : strong;

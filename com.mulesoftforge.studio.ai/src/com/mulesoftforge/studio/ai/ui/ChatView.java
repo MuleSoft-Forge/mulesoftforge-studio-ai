@@ -72,7 +72,7 @@ import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
-// The MuleSoftForge AI view: runs each message, records the chat for saving, and tracks its cost.
+// The MuleSoftForge Studio AI view: runs each message, records the chat for saving, and tracks its cost.
 // Layout pieces live in Composer, ChangesPanel, ChatHistoryMenu and the Transcript implementations.
 public class ChatView extends ViewPart {
   public static final String ID = "com.mulesoftforge.studio.ai.chat";
@@ -397,7 +397,7 @@ public class ChatView extends ViewPart {
     composer.focus();
   }
 
-  // Used by the Send to MuleSoftForge AI command and menu items.
+  // Used by the Send to MuleSoftForge Studio AI command and menu items.
   void attach(Attachments.Result result) {
     composer.attach(result);
   }
@@ -409,7 +409,7 @@ public class ChatView extends ViewPart {
     if (stop == null) {
       append("Note", debugger.available()
           ? "Studio's debugger is not stopped at a processor now. Stop at a breakpoint, then ask again."
-          : "MuleSoftForge AI cannot follow Studio's Mule debugger in this Studio.");
+          : "MuleSoftForge Studio AI cannot follow Studio's Mule debugger in this Studio.");
       return;
     }
     Display display = root.getDisplay();
@@ -420,11 +420,11 @@ public class ChatView extends ViewPart {
     }).schedule();
   }
 
-  // Fix with MuleSoftForge AI in a DataWeave editor: sends the script and the errors the editor shows, in Ask mode
+  // Fix with MuleSoftForge Studio AI in a DataWeave editor: sends the script and the errors the editor shows, in Ask mode
   // because the fix goes back into the editor rather than into a file. The answer gets Review diff and Apply.
   void fixDataWeave(DataWeaveScript script) throws Exception {
     if (running != null) {
-      append("Note", "Wait for the current answer, or cancel it, then choose Fix with MuleSoftForge AI again.");
+      append("Note", "Wait for the current answer, or cancel it, then choose Fix with MuleSoftForge Studio AI again.");
       return;
     }
     List<Attachment.Problem> problems = script.problems();
@@ -573,7 +573,7 @@ public class ChatView extends ViewPart {
 
   private void pruneOldChats() {
     int days = AiSettings.retentionDays();
-    Job job = Job.create("Prune MuleSoftForge AI chats", monitor -> {
+    Job job = Job.create("Prune MuleSoftForge Studio AI chats", monitor -> {
       try {
         Stores.chats().prune(days, Instant.now());
         Stores.raw().prune(days, Instant.now());
@@ -596,7 +596,7 @@ public class ChatView extends ViewPart {
     if (pendingSave != null) {
       pendingSave.cancel();
     }
-    Job job = Job.create("Save MuleSoftForge AI chat", monitor -> {
+    Job job = Job.create("Save MuleSoftForge Studio AI chat", monitor -> {
       if (monitor.isCanceled()) {
         return Status.CANCEL_STATUS;
       }
@@ -614,7 +614,7 @@ public class ChatView extends ViewPart {
 
   private void openChat(String id) {
     Display display = transcript.control().getDisplay();
-    Job job = Job.create("Open MuleSoftForge AI chat", monitor -> {
+    Job job = Job.create("Open MuleSoftForge Studio AI chat", monitor -> {
       ChatRecord record;
       Map<Integer, List<RawCapture.Call>> raw;
       try {
@@ -770,7 +770,7 @@ public class ChatView extends ViewPart {
             try {
               Stores.usage().append(usageChat, usageProject, provider.name(), cost);
             } catch (Exception e) {
-              Activator.logFailure("Could not write the MuleSoftForge AI cost ledger", e);
+              Activator.logFailure("Could not write the MuleSoftForge Studio AI cost ledger", e);
             }
             if (transcript.control().isDisposed()) {
               return;
@@ -953,7 +953,7 @@ public class ChatView extends ViewPart {
     try {
       return dataWeaveFixes.get(Integer.parseInt(index));
     } catch (RuntimeException e) {
-      append("Note", "This fix belongs to an earlier chat. Choose Fix with MuleSoftForge AI again.");
+      append("Note", "This fix belongs to an earlier chat. Choose Fix with MuleSoftForge Studio AI again.");
       return null;
     }
   }
@@ -962,7 +962,7 @@ public class ChatView extends ViewPart {
     try {
       DataWeaveScript script = proposal.script();
       if (script == null) {
-        append("Note", "The DataWeave editor this fix was for has been closed. Choose Fix with MuleSoftForge AI"
+        append("Note", "The DataWeave editor this fix was for has been closed. Choose Fix with MuleSoftForge Studio AI"
             + " again.");
         return;
       }

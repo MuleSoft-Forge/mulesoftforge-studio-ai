@@ -51,12 +51,12 @@ final class VersionLink {
         + Updates.SITE + " with Help > Install New Software." : "Installed from " + Updates.SITE + ".";
     if (updateAvailable()) {
       link.setText("<a>" + version + " · Update to " + latest.version() + "</a>");
-      link.setToolTipText("MuleSoftForge AI " + latest.version() + " is available."
+      link.setToolTipText("MuleSoftForge Studio AI " + latest.version() + " is available."
           + (latest.notes().isBlank() ? "" : "\n" + latest.notes()) + "\n\nVersion " + installed + ". " + how);
     } else {
       link.setText("<a>" + version + "</a>");
-      link.setToolTipText("MuleSoftForge AI " + installed + ". " + how + "\nClick for release notes."
-          + (AiSettings.checkForUpdates() ? "" : "\nUpdate checks are off in Preferences > MuleSoftForge AI."));
+      link.setToolTipText("MuleSoftForge Studio AI " + installed + ". " + how + "\nClick for release notes."
+          + (AiSettings.checkForUpdates() ? "" : "\nUpdate checks are off in Preferences > MuleSoftForge Studio AI."));
     }
     link.getParent().layout();
   }
@@ -66,11 +66,11 @@ final class VersionLink {
       return;
     }
     checked = true;
-    Job job = Job.create("Check for MuleSoftForge AI updates", monitor -> {
+    Job job = Job.create("Check for MuleSoftForge Studio AI updates", monitor -> {
       try {
         latest = Updates.fetch(Updates.LATEST_URL);
       } catch (Exception e) {
-        Activator.logFailure("Could not check for MuleSoftForge AI updates at " + Updates.LATEST_URL, e);
+        Activator.logFailure("Could not check for MuleSoftForge Studio AI updates at " + Updates.LATEST_URL, e);
       }
       Display display = link.getDisplay();
       Ui.async(display, link, this::show);
