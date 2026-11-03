@@ -14,6 +14,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
@@ -147,7 +148,8 @@ final class Evals {
                           && c.after().contains("get:\\employees:employees-api-config"))),
               new Grade("proposed pom.xml with munit-runner", r -> r.turn().changes().all().stream()
                   .anyMatch(c -> c.path().equals("pom.xml") && c.after().contains("munit-runner"))),
-              new Grade("no CHECKS problems left", r -> r.turn().problems().isEmpty()), launches(),
+              new Grade("no CHECKS problems left (MUnit schema when available)",
+                  r -> r.turn().problems().isEmpty()), launches(),
               new Grade("did not run the unsaved suite", r -> r.used(MunitTools.RUN) == 0))),
       new Case("munit-runs-tests", ChatMode.AGENT, "Run the MUnit tests", App.DOWN, null, List.of(
               new Grade("ran run_munit once", r -> r.used(MunitTools.RUN) == 1),
@@ -157,6 +159,9 @@ final class Evals {
 
   // args: [--provider name] [--model id] [--runs n] [--list] [case...]
   static void run(Map<String, String> env, String[] args) throws Exception {
+    // MUnit's real schemas when this machine's Studio workspace has generated them, as in Studio.
+    MunitSchemas.searchIn(MunitSchemas.studioRepositories(Path.of(System.getenv().getOrDefault("STUDIO_WORKSPACE",
+        System.getProperty("user.home") + "/AnypointStudio/729"))));
     String provider = "openrouter";
     String model = null;
     int runs = 1;
@@ -210,6 +215,9 @@ final class Evals {
                 : "; launches " + result.launches()));
             String text = result.text().strip().replace('\n', ' ');
             System.out.println("      said: " + (text.length() > SHOWN ? text.substring(0, SHOWN) + "…" : text));
+            if (!result.turn().changes().all().isEmpty()) {
+              System.out.println("      proposed: " + saveProposed(result));
+            }
           }
         }
       }
@@ -219,6 +227,17 @@ final class Evals {
     }
     System.out.println("\nCOST  " + meter.summary());
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // The files a failed run proposed, as they would be after accepting, to see why a grade missed.
+  private static Path saveProposed(Result result) throws IOException {
+    Path dir = Files.createTempDirectory("studio-ai-eval-proposed");
+    for (FileChange change : result.turn().changes().all()) {
+      Path to = dir.resolve(change.path());
+      Files.createDirectories(to.getParent());
+      Files.writeString(to, change.after() == null ? "" : change.after());
+    }
+    return dir;
   }
 
   private static Result attempt(Case c, Connection connection, CostMeter meter) throws Exception {

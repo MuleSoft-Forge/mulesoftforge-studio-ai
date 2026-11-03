@@ -1,6 +1,9 @@
 package com.mulesoftforge.studio.ai.check;
 
 import java.io.StringReader;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,7 +26,13 @@ public final class MunitChecks {
   private static final String MUNIT_DIR = "src/test/munit/";
   private static final String MULE_DIR = "src/main/mule/";
   private static final String MUNIT_NS = "http://www.mulesoft.org/schema/mule/munit";
+  private static final String TOOLS_NS = "http://www.mulesoft.org/schema/mule/munit-tools";
+  // Elements whose content goes in value="…"; text inside them does not parse in munit-tools.
+  private static final Set<String> VALUE_ELEMENTS = Set.of("payload", "attributes", "variable");
   private static final Pattern DOC_ID = Pattern.compile("\\bdoc:id\\s*=\\s*\"([^\"]+)\"");
+  private static final Pattern DOC_NAME = Pattern.compile("\\bdoc:name\\s*=\\s*\"([^\"]+)\"");
+  // Opening tags in src/main/mule, as written: "http:request", "flow-ref".
+  private static final Pattern TAG = Pattern.compile("<([A-Za-z][\\w.-]*(?::[A-Za-z][\\w.-]*)?)[\\s/>]");
   private static final Pattern READ_URL = Pattern.compile("readUrl\\s*\\(\\s*'classpath://([^']+)'\\s*\\)");
   // attributeName / whereValue in either order; the quoted whereValue is then unwrapped (#['id'] → id).
   private static final Pattern DOC_ID_ATTR = Pattern.compile(
@@ -45,6 +54,8 @@ public final class MunitChecks {
   public static void check(Map<String, String> project, List<Problem> found) {
     Set<String> suites = new LinkedHashSet<>();
     Set<String> docIds = new HashSet<>();
+    Set<String> docNames = new HashSet<>();
+    Set<String> tags = new HashSet<>();
     Set<String> resources = new HashSet<>();
     for (Map.Entry<String, String> file : project.entrySet()) {
       String path = file.getKey().replace('\\', '/');
@@ -56,6 +67,14 @@ public final class MunitChecks {
         while (m.find()) {
           docIds.add(m.group(1));
         }
+        Matcher name = DOC_NAME.matcher(file.getValue());
+        while (name.find()) {
+          docNames.add(name.group(1));
+        }
+        Matcher tag = TAG.matcher(file.getValue());
+        while (tag.find()) {
+          tags.add(tag.group(1));
+        }
       }
       if (path.contains("/resources/") && (path.startsWith("src/test/resources/")
           || path.startsWith("src/main/resources/"))) {
@@ -66,7 +85,7 @@ public final class MunitChecks {
       return;
     }
     for (String path : suites) {
-      checkSuite(path, project.get(path), docIds, resources, found);
+      checkSuite(path, project.get(path), new MainApp(docIds, docNames, tags), resources, found);
     }
     String pom = project.get("pom.xml");
     if (pom == null) {
@@ -88,15 +107,26 @@ public final class MunitChecks {
     }
   }
 
-  private static void checkSuite(String path, String xml, Set<String> docIds, Set<String> resources,
+  private static void checkSuite(String path, String xml, MainApp app, Set<String> resources,
       List<Problem> found) {
     if (xml == null) {
       return;
     }
-    SuiteShape shape = SuiteShape.parse(path, xml, found);
+    // MUnit's own schemas, when Studio has generated them, find every shape error; the shape checks below are
+    // the fallback for the common ones.
+    boolean validated = MunitSchemas.validate(path, xml, found);
+    List<Problem> shapeProblems = new ArrayList<>();
+    SuiteShape shape = SuiteShape.parse(path, xml, shapeProblems);
     if (shape == null) {
       return;
     }
+    if (!validated) {
+      found.addAll(shapeProblems);
+    }
+    for (Mock mock : shape.mocks) {
+      checkTarget(path, mock, app, found);
+    }
+    Set<String> docIds = app.docIds();
     if (!shape.hasConfig) {
       found.add(new Problem(path, 1, "an MUnit suite needs a <munit:config> element."));
     }
@@ -144,6 +174,30 @@ public final class MunitChecks {
     }
   }
 
+  // A mock or verify that matches nothing in the app is silently ignored by MUnit, so the real processor runs.
+  private static void checkTarget(String path, Mock mock, MainApp app, List<Problem> found) {
+    if (mock.processor() != null && !mock.processor().isBlank() && !mock.processor().contains("#[")) {
+      String tag = mock.processor().startsWith("mule:") ? mock.processor().substring(5) : mock.processor();
+      if (!app.tags().contains(tag)) {
+        found.add(new Problem(path, mock.line(), mock.element() + " processor=\"" + mock.processor()
+            + "\" matches no <" + tag + "> in src/main/mule; use the element name as written there, e.g."
+            + " http:request or flow-ref."));
+      }
+    }
+    for (Match match : mock.matches()) {
+      String value = literalId(match.value());
+      if (value == null || value.isBlank() || !match.attribute().equals("doc:name")) {
+        continue;
+      }
+      if (!app.docNames().contains(value)) {
+        found.add(new Problem(path, match.line(), "doc:name \"" + value + "\" does not match any element in"
+            + " src/main/mule; match on the element's doc:id (or config-ref) instead."));
+      }
+    }
+  }
+
+  private record MainApp(Set<String> docIds, Set<String> docNames, Set<String> tags) {}
+
   private static String first(Matcher m, int from, int to) {
     for (int i = from; i <= to; i++) {
       String value = m.group(i);
@@ -182,13 +236,31 @@ public final class MunitChecks {
 
   private record Test(String name, String description, int line) {}
 
+  private record Match(String attribute, String value, int line) {}
+
+  private record Mock(String element, String processor, int line, List<Match> matches) {}
+
+  private record Open(String uri, String name, int line, StringBuilder text) {}
+
+  // Element shapes from Studio's MUnit editor definitions (editors/munit-tools.xml and munit.xml), which the
+  // runtime's schema enforces: a suite breaking them does not parse, so no test runs.
   private static final class SuiteShape extends DefaultHandler {
     boolean hasConfig;
-    final List<Test> tests = new java.util.ArrayList<>();
+    final List<Test> tests = new ArrayList<>();
+    final List<Mock> mocks = new ArrayList<>();
+    private final String path;
+    private final List<Problem> found;
+    private final Deque<Open> open = new ArrayDeque<>();
+    private Mock mock;
     private Locator locator;
 
+    private SuiteShape(String path, List<Problem> found) {
+      this.path = path;
+      this.found = found;
+    }
+
     static SuiteShape parse(String path, String xml, List<Problem> found) {
-      SuiteShape shape = new SuiteShape();
+      SuiteShape shape = new SuiteShape(path, found);
       try {
         SAXParserFactory factory = SAXParserFactory.newDefaultInstance();
         factory.setNamespaceAware(true);
@@ -215,6 +287,92 @@ public final class MunitChecks {
       if (MUNIT_NS.equals(uri) && "test".equals(localName)) {
         tests.add(new Test(attributes.getValue("", "name"), attributes.getValue("", "description"), line));
       }
+      open.push(new Open(uri, localName, line, new StringBuilder()));
+      if (!TOOLS_NS.equals(uri)) {
+        return;
+      }
+      String element = "munit-tools:" + localName;
+      switch (localName) {
+        case "mock-when", "verify-call", "spy" -> {
+          String processor = attributes.getValue("", "processor");
+          if (processor == null || processor.isBlank()) {
+            problem(line, element + " needs processor=\"…\" naming the element it targets, e.g."
+                + " processor=\"http:request\" or processor=\"flow-ref\".");
+          }
+          mock = new Mock(element, processor == null ? null : processor.strip(), line, new ArrayList<>());
+          mocks.add(mock);
+        }
+        case "with-attributes" -> {
+          String name = attributes.getValue("", "attributeName");
+          String value = attributes.getValue("", "whereValue");
+          if (name != null && value != null && mock != null) {
+            mock.matches().add(new Match(name.strip(), value.strip(), line));
+          }
+          for (int i = 0; i < attributes.getLength(); i++) {
+            if (attributes.getURI(i).isEmpty()) {
+              problem(line, "munit-tools:with-attributes takes no attributes (found " + attributes.getLocalName(i)
+                  + "); put each match in a child <munit-tools:with-attribute attributeName=\"…\""
+                  + " whereValue=\"…\"/>.");
+              break;
+            }
+          }
+        }
+        case "with-attribute" -> {
+          String name = attributes.getValue("", "attributeName");
+          String value = attributes.getValue("", "whereValue");
+          if (name == null || value == null) {
+            problem(line, "munit-tools:with-attribute needs both attributeName and whereValue.");
+          } else if (mock != null) {
+            mock.matches().add(new Match(name.strip(), value.strip(), line));
+          }
+        }
+        case "payload", "attributes" -> requireValue(element, attributes, line);
+        case "variable" -> {
+          requireValue(element, attributes, line);
+          if (attributes.getValue("", "key") == null) {
+            problem(line, element + " needs key=\"…\".");
+          }
+        }
+        case "assert-that" -> {
+          if (attributes.getValue("", "expression") == null || attributes.getValue("", "is") == null) {
+            problem(line, "munit-tools:assert-that needs expression=\"#[…]\" and is=\"#[MunitTools::…]\".");
+          }
+        }
+        default -> {}
+      }
+    }
+
+    @Override
+    public void characters(char[] ch, int start, int length) {
+      if (!open.isEmpty()) {
+        open.peek().text().append(ch, start, length);
+      }
+    }
+
+    @Override
+    public void endElement(String uri, String localName, String qName) {
+      Open element = open.pop();
+      boolean valued = (TOOLS_NS.equals(uri) || MUNIT_NS.equals(uri))
+          && VALUE_ELEMENTS.contains(localName);
+      if (valued && !element.text().toString().isBlank()) {
+        problem(element.line(), (TOOLS_NS.equals(uri) ? "munit-tools:" : "munit:") + localName
+            + " cannot have text content; put it in the value attribute: <" + qName + " value=\"#[…]\"/>.");
+      }
+      if (TOOLS_NS.equals(uri) && ("mock-when".equals(localName) || "verify-call".equals(localName)
+          || "spy".equals(localName))) {
+        mock = null;
+      }
+    }
+
+    private void requireValue(String element, Attributes attributes, int line) {
+      if (attributes.getValue("", "value") == null) {
+        problem(line, element + " needs value=\"…\" (for example value=\"#[readUrl('classpath://data.json')]\""
+            + " mediaType=\"application/json\").");
+      }
+    }
+
+    private void problem(int line, String message) {
+      found.add(new Problem(path, line, message));
     }
   }
 }

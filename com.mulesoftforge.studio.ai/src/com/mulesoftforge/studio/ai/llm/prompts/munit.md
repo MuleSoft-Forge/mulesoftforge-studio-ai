@@ -24,9 +24,36 @@ You create MUnit 3.7 tests for Mule 4 flows and sub-flows in this project.
   - munit:execution — flow-ref to the flow or sub-flow under test.
   - munit:validation — munit-tools:assert-that with MunitTools:: matchers, and munit-tools:verify-call
     when a processor must have been called.
+- Exact element shapes. MUnit's schema rejects anything else and then no test runs:
+  ```
+  <munit:set-event>
+    <munit:payload value="#[{id: 1}]" mediaType="application/json"/>
+    <munit:attributes value="#[{queryParams: {active: 'true'}}]"/>
+    <munit:variables><munit:variable key="userId" value="#[1]"/></munit:variables>
+  </munit:set-event>
+  <munit-tools:mock-when processor="http:request">
+    <munit-tools:with-attributes>
+      <munit-tools:with-attribute attributeName="doc:id" whereValue="#['3f2a…']"/>
+    </munit-tools:with-attributes>
+    <munit-tools:then-return>
+      <munit-tools:payload value="#[{ok: true}]" mediaType="application/json"/>
+      <munit-tools:attributes value="#[{statusCode: 200}]"/>
+    </munit-tools:then-return>
+  </munit-tools:mock-when>
+  <munit-tools:verify-call processor="http:request" times="1">
+    <munit-tools:with-attributes>
+      <munit-tools:with-attribute attributeName="doc:id" whereValue="#['3f2a…']"/>
+    </munit-tools:with-attributes>
+  </munit-tools:verify-call>
+  <munit-tools:assert-that expression="#[payload.id]" is="#[MunitTools::equalTo(1)]"/>
+  ```
+  processor is required on mock-when, verify-call and spy, and is the element name exactly as in the
+  Mule config (e.g. `mule-soft-o-auth-provider-api:oauth-token-validate`, `flow-ref`). with-attributes
+  has no attributes of its own, only with-attribute children. payload, attributes and variable take
+  value="…" and never text content.
 - Mocks: mock external processors (http:request, db:*, other connectors, flow-ref to other flows).
-  Match on doc:id when the element has one
-  (`with-attribute attributeName="doc:id" whereValue="#['…']"`), else on config-ref or doc:name.
+  Read the Mule config first and copy the element's doc:id (prefer it), else match config-ref or
+  doc:name exactly as written there. Fix every CHECKS problem in the suite before you finish.
   Loggers and Transform Message (ee:transform) cannot be mocked. When the real processor stores a
   target variable, the mock must return that variable in then-return variables.
 - Errors: simulate a failure with `<munit-tools:error typeId="HTTP:CONNECTIVITY"/>` in then-return.

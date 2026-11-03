@@ -167,20 +167,22 @@ public final class MunitTools {
       if (cancelled.getAsBoolean()) {
         return "ERROR: the user cancelled while the tests ran. The run goes on in Studio's MUnit view.";
       }
+      // MUnit marks the run finished before its process writes coverage and exits, so both must be over.
+      boolean running = runner.running();
       MunitRunner.Run run = runner.run();
-      if (run != null && run.finished()) {
+      if (!running && reported(run)) {
         return masked(report(run, seconds(started)));
       }
-      boolean running = runner.running();
       if (running || run != null) {
         seen = true;
-        endedAt = 0;
       }
-      if (!running && seen) {
+      if (running) {
+        endedAt = 0;
+      } else if (seen) {
         endedAt = endedAt == 0 ? System.nanoTime() : endedAt;
         if ((System.nanoTime() - endedAt) / 1_000_000 >= RESULTS_CATCH_UP_MS) {
           run = runner.run();
-          return run != null && run.finished() ? masked(report(run, seconds(started)))
+          return reported(run) ? masked(report(run, seconds(started)))
               : masked("ENDED: the MUnit run stopped before it reported results (" + seconds(started) + " s)."
                   + (run != null && run.error() != null ? " MUnit said: " + run.error() : "")
                   + " Explain why from the console:\n" + console());
@@ -194,6 +196,11 @@ public final class MunitTools {
       }
       Thread.sleep(POLL_MS);
     }
+  }
+
+  // A finished run that holds no test and no error tells nothing; the console does.
+  private static boolean reported(MunitRunner.Run run) {
+    return run != null && run.finished() && (!run.results().isEmpty() || run.error() != null);
   }
 
   private String report(MunitRunner.Run run, long seconds) {

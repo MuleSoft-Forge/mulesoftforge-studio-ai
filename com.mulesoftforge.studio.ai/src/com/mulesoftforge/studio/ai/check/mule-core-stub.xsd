@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Stand-in for Mule's core schema, which the runtime generates and does not ship: only the names MUnit's schemas
+     build on. Everything outside MUnit is accepted unchecked (lax), so this validates MUnit elements only. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns="http://www.mulesoft.org/schema/mule/core"
+    targetNamespace="http://www.mulesoft.org/schema/mule/core"
+    elementFormDefault="qualified" attributeFormDefault="unqualified">
+
+  <xs:element name="mule">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="##any" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:anyAttribute namespace="##any" processContents="skip"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="abstract-extension" abstract="true"/>
+  <xs:element name="abstract-shared-extension" abstract="true"/>
+  <xs:element name="abstract-flow-construct" abstract="true"/>
+  <xs:element name="abstract-message-processor" abstract="true"/>
+  <xs:element name="abstract-operator" abstract="true"/>
+
+  <xs:group name="messageProcessorOrMixedContentMessageProcessor">
+    <xs:choice>
+      <xs:any namespace="##any" processContents="lax"/>
+    </xs:choice>
+  </xs:group>
+
+  <xs:complexType name="abstractExtensionType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="abstractOperatorType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="abstractMessageProcessorType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="baseFlowConstructType">
+    <xs:attribute name="name" type="xs:string" use="required"/>
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+
+  <xs:simpleType name="expressionString"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionBoolean"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionInt"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionLong"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionList"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="substitutableInt"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="substitutableName"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="substitutableBoolean"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="propertyPlaceholderType"><xs:restriction base="xs:string"/></xs:simpleType>
+</xs:schema>

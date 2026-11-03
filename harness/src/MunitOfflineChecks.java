@@ -1,9 +1,11 @@
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
@@ -174,6 +176,69 @@ final class MunitOfflineChecks {
         .anyMatch(p -> p.path().equals("pom.xml") && p.message().contains("munit-tools")));
     failed += check("bad suite: pom missing munit-maven-plugin", problems.stream()
         .anyMatch(p -> p.path().equals("pom.xml") && p.message().contains("munit-maven-plugin")));
+
+    // The shapes a model wrote in Studio, which MUnit's runtime rejected while parsing the suite.
+    String wrongShapes = goodSuite.replace("""
+              <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                  <munit-tools:with-attribute attributeName="doc:id"
+                      whereValue="#['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                  <munit-tools:payload value="#[readUrl('classpath://sample_data/hello.json')]"
+                      mediaType="application/json"/>
+                </munit-tools:then-return>
+              </munit-tools:mock-when>
+        """, """
+              <munit-tools:mock-when doc:name="Mock token validation">
+                <munit-tools:with-attributes attributeName="doc:name" whereValue="OAuth-Token-Validate" />
+                <munit-tools:then-return>
+                  <munit-tools:payload>#[{scope: "ADMIN"}]</munit-tools:payload>
+                </munit-tools:then-return>
+              </munit-tools:mock-when>
+        """).replace("xmlns:munit=", "xmlns:doc=\"http://www.mulesoft.org/schema/mule/documentation\"\n    xmlns:munit=");
+    Map<String, String> wrong = new LinkedHashMap<>(good);
+    wrong.put("src/test/munit/hello-test-suite.xml", wrongShapes);
+    failed += check("wrong shapes: the fixture really changed", !wrongShapes.equals(goodSuite));
+    failed += shapes("shape checks", wrong, good);
+    List<Path> studio = MunitSchemas.studioRepositories(STUDIO_WORKSPACE);
+    if (studio.isEmpty()) {
+      System.out.println("SKIP  MUnit schema checks: no generated schemas under " + STUDIO_WORKSPACE
+          + "/.mule (set STUDIO_WORKSPACE)");
+    } else {
+      MunitSchemas.searchIn(studio);
+      try {
+        failed += check("MUnit schemas found in the Studio workspace" + (MunitSchemas.available() ? ""
+            : " (" + MunitSchemas.unavailable() + ")"), MunitSchemas.available());
+        failed += shapes("MUnit schema", wrong, good);
+        failed += check("MUnit schema: errors are labelled as schema errors", MuleChecks.check(wrong).stream()
+            .anyMatch(p -> p.message().startsWith("MUnit schema:") && p.message().contains("processor")));
+      } finally {
+        MunitSchemas.searchIn(List.of());
+      }
+    }
+    return failed;
+  }
+
+  private static final Path STUDIO_WORKSPACE = Path.of(System.getenv().getOrDefault("STUDIO_WORKSPACE",
+      System.getProperty("user.home") + "/AnypointStudio/729"));
+
+  // The good suite has no shape problems; the wrong one has each that MUnit's runtime reported in Studio.
+  private static int shapes(String label, Map<String, String> wrong, Map<String, String> good) {
+    int failed = 0;
+    List<Problem> problems = MuleChecks.check(wrong);
+    List<Problem> goodProblems = MuleChecks.check(good).stream()
+        .filter(p -> p.path().startsWith("src/test/munit/")).toList();
+    failed += check(label + ": good suite is clean" + (goodProblems.isEmpty() ? "" : " " + goodProblems),
+        goodProblems.isEmpty());
+    failed += check(label + ": mock-when without processor", problems.stream()
+        .anyMatch(p -> p.message().contains("processor") && p.message().contains("mock-when")));
+    failed += check(label + ": attributes on with-attributes", problems.stream()
+        .anyMatch(p -> p.message().contains("with-attributes") && p.message().contains("attributeName")));
+    failed += check(label + ": payload as text instead of value", problems.stream()
+        .anyMatch(p -> p.message().contains("munit-tools:payload") && p.message().contains("value")));
+    failed += check(label + ": doc:name that matches nothing", problems.stream()
+        .anyMatch(p -> p.message().contains("OAuth-Token-Validate")) || label.equals("MUnit schema"));
     return failed;
   }
 
@@ -280,6 +345,18 @@ final class MunitOfflineChecks {
     out = tools(files, ended, new ChangeSet()).execute(call("{}"));
     failed += check("run_munit: launch ending without results shows the console",
         out.startsWith("ENDED") && out.contains("Failed to execute goal"));
+
+    FakeRunner waiting = new FakeRunner(passing.result);
+    waiting.runningPolls = 3;
+    out = tools(files, waiting, new ChangeSet()).execute(call("{}"));
+    failed += check("run_munit: a finished run is reported only once the MUnit launch has ended",
+        out.startsWith("PASSED: 2 passed") && waiting.runningPolls < 0);
+
+    FakeRunner empty = new FakeRunner(new MunitRunner.Run(true, 0, List.of(), null));
+    empty.console = "[INFO] Running employees-api-test-suite.xml";
+    out = tools(files, empty, new ChangeSet()).execute(call("{}"));
+    failed += check("run_munit: a finished run with no tests is not reported as passing",
+        out.startsWith("ENDED") && out.contains("employees-api-test-suite.xml"));
 
     failed += check("run_munit: is offered under that name", MunitTools.SPECIFICATIONS.get(0).name().equals("run_munit"));
     return failed;

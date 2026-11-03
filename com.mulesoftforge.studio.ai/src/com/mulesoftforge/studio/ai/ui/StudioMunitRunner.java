@@ -37,6 +37,7 @@ final class StudioMunitRunner implements MunitRunner {
   private static final String BUNDLE = "org.mule.tooling.ui.contribution.munit";
 
   private final Display display;
+  private volatile ILaunch ours;
 
   StudioMunitRunner(Display display) {
     this.display = display;
@@ -55,6 +56,8 @@ final class StudioMunitRunner implements MunitRunner {
     Method run = bundle.loadClass(BUNDLE + ".runner.MunitStaticRunner").getMethod("runOrDebugMunitTest",
         IProject.class, Set.class, Set.class, String.class, String.class);
     Results.INSTANCE.starting(project);
+    Set<ILaunch> before = Set.of(launches());
+    ours = null;
     AtomicReference<Throwable> failure = new AtomicReference<>();
     display.syncExec(() -> {
       try {
@@ -72,6 +75,11 @@ final class StudioMunitRunner implements MunitRunner {
     if (failure.get() != null) {
       throw new IllegalStateException(failure.get());
     }
+    for (ILaunch launch : launches()) {
+      if (!before.contains(launch) && isMunit(launch.getLaunchConfiguration())) {
+        ours = launch;
+      }
+    }
   }
 
   @Override
@@ -79,22 +87,26 @@ final class StudioMunitRunner implements MunitRunner {
     return Results.INSTANCE.run();
   }
 
+  // The launch started here while Studio still lists it and it has not ended; before any start, any MUnit launch.
+  // MUnit's launch first packages the app in a job, with no process yet, and Studio removes it if that fails.
   @Override
   public boolean running() {
-    for (ILaunch launch : DebugPlugin.getDefault().getLaunchManager().getLaunches()) {
-      if (!launch.isTerminated() && isMunit(launch.getLaunchConfiguration())) {
-        return true;
-      }
+    ILaunch mine = ours;
+    List<ILaunch> all = List.of(launches());
+    if (mine != null) {
+      return all.contains(mine) && !mine.isTerminated();
     }
-    return false;
+    return all.stream().anyMatch(launch -> !launch.isTerminated() && isMunit(launch.getLaunchConfiguration()));
   }
 
   @Override
   public String console() {
-    ILaunch last = null;
-    for (ILaunch launch : DebugPlugin.getDefault().getLaunchManager().getLaunches()) {
-      if (isMunit(launch.getLaunchConfiguration())) {
-        last = launch;
+    ILaunch last = ours;
+    if (last == null) {
+      for (ILaunch launch : launches()) {
+        if (isMunit(launch.getLaunchConfiguration())) {
+          last = launch;
+        }
       }
     }
     if (last == null) {
@@ -108,6 +120,10 @@ final class StudioMunitRunner implements MunitRunner {
       }
     }
     return text.toString();
+  }
+
+  private static ILaunch[] launches() {
+    return DebugPlugin.getDefault().getLaunchManager().getLaunches();
   }
 
   private static boolean isMunit(ILaunchConfiguration config) {
@@ -124,6 +140,7 @@ final class StudioMunitRunner implements MunitRunner {
     static final Results INSTANCE = new Results();
 
     private volatile Object status;
+    private volatile Object previous;
     private volatile String project;
     private volatile boolean armed;
     private boolean registered;
@@ -132,6 +149,7 @@ final class StudioMunitRunner implements MunitRunner {
     synchronized void starting(String app) {
       register();
       project = app;
+      previous = status;
       status = null;
       armed = true;
     }
@@ -190,9 +208,18 @@ final class StudioMunitRunner implements MunitRunner {
       }
     }
 
-    private void changed(Object runStatus) {
-      if (!armed || runStatus == null) {
+    // A new launch makes MUnit end the previous run's status, which then arrives finished with its old counts; a
+    // status is the new run's only once it has been seen unfinished.
+    private synchronized void changed(Object runStatus) {
+      if (!armed || runStatus == null || runStatus == previous || runStatus == status) {
         return;
+      }
+      try {
+        if ((Boolean) call(runStatus, "isFinished")) {
+          return;
+        }
+      } catch (ReflectiveOperationException | RuntimeException e) {
+        // Unreadable; taken as live.
       }
       try {
         Object target = runStatus.getClass().getMethod("getProject").invoke(runStatus);

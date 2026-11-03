@@ -6,6 +6,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
@@ -14,6 +15,7 @@ import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.swt.widgets.Display;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.llm.Attachment;
@@ -114,6 +116,8 @@ public final class ChatJob extends Job {
       session.appConsole(Consoles.MULE_APP);
       session.appLauncher(new StudioLauncher(display));
       session.munitRunner(new StudioMunitRunner(display));
+      MunitSchemas.searchIn(MunitSchemas.studioRepositories(
+          ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath()));
       session.dataWeave(DataWeaveCli.lookup(AiSettings.dataWeaveCli(), false).cli());
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
