@@ -148,6 +148,10 @@ final class Evals {
                           && c.after().contains("get:\\employees:employees-api-config"))),
               new Grade("proposed pom.xml with munit-runner", r -> r.turn().changes().all().stream()
                   .anyMatch(c -> c.path().equals("pom.xml") && c.after().contains("munit-runner"))),
+              new Grade("the token payload the Transform reads is JSON, as in the real request",
+                  r -> r.turn().changes().all().stream()
+                      .anyMatch(c -> c.path().equals("src/test/munit/employees-api-test-suite.xml")
+                          && c.after().contains("output application/json"))),
               new Grade("no CHECKS problems left (MUnit schema when available)",
                   r -> r.turn().problems().isEmpty()), launches(),
               new Grade("did not run the unsaved suite", r -> r.used(MunitTools.RUN) == 0))),

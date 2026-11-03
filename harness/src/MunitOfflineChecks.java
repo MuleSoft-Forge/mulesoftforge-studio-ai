@@ -99,7 +99,7 @@ final class MunitOfflineChecks {
                       whereValue="#['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']"/>
                 </munit-tools:with-attributes>
                 <munit-tools:then-return>
-                  <munit-tools:payload value="#[readUrl('classpath://sample_data/hello.json')]"
+                  <munit-tools:payload value="#[MunitTools::getResourceAsStream('sample_data/hello.json')]"
                       mediaType="application/json"/>
                 </munit-tools:then-return>
               </munit-tools:mock-when>
@@ -185,7 +185,7 @@ final class MunitOfflineChecks {
                       whereValue="#['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']"/>
                 </munit-tools:with-attributes>
                 <munit-tools:then-return>
-                  <munit-tools:payload value="#[readUrl('classpath://sample_data/hello.json')]"
+                  <munit-tools:payload value="#[MunitTools::getResourceAsStream('sample_data/hello.json')]"
                       mediaType="application/json"/>
                 </munit-tools:then-return>
               </munit-tools:mock-when>
@@ -201,6 +201,7 @@ final class MunitOfflineChecks {
     wrong.put("src/test/munit/hello-test-suite.xml", wrongShapes);
     failed += check("wrong shapes: the fixture really changed", !wrongShapes.equals(goodSuite));
     failed += shapes("shape checks", wrong, good);
+    failed += beyondSchema("shape checks", good, goodSuite);
     List<Path> studio = MunitSchemas.studioRepositories(STUDIO_WORKSPACE);
     if (studio.isEmpty()) {
       System.out.println("SKIP  MUnit schema checks: no generated schemas under " + STUDIO_WORKSPACE
@@ -211,6 +212,7 @@ final class MunitOfflineChecks {
         failed += check("MUnit schemas found in the Studio workspace" + (MunitSchemas.available() ? ""
             : " (" + MunitSchemas.unavailable() + ")"), MunitSchemas.available());
         failed += shapes("MUnit schema", wrong, good);
+        failed += beyondSchema("MUnit schema", good, goodSuite);
         failed += check("MUnit schema: errors are labelled as schema errors", MuleChecks.check(wrong).stream()
             .anyMatch(p -> p.message().startsWith("MUnit schema:") && p.message().contains("processor")));
       } finally {
@@ -222,6 +224,56 @@ final class MunitOfflineChecks {
 
   private static final Path STUDIO_WORKSPACE = Path.of(System.getenv().getOrDefault("STUDIO_WORKSPACE",
       System.getProperty("user.home") + "/AnypointStudio/729"));
+
+  // Suites MUnit's schema accepts that still fail when run: the mock payloads that failed on MUnit 3.7.5 /
+  // Mule 4.13.1 while a JSON-typed one passed, and a test written without the munit: prefix.
+  private static int beyondSchema(String label, Map<String, String> good, String goodSuite) {
+    int failed = 0;
+    String fileMock = "#[MunitTools::getResourceAsStream('sample_data/hello.json')]";
+    for (String readUrl : List.of("#[readUrl('classpath://sample_data/hello.json')]",
+        "#[readUrl('classpath://sample_data/hello.json', 'application/json')]")) {
+      failed += check(label + ": a mock " + readUrl + " with mediaType JSON is reported", suiteProblems(good,
+          goodSuite.replace(fileMock, readUrl)).stream().anyMatch(p -> p.message().contains("readUrl(…)")
+              && p.message().contains("getResourceAsStream")));
+    }
+    List<Problem> typedRead = suiteProblems(good, goodSuite.replace(fileMock, "#[%dw 2.0&#10;output application/json"
+        + "&#10;---&#10;readUrl('classpath://sample_data/hello.json', 'application/json')]"));
+    failed += check(label + ": readUrl under an output application/json header is clean"
+        + (typedRead.isEmpty() ? "" : " " + typedRead), typedRead.isEmpty());
+    failed += check(label + ": getResourceAsStream of a missing file is reported", suiteProblems(good,
+        goodSuite.replace("sample_data/hello.json", "sample_data/missing.json")).stream()
+        .anyMatch(p -> p.message().contains("getResourceAsStream('sample_data/missing.json')")));
+    String objectMock = goodSuite.replace(fileMock, "#[{active: true, scope: 'read'}]");
+    String writeMock = goodSuite.replace(fileMock, "#[write({active: true, scope: 'read'}, 'application/json')]");
+    String jsonMock = goodSuite.replace(fileMock,
+        "#[%dw 2.0&#10;output application/json&#10;---&#10;{active: true, scope: 'read'}]");
+    String eventMock = jsonMock.replace("<munit:behavior>", "<munit:behavior>\n"
+        + "<munit:set-event><munit:payload value=\"#[{id: 1}]\" mediaType=\"application/json\"/></munit:set-event>");
+    failed += check(label + ": a mock DataWeave object with mediaType JSON is reported", suiteProblems(good,
+        objectMock).stream().anyMatch(p -> p.message().contains("munit-tools:payload")
+            && p.message().contains("Java map") && p.message().contains("output application/json")));
+    failed += check(label + ": a mock write() with mediaType JSON is reported", suiteProblems(good, writeMock)
+        .stream().anyMatch(p -> p.message().contains("write()") && p.message().contains("payload.field")));
+    failed += check(label + ": a set-event object with mediaType JSON is reported", suiteProblems(good,
+        eventMock).stream().anyMatch(p -> p.message().contains("munit:payload") && p.message().contains("Java map")));
+    List<Problem> jsonProblems = suiteProblems(good, jsonMock);
+    failed += check(label + ": a JSON-typed mock is clean" + (jsonProblems.isEmpty() ? "" : " " + jsonProblems),
+        jsonProblems.isEmpty());
+    failed += check(label + ": a DataWeave object without mediaType is left alone", suiteProblems(good,
+        objectMock.replaceAll("\\s+mediaType=\"application/json\"", "")).isEmpty());
+    String unprefixed = goodSuite.replace("<munit:test ", "<test ").replace("</munit:test>", "</test>");
+    List<Problem> unprefixedProblems = suiteProblems(good, unprefixed);
+    failed += check(label + ": <test> without munit: is reported, and that no test runs", unprefixedProblems
+        .stream().anyMatch(p -> p.message().startsWith("<test> is not an MUnit test"))
+        && unprefixedProblems.stream().anyMatch(p -> p.message().contains("has no <munit:test>")));
+    return failed;
+  }
+
+  private static List<Problem> suiteProblems(Map<String, String> good, String suite) {
+    Map<String, String> project = new LinkedHashMap<>(good);
+    project.put("src/test/munit/hello-test-suite.xml", suite);
+    return MuleChecks.check(project).stream().filter(p -> p.path().startsWith("src/test/munit/")).toList();
+  }
 
   // The good suite has no shape problems; the wrong one has each that MUnit's runtime reported in Studio.
   private static int shapes(String label, Map<String, String> wrong, Map<String, String> good) {
@@ -264,6 +316,10 @@ final class MunitOfflineChecks {
     failed += check("wantsMunit: run the tests", ChatSession.wantsMunit("now run the tests", List.of()));
     failed += check("MUnit prompt says how to run tests",
         Prompts.system(ChatMode.AGENT, "demo", "", "", false, false, false, true, "").contains("run_munit"));
+    String munit = Prompts.system(ChatMode.AGENT, "demo", "", "", false, false, false, true, "");
+    failed += check("MUnit prompt's mock example returns JSON, not a Java map",
+        munit.contains("<munit-tools:payload value=\"#[%dw 2.0&#10;output application/json&#10;---&#10;{ok: true}]\"")
+            && !munit.contains("value=\"#[{ok: true}]\"") && munit.contains("Stream Compatible"));
     return failed;
   }
 

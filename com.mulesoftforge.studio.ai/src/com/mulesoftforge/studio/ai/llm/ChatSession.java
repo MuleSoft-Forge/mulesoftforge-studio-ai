@@ -52,6 +52,13 @@ public class ChatSession {
       + " finish with one short line saying what you proposed.";
   private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
       + "delete|rename|refactor|implement|write|make|convert|move|migrate|generate|set ?up|configure|apply)\\b");
+  // "What did we learn … to create the tests right first time" mentions a change but asks for an explanation;
+  // "can you add …" is still a request.
+  private static final Pattern ASKS_A_QUESTION = Pattern.compile(
+      "^\\W*(what|why|how|which|who|when|where|did|does|do|is|are|was|were|explain|tell me)\\b");
+  // History notes the model sometimes copies into its own answer, where they would show twice.
+  private static final Pattern ECHOED_NOTE = Pattern.compile(
+      "(?m)^[ \\t]*\\[(?:Proposed for review|Offered to make): [^\\]\\n]*][ \\t]*(?:\\n|$)");
   // Include the MUnit guidance when the user asks for tests, or when a suite under src/test/munit is attached.
   private static final Pattern ASKS_FOR_MUNIT = Pattern.compile(
       "\\b(munit|unit tests?|tests? for|(re)?run (the |my |all |these |those )?(failing )?tests?|test suites?)\\b",
@@ -515,7 +522,7 @@ public class ChatSession {
     if (pastedAnswer != null) {
       answer = changes.isEmpty() ? pastedAnswer : pastedAnswer + "\n\n" + answer;
     }
-    answer = withOfferText(answer, offeredWith);
+    answer = withoutEchoedNotes(withOfferText(answer, offeredWith));
 
     // Tool traffic stays out of history: some providers reject tool messages in a request without tools.
     String remembered = changes.isEmpty() ? answer : answer + "\n\n[Proposed for review: "
@@ -570,8 +577,15 @@ public class ChatSession {
 
   static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,
       String prompt) {
+    String asked = prompt.toLowerCase(Locale.ROOT);
     return mode.canEdit && tools != null && changes.isEmpty() && tools.offers().isEmpty()
-        && CodeBlocks.hasProjectCode(answer) && ASKS_FOR_CHANGE.matcher(prompt.toLowerCase(Locale.ROOT)).find();
+        && CodeBlocks.hasProjectCode(answer) && ASKS_FOR_CHANGE.matcher(asked).find()
+        && !ASKS_A_QUESTION.matcher(asked).find();
+  }
+
+  public static String withoutEchoedNotes(String answer) {
+    String cleaned = ECHOED_NOTE.matcher(answer).replaceAll("").strip();
+    return cleaned.isEmpty() ? answer : cleaned;
   }
 
   // The text sent with offer_changes is kept only when the final reply is just a closing line; a final reply that

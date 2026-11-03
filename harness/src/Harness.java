@@ -1656,6 +1656,11 @@ public class Harness {
         + " stack trace. I listed two fixes above: set application/json and add an on-error-propagate for"
         + " MULE:EXPRESSION.";
     failed += check("a full final reply is not doubled", ChatSession.withOfferText(restated, offered).equals(restated));
+    failed += check("history notes the model copied into its answer are dropped", ChatSession.withoutEchoedNotes(
+        "Accept the file, then ask me to run it.\n\n[Proposed for review: src/test/munit/a-test-suite.xml]\n")
+        .equals("Accept the file, then ask me to run it."));
+    failed += check("a bracket in the answer's own text is kept", ChatSession.withoutEchoedNotes(
+        "Use [Proposed for review: x] only in history.").equals("Use [Proposed for review: x] only in history."));
     List<String> bodies = new ArrayList<>();
     String pasted = "Add this file:\\n```properties\\na=1\\n```";
     String toolCall = "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,"
@@ -1715,6 +1720,13 @@ public class Harness {
       ChatSession.Turn question = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
           "How does a properties file look?", List.of(), new DiskProject(root), progress);
       failed += check("a question with an example is not drafted", bodies.size() == 1 && question.changes().isEmpty());
+
+      bodies.clear();
+      ChatSession.Turn lessons = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "What did we learn that would have taught us to create the tests working first time?", List.of(),
+          new DiskProject(root), progress);
+      failed += check("a question that mentions a change is not drafted", bodies.size() == 1
+          && lessons.changes().isEmpty());
 
       bodies.clear();
       new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Add a health properties file", List.of(),

@@ -25,6 +25,7 @@ import org.xml.sax.helpers.DefaultHandler;
 public final class MunitChecks {
   private static final String MUNIT_DIR = "src/test/munit/";
   private static final String MULE_DIR = "src/main/mule/";
+  private static final String CORE_NS = "http://www.mulesoft.org/schema/mule/core";
   private static final String MUNIT_NS = "http://www.mulesoft.org/schema/mule/munit";
   private static final String TOOLS_NS = "http://www.mulesoft.org/schema/mule/munit-tools";
   // Elements whose content goes in value="…"; text inside them does not parse in munit-tools.
@@ -33,7 +34,9 @@ public final class MunitChecks {
   private static final Pattern DOC_NAME = Pattern.compile("\\bdoc:name\\s*=\\s*\"([^\"]+)\"");
   // Opening tags in src/main/mule, as written: "http:request", "flow-ref".
   private static final Pattern TAG = Pattern.compile("<([A-Za-z][\\w.-]*(?::[A-Za-z][\\w.-]*)?)[\\s/>]");
-  private static final Pattern READ_URL = Pattern.compile("readUrl\\s*\\(\\s*'classpath://([^']+)'\\s*\\)");
+  private static final Pattern READ_URL = Pattern.compile("readUrl\\s*\\(\\s*'classpath://([^']+)'\\s*[,)]");
+  private static final Pattern GET_RESOURCE = Pattern.compile(
+      "MunitTools::getResourceAs(Stream|String)\\s*\\(\\s*'([^']+)'\\s*[,)]");
   // attributeName / whereValue in either order; the quoted whereValue is then unwrapped (#['id'] → id).
   private static final Pattern DOC_ID_ATTR = Pattern.compile(
       "attributeName\\s*=\\s*(?:\"doc:id\"|'doc:id'|#\\['doc:id'\\]|#\\[\"doc:id\"\\])[^>]*whereValue\\s*=\\s*"
@@ -47,6 +50,8 @@ public final class MunitChecks {
   private static final Pattern WITH_ATTRIBUTE = Pattern.compile("<munit-tools:with-attribute\\b([^>]*)/?>",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
   private static final Pattern DW_STRING = Pattern.compile("^#\\[(['\"])(.*)\\1]$", Pattern.DOTALL);
+  private static final Pattern WRITE_CALL = Pattern.compile("write\\s*\\(");
+  private static final Pattern READ_URL_CALL = Pattern.compile("readUrl\\s*\\(");
 
   private MunitChecks() {}
 
@@ -123,6 +128,10 @@ public final class MunitChecks {
     if (!validated) {
       found.addAll(shapeProblems);
     }
+    found.addAll(shape.beyondSchema);
+    if (shape.tests.isEmpty()) {
+      found.add(new Problem(path, 1, "this suite has no <munit:test>, so MUnit runs nothing."));
+    }
     for (Mock mock : shape.mocks) {
       checkTarget(path, mock, app, found);
     }
@@ -170,6 +179,14 @@ public final class MunitChecks {
       if (!resources.contains(resource)) {
         found.add(new Problem(path, lineOf(xml, urls.start()), "readUrl classpath://" + resource
             + " is not under src/test/resources or src/main/resources."));
+      }
+    }
+    Matcher reads = GET_RESOURCE.matcher(xml);
+    while (reads.find()) {
+      String resource = reads.group(2);
+      if (!resources.contains(resource)) {
+        found.add(new Problem(path, lineOf(xml, reads.start()), "MunitTools::getResourceAs" + reads.group(1)
+            + "('" + resource + "') is not under src/test/resources or src/main/resources."));
       }
     }
   }
@@ -248,6 +265,8 @@ public final class MunitChecks {
     boolean hasConfig;
     final List<Test> tests = new ArrayList<>();
     final List<Mock> mocks = new ArrayList<>();
+    // Problems MUnit's schema accepts, so they are reported even when it validated the suite.
+    final List<Problem> beyondSchema = new ArrayList<>();
     private final String path;
     private final List<Problem> found;
     private final Deque<Open> open = new ArrayDeque<>();
@@ -287,7 +306,15 @@ public final class MunitChecks {
       if (MUNIT_NS.equals(uri) && "test".equals(localName)) {
         tests.add(new Test(attributes.getValue("", "name"), attributes.getValue("", "description"), line));
       }
+      if (CORE_NS.equals(uri) && "test".equals(localName)) {
+        beyondSchema.add(new Problem(path, line, "<test> is not an MUnit test, so MUnit skips it; write"
+            + " <munit:test name=\"…\" description=\"…\">."));
+      }
       open.push(new Open(uri, localName, line, new StringBuilder()));
+      if ("payload".equals(localName) && (MUNIT_NS.equals(uri) || TOOLS_NS.equals(uri))) {
+        checkJsonValue((MUNIT_NS.equals(uri) ? "munit:" : "munit-tools:") + localName, line,
+            attributes.getValue("", "value"), attributes.getValue("", "mediaType"));
+      }
       if (!TOOLS_NS.equals(uri)) {
         return;
       }
@@ -366,8 +393,39 @@ public final class MunitChecks {
 
     private void requireValue(String element, Attributes attributes, int line) {
       if (attributes.getValue("", "value") == null) {
-        problem(line, element + " needs value=\"…\" (for example value=\"#[readUrl('classpath://data.json')]\""
-            + " mediaType=\"application/json\").");
+        problem(line, element + " needs value=\"…\" (for example value=\"#[%dw 2.0&#10;output application/json"
+            + "&#10;---&#10;{…}]\" mediaType=\"application/json\").");
+      }
+    }
+
+    // MUnit puts the expression's result in the message as it is and only labels it with mediaType. Run on
+    // MUnit 3.7.5 / Mule 4.13.1: a DataWeave object and any readUrl(…) (.json or .dwl, with or without a content
+    // type) arrive as a Java map, which the first reader of the payload rejects ("requires a Stream Compatible
+    // content"); write() gives a String that payload.field rejects. An output application/json header and
+    // MunitTools::getResourceAsStream / getResourceAsString work.
+    private void checkJsonValue(String element, int line, String value, String mediaType) {
+      if (value == null || mediaType == null || !mediaType.toLowerCase(Locale.ROOT).contains("json")) {
+        return;
+      }
+      String body = value.strip();
+      if (!body.startsWith("#[")) {
+        return;
+      }
+      body = body.substring(2).stripLeading();
+      String fix = " Give it as JSON, like the real response: value=\"#[%dw 2.0&#10;output application/json&#10;"
+          + "---&#10;{…}]\".";
+      if (body.startsWith("{") || body.startsWith("[")) {
+        beyondSchema.add(new Problem(path, line, element + " value is a DataWeave object, which stays a Java map"
+            + " whatever mediaType says; a flow step that writes or logs the payload as JSON then fails." + fix));
+      } else if (WRITE_CALL.matcher(body).lookingAt()) {
+        beyondSchema.add(new Problem(path, line, element + " value uses write(), which makes the payload text,"
+            + " so payload.field selectors in the flow fail." + fix));
+      } else if (READ_URL_CALL.matcher(body).lookingAt()) {
+        beyondSchema.add(new Problem(path, line, element + " value is readUrl(…), which gives a Java map whatever"
+            + " mediaType says (a .dwl file's own output header included); a flow step that writes or logs the"
+            + " payload as JSON then fails. Read the file as JSON: value=\"#[MunitTools::getResourceAsStream('….json')]\""
+            + " or value=\"#[%dw 2.0&#10;output application/json&#10;---&#10;readUrl('classpath://….json',"
+            + " 'application/json')]\"."));
       }
     }
 

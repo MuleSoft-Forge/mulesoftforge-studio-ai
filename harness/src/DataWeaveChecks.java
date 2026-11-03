@@ -72,6 +72,13 @@ final class DataWeaveChecks {
         "<mule>\n  <set-variable variableName=\"x\" value=\"#[payload.id ++ &quot;-&quot;]\"/>\n</mule>");
     failed += check("bare expression wrapped, entities decoded, line kept", bare.size() == 1
         && bare.get(0).line() == 2 && bare.get(0).header() == 3 && bare.get(0).text().endsWith("payload.id ++ \"-\""));
+    List<ScriptChecks.Script> oneLine = ScriptChecks.scripts("src/test/munit/a-test-suite.xml",
+        "<mule>\n  <munit-tools:payload value=\"#[output application/json --- {active: true}]\"/>\n</mule>");
+    failed += check("a one-line header expression is kept as it is", oneLine.size() == 1
+        && oneLine.get(0).header() == 0 && oneLine.get(0).text().equals("output application/json --- {active: true}"));
+    List<ScriptChecks.Script> typeKey = ScriptChecks.scripts("src/main/mule/a.xml",
+        "<mule>\n  <set-payload value=\"#[{&#10;type: payload.kind, note: '---'}]\"/>\n</mule>");
+    failed += check("an object with a type key is still wrapped", typeKey.size() == 1 && typeKey.get(0).header() == 3);
     List<ScriptChecks.Script> module = ScriptChecks.scripts("src/main/resources/modules/Utils.dwl",
         "%dw 2.0\nfun shout(s: String) = upper(s)\n");
     failed += check("module file given a body so it compiles", module.size() == 1
@@ -95,6 +102,10 @@ final class DataWeaveChecks {
     int line = (int) added.substring(0, added.indexOf("#[payload.id +]")).chars().filter(c -> c == '\n').count() + 1;
     failed += check("a broken expression is reported; a runtime module is not", problems.size() == 1
         && problems.get(0).line() == line);
+    String json = before.replace("</mule>", "<set-variable variableName=\"z\""
+        + " value=\"#[output application/json --- {active: true, scope: 'read'}]\"/>\n</mule>");
+    failed += check("a one-line output header expression passes", ScriptChecks.introduced(dw, EMPLOYEES_XML, before,
+        json, ScriptChecks.TIMEOUT, () -> false).isEmpty());
     String module = "%dw 2.0\nimport * from modules::Utils\noutput application/json\n---\nshout(payload.name)";
     failed += check("names from the project's own modules are not reported", ScriptChecks.introduced(dw,
         "src/main/resources/x.dwl", null, module, ScriptChecks.TIMEOUT, () -> false).isEmpty());
@@ -372,6 +383,11 @@ final class DataWeaveChecks {
         && out.contains("- line 1"));
     out = tools.execute(request(DataWeaveTools.VALIDATE, Map.of("script", "vars.region ++ p('suffix')")));
     failed += check("validate: Mule bindings are known", out.startsWith("VALID"));
+    out = tools.execute(request(DataWeaveTools.VALIDATE, Map.of("script",
+        "#[%dw 2.0&#10;output application/json&#10;---&#10;{active: true, scope: 'read'}]")));
+    failed += check("validate: a #[...] value copied from the XML is checked inside", out.startsWith("VALID"));
+    out = tools.execute(request(DataWeaveTools.VALIDATE, Map.of("script", "#[payload.id ++]")));
+    failed += check("validate: an error inside #[...] is still found", out.startsWith("PROBLEMS:"));
     out = tools.execute(request(DataWeaveTools.RUN, Map.of("script",
         "output application/json --- { password: \"s3cret-Value1\" }")));
     failed += check("run output is masked", !out.contains("s3cret-Value1") && out.contains("«masked-"));

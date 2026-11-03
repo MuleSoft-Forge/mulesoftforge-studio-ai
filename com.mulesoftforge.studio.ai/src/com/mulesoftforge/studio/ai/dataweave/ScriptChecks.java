@@ -25,8 +25,11 @@ public final class ScriptChecks {
   private static final Pattern CDATA = Pattern.compile("<!\\[CDATA\\[(.*?)]]>", Pattern.DOTALL);
   private static final Pattern ATTRIBUTE_EXPRESSION = Pattern.compile("=\\s*\"(#\\[[^\"]*])\"|=\\s*'(#\\[[^']*])'");
   private static final Pattern TEXT_EXPRESSION = Pattern.compile(">\\s*(#\\[[^<]*])\\s*<");
-  private static final Pattern HEADER = Pattern.compile("^\\s*%dw\\b|^\\s*(?:output|import|var|fun|ns|type|input)\\b[\\s\\S]*?^\\s*---",
-      Pattern.MULTILINE);
+  // A header is a %dw line, directives followed by a --- line, or directives and --- on one line at the start
+  // (#[output application/json --- {…}]); a bare object with a line such as "type: x," is not a header.
+  private static final Pattern HEADER = Pattern.compile("^\\s*%dw\\b"
+      + "|^\\s*(?:output|import|var|fun|ns|type|input)\\b[\\s\\S]*?^\\s*---"
+      + "|\\A\\s*(?:output|import|var|fun|ns|type|input)\\s[^\\n]*?---", Pattern.MULTILINE);
   private static final Pattern IMPORT = Pattern.compile("(?m)^\\s*import\\b.*?\\bfrom\\s+([\\w:]+)|^\\s*import\\s+([\\w:]+)\\s*$");
   private static final Pattern QUALIFIED = Pattern.compile("Unable to resolve reference of: `([A-Za-z_][\\w]*)::");
   private static final Pattern MODULE = Pattern.compile("Unable to resolve module with identifier ([\\w:]+)");
@@ -89,10 +92,14 @@ public final class ScriptChecks {
       if (body.isBlank()) {
         continue;
       }
-      boolean hasHeader = HEADER.matcher(body).find();
+      boolean hasHeader = hasHeader(body);
       out.add(new Script(line(content, m.start(group)), hasHeader ? body : EXPRESSION_HEADER + body,
           hasHeader ? 0 : 3));
     }
+  }
+
+  static boolean hasHeader(String body) {
+    return HEADER.matcher(body).find();
   }
 
   // Problems in after's scripts that before did not have; before is null for a new file.

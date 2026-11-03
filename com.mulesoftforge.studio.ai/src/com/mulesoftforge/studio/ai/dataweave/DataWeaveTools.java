@@ -58,7 +58,8 @@ public final class DataWeaveTools {
           .description("Check that a DataWeave 2.0 script compiles, with Mule's bindings (payload, vars, attributes,"
               + " p() and the rest) declared. Use it when there is no sample to run on.")
           .parameters(JsonObjectSchema.builder()
-              .addStringProperty("script", "The whole DataWeave script or a Mule #[...] expression body")
+              .addStringProperty("script", "The whole DataWeave script, or a Mule expression with or without"
+                  + " its #[...]")
               .required("script")
               .build())
           .build());
@@ -93,7 +94,7 @@ public final class DataWeaveTools {
     try {
       JsonNode args = JSON.readTree(request.arguments() == null || request.arguments().isBlank() ? "{}"
           : request.arguments());
-      String script = args.path("script").asText("");
+      String script = unwrapped(args.path("script").asText(""));
       if (script.isBlank()) {
         return "ERROR: script is empty.";
       }
@@ -107,8 +108,17 @@ public final class DataWeaveTools {
     }
   }
 
+  // A value copied from the XML, #[…] with entities such as &#10;, is checked as the expression inside it.
+  static String unwrapped(String script) {
+    String value = script.strip();
+    if (value.startsWith("#[") && value.endsWith("]")) {
+      return ScriptChecks.unescape(value.substring(2, value.length() - 1));
+    }
+    return script;
+  }
+
   private String validate(String script) throws Exception {
-    boolean bare = !script.contains("---") && !script.stripLeading().startsWith("%dw");
+    boolean bare = !ScriptChecks.hasHeader(script);
     String text = bare ? "%dw 2.0\noutput application/java\n---\n" + script : script;
     DataWeaveCli.Validation result = cli.validate(text, DataWeaveCli.MULE_BINDINGS, timeout, () -> false);
     List<DataWeaveCli.Problem> problems = ScriptChecks.reportable(text, result.problems());
