@@ -200,6 +200,8 @@ public class Harness {
       case "check-http" -> HttpChecks.run();
       case "check-workspace" -> WorkspaceChecks.run();
       case "check-feedback" -> FeedbackChecks.run();
+      case "check-munit" -> MunitOfflineChecks.run();
+      case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
             com.mulesoftforge.studio.ai.dataweave.CliDownload.current();
@@ -1757,7 +1759,7 @@ public class Harness {
     failed += check("Show built-in prompt lists every part", builtIn.contains("Rules (always apply)")
         && builtIn.contains("When asked what MuleSoftForge Studio AI can do") && builtIn.contains("Ask mode")
         && builtIn.contains("Agent mode, Mule guidance") && builtIn.contains("Plan mode")
-        && builtIn.contains("8,000 characters"));
+        && builtIn.contains("When creating or editing MUnit tests") && builtIn.contains("8,000 characters"));
     String diagnose = Prompts.system(ChatMode.DIAGNOSE, "demo", "", "");
     failed += check("Diagnose prompt: reproduce, evidence, one checked cause, fixes offered for Agent",
         diagnose.contains("You are in Diagnose mode") && diagnose.contains("1. Reproduce")
@@ -2046,7 +2048,7 @@ public class Harness {
     }
   }
 
-  private static Connection connectionFor(Map<String, String> env, Provider provider) {
+  static Connection connectionFor(Map<String, String> env, Provider provider) {
     String prefix = switch (provider) {
       case OPENROUTER -> "OPENROUTER";
       case OPENAI -> "OPENAI";
@@ -2078,7 +2080,7 @@ public class Harness {
     return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret);
   }
 
-  private static Provider parseProvider(String name) {
+  static Provider parseProvider(String name) {
     String key = name.trim().toLowerCase(Locale.ROOT).replace('-', '_');
     return switch (key) {
       case "openrouter" -> Provider.OPENROUTER;
@@ -2136,6 +2138,8 @@ public class Harness {
           java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
+          java Harness check-munit
+          java Harness evals [--provider name] [--model id] [--runs n] [--list] [case...]   (live model, costs tokens)
         Providers: openrouter openai anthropic gemini azure bedrock mulesoft ollama custom
         Reads ../.env — never prints key values.
         """);

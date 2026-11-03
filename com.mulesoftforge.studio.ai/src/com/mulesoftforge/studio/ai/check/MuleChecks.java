@@ -197,6 +197,7 @@ public final class MuleChecks {
         checkReferences(config, globals, flows, found);
       }
     }
+    MunitChecks.check(project, found);
     found.forEach(problem -> problems.putIfAbsent(problem.key(), problem));
     return new ArrayList<>(problems.values());
   }

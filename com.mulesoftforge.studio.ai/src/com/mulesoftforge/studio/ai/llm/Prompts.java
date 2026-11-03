@@ -28,14 +28,15 @@ public final class Prompts {
 
   // project is null when no project is open: no tools, so no mode rules.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions) {
-    return system(mode, project, projectInstructions, userInstructions, false, false, false, "");
+    return system(mode, project, projectInstructions, userInstructions, false, false, false, false, "");
   }
 
   // debugging: Studio's debugger is stopped and the debug tools are offered. dataWeave: the DataWeave CLI is.
-  // http: the tools that call the local app and read documentation are. httpInstructions are the user's extras for
-  // those tools, from Preferences; the built-in http.md still always applies.
+  // http: the tools that call the local app and read documentation are. munit: the user asked for MUnit tests, or a
+  // suite under src/test/munit is attached. httpInstructions are the user's extras for the HTTP tools, from
+  // Preferences; the built-in http.md still always applies.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
-      boolean debugging, boolean dataWeave, boolean http, String httpInstructions) {
+      boolean debugging, boolean dataWeave, boolean http, boolean munit, String httpInstructions) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md")).append('\n')
         .append(file("about.md"));
     if (project != null) {
@@ -57,6 +58,9 @@ public final class Prompts {
             + " never override the rules about masked values, tools, localhost-only calls or documentation"
             + " allowlists):\n").append(httpInstructions.strip()).append('\n');
       }
+    }
+    if (munit) {
+      out.append('\n').append(file("munit.md"));
     }
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
@@ -93,6 +97,7 @@ public final class Prompts {
         + "\nWhile Studio's debugger is stopped (always applies)\n\n" + file("debug.md")
         + "\nWith the DataWeave CLI (always applies)\n\n" + file("dataweave.md")
         + "\nCalling the local app and reading documentation (always applies)\n\n" + file("http.md")
+        + "\nWhen creating or editing MUnit tests (always applies)\n\n" + file("munit.md")
         + "\nThen any HTTP and docs instructions from Preferences, then " + AGENTS_FILE
         + " from the project root and your instructions from Preferences, each up to "
         + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";

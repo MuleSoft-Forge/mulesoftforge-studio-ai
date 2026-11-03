@@ -405,6 +405,10 @@ public class ChatView extends ViewPart {
     composer.attach(result);
   }
 
+  void attach(Attachments.Result result, String promptIfEmpty) {
+    composer.attach(result, promptIfEmpty);
+  }
+
   // Attaches the event Studio's debugger is stopped at. Finding the processor's XML reads files, so it runs in a job.
   void askAboutDebugEvent() {
     StudioDebugger debugger = StudioDebugger.get();

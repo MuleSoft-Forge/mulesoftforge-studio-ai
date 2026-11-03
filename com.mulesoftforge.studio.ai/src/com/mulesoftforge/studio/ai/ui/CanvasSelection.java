@@ -2,7 +2,11 @@ package com.mulesoftforge.studio.ai.ui;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.runtime.Adapters;
@@ -16,10 +20,37 @@ import com.mulesoftforge.studio.ai.llm.Attachment;
 // parts; each has getEntity().getElement().asXML(). Those are Studio internals, so they are called by reflection:
 // when a Studio release changes them, nothing is attached instead of the plugin failing to load.
 final class CanvasSelection {
+  private static final Pattern FLOW_NAME = Pattern.compile(
+      "(?is)<(?:[\\w.-]+:)?(flow|sub-flow)\\b[^>]*\\bname\\s*=\\s*\"([^\"]+)\"");
+
   private CanvasSelection() {}
 
   // Empty when the selection has no canvas elements.
   static Attachments.Result attach(ISelection selection, IEditorPart editor) {
+    List<String> elements = xmlOf(selection);
+    if (elements.isEmpty()) {
+      return new Attachments.Result(List.of(), List.of());
+    }
+    IFile file = editor == null ? null : Adapters.adapt(editor.getEditorInput(), IFile.class);
+    String project = file == null ? null : file.getProject().getName();
+    String path = file != null ? file.getProjectRelativePath().toString()
+        : editor != null ? editor.getEditorInput().getName() : "the open Mule configuration";
+    return new Attachments.Result(List.of(Attachment.processors(project, path, elements)), List.of());
+  }
+
+  // Names of flow / sub-flow elements in the selection, in order, without duplicates.
+  static List<String> flows(ISelection selection) {
+    Set<String> names = new LinkedHashSet<>();
+    for (String xml : xmlOf(selection)) {
+      Matcher m = FLOW_NAME.matcher(xml);
+      while (m.find()) {
+        names.add(m.group(2));
+      }
+    }
+    return List.copyOf(names);
+  }
+
+  private static List<String> xmlOf(ISelection selection) {
     List<String> elements = new ArrayList<>();
     if (selection instanceof IStructuredSelection structured) {
       for (Object part : structured.toList()) {
@@ -29,14 +60,7 @@ final class CanvasSelection {
         }
       }
     }
-    if (elements.isEmpty()) {
-      return new Attachments.Result(List.of(), List.of());
-    }
-    IFile file = editor == null ? null : Adapters.adapt(editor.getEditorInput(), IFile.class);
-    String project = file == null ? null : file.getProject().getName();
-    String path = file != null ? file.getProjectRelativePath().toString()
-        : editor != null ? editor.getEditorInput().getName() : "the open Mule configuration";
-    return new Attachments.Result(List.of(Attachment.processors(project, path, elements)), List.of());
+    return elements;
   }
 
   private static String xmlOf(Object part) {

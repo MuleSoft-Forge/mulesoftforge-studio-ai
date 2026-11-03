@@ -26,6 +26,8 @@ import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.launch.AppLauncher;
 import com.mulesoftforge.studio.ai.launch.LaunchTools;
+import com.mulesoftforge.studio.ai.launch.MunitRunner;
+import com.mulesoftforge.studio.ai.launch.MunitTools;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -50,6 +52,10 @@ public class ChatSession {
       + " finish with one short line saying what you proposed.";
   private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
       + "delete|rename|refactor|implement|write|make|convert|move|migrate|generate|set ?up|configure|apply)\\b");
+  // Include the MUnit guidance when the user asks for tests, or when a suite under src/test/munit is attached.
+  private static final Pattern ASKS_FOR_MUNIT = Pattern.compile(
+      "\\b(munit|unit tests?|tests? for|(re)?run (the |my |all |these |those )?(failing )?tests?|test suites?)\\b",
+      Pattern.CASE_INSENSITIVE);
 
   // problems: what the static checks still find in the proposals when the model stopped.
   // offers: changes the model recommended but did not make, for the user to pick from.
@@ -112,6 +118,10 @@ public class ChatSession {
       if (toolCounts.getOrDefault(LaunchTools.STOP, 0) > 0) {
         parts.add("stopped the app");
       }
+      int tested = toolCounts.getOrDefault(MunitTools.RUN, 0);
+      if (tested > 0) {
+        parts.add("ran the MUnit tests" + (tested == 1 ? "" : " " + tested + " times"));
+      }
       int pages = toolCounts.getOrDefault(HttpTools.DOCS, 0);
       if (pages > 0) {
         parts.add("read " + plural(pages, "docs page"));
@@ -149,6 +159,7 @@ public class ChatSession {
   private volatile DataWeaveCli dataWeave;
   private volatile AppConsole appConsole;
   private volatile AppLauncher appLauncher;
+  private volatile MunitRunner munitRunner;
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
   private volatile List<String> docsHosts = List.of();
@@ -183,6 +194,11 @@ public class ChatSession {
   // Studio's Run As / Debug As > Mule Application, so Agent and Diagnose can start and stop the app; null without.
   public void appLauncher(AppLauncher launcher) {
     appLauncher = launcher;
+  }
+
+  // Studio's MUnit runner, so Agent and Diagnose can run the project's suites; null without.
+  public void munitRunner(MunitRunner runner) {
+    munitRunner = runner;
   }
 
   // Told, off the UI thread, when a request call_endpoint stopped waiting for gets its answer. The model is told
@@ -360,8 +376,9 @@ public class ChatSession {
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
+    boolean munit = wantsMunit(prompt, attachments);
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, fromHttp.text());
+        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, munit, fromHttp.text());
 
     List<ChatMessage> past;
     boolean firstTurn;
@@ -382,6 +399,9 @@ public class ChatSession {
     if (tools != null) {
       tools.useDataWeave(cli);
     }
+    MunitRunner tester = munitRunner;
+    MunitTools munitTools = project == null || tester == null || !mode.canChangeApp ? null
+        : new MunitTools(project, tester, changes, secrets, progress::isCancelled, MunitTools.RUN_TIMEOUT);
     List<ToolSpecification> specifications = new ArrayList<>();
     if (tools != null) {
       specifications.addAll(tools.specifications());
@@ -397,6 +417,9 @@ public class ChatSession {
     }
     if (launchTools != null) {
       specifications.addAll(LaunchTools.SPECIFICATIONS);
+    }
+    if (munitTools != null) {
+      specifications.addAll(MunitTools.SPECIFICATIONS);
     }
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
@@ -454,16 +477,19 @@ public class ChatSession {
         boolean dataWeaveCall = DataWeaveTools.handles(call.name());
         boolean httpCall = HttpTools.handles(call.name());
         boolean launchCall = LaunchTools.handles(call.name());
+        boolean munitCall = MunitTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
             : httpCall ? HttpTools.describe(call) : launchCall ? LaunchTools.describe(call)
-            : ProjectTools.describe(call));
+            : munitCall ? MunitTools.describe(call) : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         String result = debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
-            : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall ? tools.execute(call)
+            : munitCall && munitTools != null ? munitTools.execute(call)
+            : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
+                ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         int hidden = secrets.total() - before;
         if (hidden > 0) {
@@ -478,7 +504,7 @@ public class ChatSession {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
-            true, dataWeaveTools != null, httpTools != null, fromHttp.text());
+            true, dataWeaveTools != null, httpTools != null, munit, fromHttp.text());
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
     }
@@ -524,6 +550,22 @@ public class ChatSession {
       out.add(next);
     }
     return out;
+  }
+
+  public static boolean wantsMunit(String prompt, List<Attachment> attachments) {
+    if (prompt != null && ASKS_FOR_MUNIT.matcher(prompt).find()) {
+      return true;
+    }
+    if (attachments == null) {
+      return false;
+    }
+    for (Attachment attachment : attachments) {
+      String path = attachment.path();
+      if (path != null && path.replace('\\', '/').contains("src/test/munit/")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,

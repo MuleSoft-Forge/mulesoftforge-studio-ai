@@ -3,6 +3,7 @@ package com.mulesoftforge.studio.ai.ui;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IExecutableExtensionFactory;
@@ -11,6 +12,7 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.PlatformUI;
@@ -20,10 +22,10 @@ import org.osgi.framework.Bundle;
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.llm.Errors;
 
-// "Send to MuleSoftForge Studio AI" in the context menu of the Mule editor's canvas. Studio builds that menu itself and
-// asks providers registered on its org.mule.tooling.messageflow.nodecontextmenu extension point (see plugin.xml)
-// to add items, every time it opens. Providers implement Studio's IContextMenuProvider; this factory implements it
-// with a proxy, so the plugin needs no compile-time or bundle dependency on Studio's internals.
+// "Send to MuleSoftForge Studio AI" and "Create MUnit tests…" in the context menu of the Mule editor's canvas. Studio
+// builds that menu itself and asks providers registered on its org.mule.tooling.messageflow.nodecontextmenu extension
+// point (see plugin.xml) to add items, every time it opens. Providers implement Studio's IContextMenuProvider; this
+// factory implements it with a proxy, so the plugin needs no compile-time or bundle dependency on Studio's internals.
 public class CanvasMenu implements IExecutableExtensionFactory {
   private static final String MESSAGEFLOW_BUNDLE = "org.mule.tooling.messageflow";
   private static final String PROVIDER = "org.mule.tooling.messageflow.editor.IContextMenuProvider";
@@ -52,7 +54,7 @@ public class CanvasMenu implements IExecutableExtensionFactory {
         case "equals" -> proxy == args[0];
         case "addActions" -> {
           if (args != null && args.length > 0 && args[0] instanceof IMenuManager menu) {
-            addItem(menu);
+            addItems(menu);
           }
           yield null;
         }
@@ -62,35 +64,70 @@ public class CanvasMenu implements IExecutableExtensionFactory {
   }
 
   // Shown only when the canvas selection has elements; the selection is read when the menu opens.
-  private static void addItem(IMenuManager menu) {
+  private static void addItems(IMenuManager menu) {
     IWorkbenchWindow window = PlatformUI.getWorkbench().getActiveWorkbenchWindow();
     IWorkbenchPage page = window == null ? null : window.getActivePage();
     if (page == null) {
       return;
     }
-    Attachments.Result selected = CanvasSelection.attach(window.getSelectionService().getSelection(),
-        page.getActiveEditor());
+    ISelection selection = window.getSelectionService().getSelection();
+    Attachments.Result selected = CanvasSelection.attach(selection, page.getActiveEditor());
     if (selected.attached().isEmpty()) {
       return;
     }
+    add(menu, sendAction(page, window, selected));
+    List<String> flows = CanvasSelection.flows(selection);
+    if (!flows.isEmpty()) {
+      add(menu, munitAction(page, window, selected, flows));
+    }
+  }
+
+  private static Action sendAction(IWorkbenchPage page, IWorkbenchWindow window, Attachments.Result selected) {
     Action send = new Action("Send to MuleSoftForge Studio AI") {
       @Override
       public void run() {
-        try {
-          ((ChatView) page.showView(ChatView.ID)).attach(selected);
-        } catch (Exception e) {
-          Activator.logError("Could not open the MuleSoftForge Studio AI view", e);
-          MessageDialog.openError(window.getShell(), "MuleSoftForge Studio AI",
-              "Could not open the MuleSoftForge Studio AI view: " + Errors.describe(e));
-        }
+        open(page, window, selected, null);
       }
     };
     send.setImageDescriptor(AbstractUIPlugin.imageDescriptorFromPlugin(Activator.PLUGIN_ID, "icons/forge16.png"));
     send.setToolTipText("Attach the XML of the selected elements to the MuleSoftForge Studio AI chat");
+    return send;
+  }
+
+  private static Action munitAction(IWorkbenchPage page, IWorkbenchWindow window, Attachments.Result selected,
+      List<String> flows) {
+    Action munit = new Action("Create MUnit tests with MuleSoftForge Studio AI") {
+      @Override
+      public void run() {
+        open(page, window, selected, Composer.munitPrompt(flows));
+      }
+    };
+    munit.setImageDescriptor(AbstractUIPlugin.imageDescriptorFromPlugin(Activator.PLUGIN_ID, "icons/forge16.png"));
+    munit.setToolTipText("Ask MuleSoftForge Studio AI to draft MUnit tests for the selected flow or sub-flow");
+    return munit;
+  }
+
+  private static void open(IWorkbenchPage page, IWorkbenchWindow window, Attachments.Result selected,
+      String promptIfEmpty) {
+    try {
+      ChatView view = (ChatView) page.showView(ChatView.ID);
+      if (promptIfEmpty == null) {
+        view.attach(selected);
+      } else {
+        view.attach(selected, promptIfEmpty);
+      }
+    } catch (Exception e) {
+      Activator.logError("Could not open the MuleSoftForge Studio AI view", e);
+      MessageDialog.openError(window.getShell(), "MuleSoftForge Studio AI",
+          "Could not open the MuleSoftForge Studio AI view: " + Errors.describe(e));
+    }
+  }
+
+  private static void add(IMenuManager menu, Action action) {
     if (menu.find(GROUP) != null) {
-      menu.appendToGroup(GROUP, send);
+      menu.appendToGroup(GROUP, action);
     } else {
-      menu.add(send);
+      menu.add(action);
     }
   }
 }

@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
@@ -46,7 +47,7 @@ import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 // The bottom of the chat view: attachments, the message box, mode and model pickers, and Send.
-final class Composer {
+public final class Composer {
   interface Listener {
     void send();
 
@@ -67,6 +68,18 @@ final class Composer {
   static final String EXPLAIN_EVENT_PROMPT = "Explain what is happening at this processor.";
   static final String FIX_CONSOLE_PROMPT = "Explain the error in this console output and fix its cause.";
   static final String DIAGNOSE_CONSOLE_PROMPT = "Find the cause of the error in this console output.";
+
+  // Prefill when the canvas action asks for MUnit tests for one or more selected flows.
+  public static String munitPrompt(List<String> flows) {
+    if (flows == null || flows.isEmpty()) {
+      return "Create MUnit tests for the selected flow.";
+    }
+    if (flows.size() == 1) {
+      return "Create MUnit tests for flow `" + flows.get(0) + "`.";
+    }
+    return "Create MUnit tests for flows "
+        + flows.stream().map(name -> "`" + name + "`").collect(Collectors.joining(", ")) + ".";
+  }
   static final String PLACEHOLDER = "Ask about this Mule project, or ask for a change. Enter sends, Shift+Enter"
       + " adds a line, the mic dictates.";
   static final String CONTEXT_HELP = "Attach files, folders, the editor selection, the project's file list,"
@@ -212,6 +225,12 @@ final class Composer {
   // Replaces an attachment for the same thing so attaching twice does not send it twice. Attaching problems to an
   // empty message suggests fixing them; console output showing a failure suggests diagnosing it.
   void attach(Attachments.Result result) {
+    attach(result, null);
+  }
+
+  // promptIfEmpty is used when the caller already knows what to ask (for example Create MUnit tests); it is only
+  // applied when the box is still empty after the usual problem / debugger prefills.
+  void attach(Attachments.Result result, String promptIfEmpty) {
     for (Attachment attachment : result.attached()) {
       attached.removeIf(a -> sameTarget(a, attachment));
       attached.add(attachment);
@@ -245,6 +264,8 @@ final class Composer {
       }
       ui.setText(!console ? FIX_PROBLEMS_PROMPT
           : mode() == ChatMode.DIAGNOSE ? DIAGNOSE_CONSOLE_PROMPT : FIX_CONSOLE_PROMPT);
+    } else if (promptIfEmpty != null && !promptIfEmpty.isBlank() && prompt().isEmpty()) {
+      ui.setText(promptIfEmpty);
     }
     showAttached();
     ui.focus();
