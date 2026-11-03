@@ -1,5 +1,11 @@
 package com.mulesoftforge.studio.ai.llm;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,6 +18,56 @@ public final class ChatCompletions {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   private ChatCompletions() {}
+
+  // Claude caches a request prefix only up to a block marked cache_control, and OpenAI-format gateways in front of
+  // Claude pass the marker through. Marked: the system prompt; the history before the previous turn, which the
+  // next turn sends unchanged (the previous turn's attachments are dropped then); and the latest user message,
+  // which every tool round of this turn sends again. Anything else is returned as it came.
+  public static String withCacheBreakpoints(String body) {
+    if (body == null || !body.contains("\"messages\"") || body.contains("cache_control")) {
+      return body;
+    }
+    try {
+      if (!(JSON.readTree(body) instanceof ObjectNode request)
+          || !request.path("model").asText().toLowerCase(Locale.ROOT).contains("claude")
+          || !(request.get("messages") instanceof ArrayNode messages) || messages.isEmpty()) {
+        return body;
+      }
+      List<Integer> users = new ArrayList<>();
+      for (int i = 0; i < messages.size(); i++) {
+        JsonNode message = messages.get(i);
+        if ("user".equals(message.path("role").asText()) && message.path("content").isTextual()) {
+          users.add(i);
+        }
+      }
+      Set<Integer> marks = new TreeSet<>();
+      if ("system".equals(messages.get(0).path("role").asText())) {
+        marks.add(0);
+      }
+      if (users.size() >= 2 && users.get(users.size() - 2) > 1) {
+        marks.add(users.get(users.size() - 2) - 1);
+      }
+      if (!users.isEmpty()) {
+        marks.add(users.get(users.size() - 1));
+      }
+      int marked = 0;
+      for (int i : marks) {
+        if (messages.get(i) instanceof ObjectNode message && message.path("content").isTextual()
+            && !message.path("content").asText().isEmpty()) {
+          ArrayNode parts = JSON.createArrayNode();
+          ObjectNode part = parts.addObject();
+          part.put("type", "text");
+          part.put("text", message.path("content").asText());
+          part.putObject("cache_control").put("type", "ephemeral");
+          message.set("content", parts);
+          marked++;
+        }
+      }
+      return marked == 0 ? body : JSON.writeValueAsString(request);
+    } catch (Exception e) {
+      return body;
+    }
+  }
 
   // Leaves the body alone when it is not a chat completion, has 0 or 1 choices, or is not JSON.
   public static String collapseChoices(String body) {

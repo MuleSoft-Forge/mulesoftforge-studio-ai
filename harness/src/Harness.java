@@ -70,6 +70,7 @@ import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.render.Span;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 
@@ -596,7 +597,69 @@ public class Harness {
         + "\"new_text\":\"${api.timeout}\"}", "Checks passed.");
     failed += check("fixed proposals leave nothing to report", tools.problemsIntroduced().isEmpty());
     failed += expect(tools, "write_file", "{\"path\":\"README.md\",\"content\":\"hi\"}", "not written yet.");
+    failed += checkTypes(base, api);
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // application-types.xml as Studio writes it, and the mistakes a model made in it in Studio.
+  private static int checkTypes(Map<String, String> base, String api) {
+    int failed = 0;
+    String id = "aafc78c1-7dc7-4ca7-9590-bb7b8505aba3";
+    Map<String, String> project = new TreeMap<>(base);
+    project.put(api, muleFile("", "", API_BODY.replaceFirst("<logger ", "<logger doc:id=\"" + id + "\" ")));
+    project.put("src/main/resources/examples/webhookAttributes.json", "");
+    String types = """
+        <?xml version='1.0' encoding='UTF-8'?>
+        <types:mule xmlns:types="http://www.mulesoft.org/schema/mule/types">
+          <types:catalog>
+            <types:type name="WebhookAttributes" format="json">
+              <types:shape format="weave" example="examples/webhookAttributes.json"><![CDATA[%dw 2.0
+
+        type WebhookAttributes = {|
+          method: String,
+          headers: {| "content-type": String, host: String |}
+        |}
+
+        ]]></types:shape>
+            </types:type>
+          </types:catalog>
+          <types:enrichment select="#DOC_ID">
+            <types:processor-declaration>
+              <types:input-event>
+                <types:message>
+                  <types:attributes type="WebhookAttributes"/>
+                </types:message>
+              </types:input-event>
+            </types:processor-declaration>
+          </types:enrichment>
+        </types:mule>
+        """.replace("DOC_ID", id);
+    String path = "src/main/resources/application-types.xml";
+    failed += check("application-types.xml is watched", MuleChecks.watches(path));
+    project.put(path, types);
+    List<Problem> clean = MuleChecks.check(project);
+    failed += check("a Studio-shaped application-types.xml is clean" + (clean.isEmpty() ? "" : " " + clean),
+        clean.isEmpty());
+    failed += expectProblem("unquoted dashed key in a weave shape", project, path,
+        types.replace("\"content-type\"", "content-type"), "the key content-type needs quotes");
+    failed += expectProblem("enrichment for a doc:id that does not exist", project, path,
+        types.replace("#" + id, "#00000000-0000-0000-0000-000000000000"), "matches no doc:id in src/main/mule");
+    failed += expectProblem("attributes type missing from the catalog", project, path,
+        types.replace("<types:attributes type=\"WebhookAttributes\"/>", "<types:attributes type=\"Nope\"/>"),
+        "names no <types:type> in the catalog");
+    failed += expectProblem("example file that is not in the project", project, path,
+        types.replace("examples/webhookAttributes.json", "examples/missing.json"), "is not under src/main/resources");
+    failed += check("metadata guidance for a warnings request", ChatSession.wantsMetadata("fix warnings", List.of()));
+    failed += check("metadata guidance for an unresolved reference", ChatSession.wantsMetadata("Fix these problems.",
+        List.of(Attachment.problems("p", "/", List.of(new Attachment.Problem(Attachment.Problem.Severity.ERROR,
+            "src/main/mule/app.xml", 3, "Unable to resolve reference of: `attributes`."))))));
+    failed += check("no metadata guidance for an unrelated request",
+        !ChatSession.wantsMetadata("call the flow", List.of()));
+    String withMetadata = Prompts.system(ChatMode.AGENT, "demo", "", "", false, false, false, false, true, "");
+    failed += check("metadata guidance shows Studio's format", withMetadata.contains("<types:enrichment select=\"#")
+        && withMetadata.contains("format=\"weave\"") && !Prompts.system(ChatMode.AGENT, "demo", "", "")
+            .contains("<types:enrichment"));
+    return failed;
   }
 
   private static Path models(Path studioWorkspace) {
@@ -918,6 +981,41 @@ public class Harness {
     failed += check("image not resent on later turns", !resent);
     failed += check("saved chat keeps the image label, not the image", withImage.savedHistory().get(0).text()
         .startsWith("[Attached at the time: pasted image 1 (2×1)]") && !withImage.savedHistory().get(0).text().contains("AQID"));
+
+    requests.clear();
+    String openXml = "<flow name=\"attached-every-turn\"/>";
+    ChatSession reattached = new ChatSession();
+    for (String ask : List.of("one", "two", "three")) {
+      reattached.send(looker, ask, List.of(Attachment.openFile("p", "a.xml", openXml)), null);
+    }
+    List<String> third = requests.get(2).messages().stream().filter(UserMessage.class::isInstance)
+        .map(m -> ((UserMessage) m).singleText()).toList();
+    failed += check("older turns keep the attachment label, not its text", third.size() == 3
+        && third.get(0).startsWith("[Attached at the time: open file a.xml") && !third.get(0).contains(openXml)
+        && third.get(0).endsWith("one"));
+    failed += check("the previous and current turns keep the attached text", third.get(1).contains(openXml)
+        && third.get(2).contains(openXml));
+
+    String completion = """
+        {"model":"claude-opus-5-5","messages":[{"role":"system","content":"rules"},
+         {"role":"user","content":"one"},{"role":"assistant","content":"a1"},
+         {"role":"user","content":"two"},{"role":"assistant","content":"a2"},
+         {"role":"user","content":"three"},{"role":"assistant","content":null,"tool_calls":[]},
+         {"role":"tool","tool_call_id":"t","content":"result"}]}""";
+    JsonNode marked = new ObjectMapper().readTree(ChatCompletions.withCacheBreakpoints(completion)).get("messages");
+    List<Integer> breakpoints = new ArrayList<>();
+    for (int i = 0; i < marked.size(); i++) {
+      if (marked.get(i).path("content").path(0).has("cache_control")) {
+        breakpoints.add(i);
+      }
+    }
+    failed += check("cache breakpoints: system, end of the settled history, latest user message " + breakpoints,
+        breakpoints.equals(List.of(0, 2, 5)) && marked.get(2).path("content").path(0).path("text").asText().equals("a1"));
+    failed += check("cache breakpoints only for Claude", ChatCompletions.withCacheBreakpoints(
+        completion.replace("claude-opus-5-5", "gpt-5")).equals(completion.replace("claude-opus-5-5", "gpt-5")));
+    failed += check("cache breakpoints leave a body that already has them alone", ChatCompletions.withCacheBreakpoints(
+        "{\"model\":\"claude\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"x\","
+            + "\"cache_control\":{\"type\":\"ephemeral\"}}]}]}").contains("\"text\":\"x\""));
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -1526,6 +1624,22 @@ public class Harness {
         .equals("strong-model"));
     failed += check("diagnose mode goes strong", AutoRouter.choose(ChatMode.DIAGNOSE, "hi", none, false, pair)
         .model().equals("strong-model"));
+    for (String run : List.of("run munit test", "re test munit", "test again", "Call post flow", "lets test post",
+        "START DEBUGGER", "run tests")) {
+      AutoRouter.Choice choice = AutoRouter.choose(ChatMode.AGENT, run, none, false, pair);
+      failed += check("Agent '" + run + "' only runs something, so goes fast", choice.model().equals("fast-model")
+          && "strong-model".equals(choice.fallback()) && choice.reason().equals("it only runs or calls something"));
+    }
+    for (String more : List.of("run the tests and fix the failures", "test again, then explain why it fails",
+        "Make these changes you recommended above", "debug this flow")) {
+      failed += check("Agent '" + more + "' goes strong", AutoRouter.choose(ChatMode.AGENT, more, none, false, pair)
+          .model().equals("strong-model"));
+    }
+    failed += check("a run request with a failing console attached goes strong", AutoRouter.choose(ChatMode.DIAGNOSE,
+        "run tests", List.of(Attachment.console("MUnit", "[ERROR] Failed to execute goal", false)), false, pair)
+        .model().equals("strong-model"));
+    failed += check("Plan mode stays strong for a run request", AutoRouter.choose(ChatMode.PLAN, "run tests", none,
+        false, pair).model().equals("strong-model"));
     failed += check("review question goes strong", AutoRouter.choose(ChatMode.ASK, "Review this flow please", none,
         false, pair).model().equals("strong-model"));
     failed += check("error question goes strong", AutoRouter.choose(ChatMode.ASK, "why do I get this error?", none,
@@ -1677,8 +1791,11 @@ public class Harness {
         reply = textReply("Proposed health.properties.");
       } else if (body.contains("Fix the webhook endpoint")) {
         reply = textReply("It returned 202:\\n```bash\\ncurl -X POST http://localhost:8081/api/webhook\\n```");
-      } else if (body.contains("You put the changes in your reply as code")) {
+      } else if (body.contains("You put the changes in your reply as code")
+          || body.contains("you called no edit tool")) {
         reply = toolCall;
+      } else if (body.contains("Tighten the health file")) {
+        reply = textReply("I've proposed all three changes in health.properties. Accept the file in Studio.");
       } else {
         reply = textReply(pasted);
       }
@@ -1737,6 +1854,19 @@ public class Harness {
       ChatSession.Turn curl = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
           "Fix the webhook endpoint", List.of(), new DiskProject(root), progress);
       failed += check("a curl-only answer is not drafted", bodies.size() == 1 && curl.changes().isEmpty());
+
+      bodies.clear();
+      ChatSession claimed = new ChatSession();
+      ChatSession.Turn claim = claimed.send(ChatModels.create(connection), ChatMode.AGENT,
+          "Tighten the health file", List.of(), new DiskProject(root), progress);
+      failed += check("a claimed proposal with no edit is asked for once", claim.changes().all().size() == 1
+          && bodies.stream().filter(b -> b.contains("you called no edit tool")).count() == 2);
+      failed += check("the false claim is not the answer", !claim.text().contains("all three changes"));
+      String remembered = claimed.savedHistory().get(1).text();
+      failed += check("history says what the turn did", remembered.contains(
+          "[What you did this turn: proposed changes to 1 file]"));
+      failed += check("the activity note is not echoed back", ChatSession.withoutEchoedNotes(
+          "Done.\n[What you did this turn: called the app once]").equals("Done."));
     } finally {
       server.stop(0);
     }

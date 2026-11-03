@@ -21,7 +21,9 @@ public final class DataWeaveFix {
         + (lines == null ? "" : " Focus on " + lines + ".")
         + "\nReply with the complete corrected script, from %dw 2.0 to the end, in one ```dataweave code block,"
         + " then a short list of what you changed and why. If nothing needs fixing, say so and include no code"
-        + " block.";
+        + " block. If Studio's problems come from missing metadata (an unresolved payload, attributes or vars,"
+        + " or Auto-Coercing from Any), say that the script is fine and name the metadata to add in"
+        + " application-types.xml, which Agent mode can propose.";
   }
 
   // The last DataWeave code block in the answer, or its only code block when that has no language. Null when

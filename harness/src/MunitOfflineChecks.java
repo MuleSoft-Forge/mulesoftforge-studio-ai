@@ -4,11 +4,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
+import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.launch.MunitRunner;
 import com.mulesoftforge.studio.ai.launch.MunitTools;
 import com.mulesoftforge.studio.ai.llm.Attachment;
@@ -32,7 +34,7 @@ final class MunitOfflineChecks {
     System.exit(failed == 0 ? 0 : 1);
   }
 
-  private static int suites() {
+  private static int suites() throws Exception {
     int failed = 0;
     String main = """
         <mule xmlns="http://www.mulesoft.org/schema/mule/core"
@@ -202,6 +204,7 @@ final class MunitOfflineChecks {
     failed += check("wrong shapes: the fixture really changed", !wrongShapes.equals(goodSuite));
     failed += shapes("shape checks", wrong, good);
     failed += beyondSchema("shape checks", good, goodSuite);
+    failed += resourcesInSnapshot(good);
     List<Path> studio = MunitSchemas.studioRepositories(STUDIO_WORKSPACE);
     if (studio.isEmpty()) {
       System.out.println("SKIP  MUnit schema checks: no generated schemas under " + STUDIO_WORKSPACE
@@ -234,7 +237,7 @@ final class MunitOfflineChecks {
         "#[readUrl('classpath://sample_data/hello.json', 'application/json')]")) {
       failed += check(label + ": a mock " + readUrl + " with mediaType JSON is reported", suiteProblems(good,
           goodSuite.replace(fileMock, readUrl)).stream().anyMatch(p -> p.message().contains("readUrl(…)")
-              && p.message().contains("getResourceAsStream")));
+              && p.message().contains("getResourceAsString")));
     }
     List<Problem> typedRead = suiteProblems(good, goodSuite.replace(fileMock, "#[%dw 2.0&#10;output application/json"
         + "&#10;---&#10;readUrl('classpath://sample_data/hello.json', 'application/json')]"));
@@ -256,6 +259,12 @@ final class MunitOfflineChecks {
         .stream().anyMatch(p -> p.message().contains("write()") && p.message().contains("payload.field")));
     failed += check(label + ": a set-event object with mediaType JSON is reported", suiteProblems(good,
         eventMock).stream().anyMatch(p -> p.message().contains("munit:payload") && p.message().contains("Java map")));
+    String streamEvent = eventMock.replace("#[{id: 1}]", "#[MunitTools::getResourceAsStream('sample_data/hello.json')]");
+    failed += check(label + ": a set-event getResourceAsStream is reported", suiteProblems(good, streamEvent)
+        .stream().anyMatch(p -> p.message().contains("Stream closed")));
+    List<Problem> stringEvent = suiteProblems(good, streamEvent.replace("getResourceAsStream", "getResourceAsString"));
+    failed += check(label + ": a set-event getResourceAsString is clean"
+        + (stringEvent.isEmpty() ? "" : " " + stringEvent), stringEvent.isEmpty());
     List<Problem> jsonProblems = suiteProblems(good, jsonMock);
     failed += check(label + ": a JSON-typed mock is clean" + (jsonProblems.isEmpty() ? "" : " " + jsonProblems),
         jsonProblems.isEmpty());
@@ -267,6 +276,58 @@ final class MunitOfflineChecks {
         .stream().anyMatch(p -> p.message().startsWith("<test> is not an MUnit test"))
         && unprefixedProblems.stream().anyMatch(p -> p.message().contains("has no <munit:test>")));
     return failed;
+  }
+
+  // Through the snapshot the edit tools check, not a hand-built map: JSON samples on disk or proposed in the same
+  // turn (here after the suite, as a model did in Studio) count as present.
+  private static int resourcesInSnapshot(Map<String, String> good) throws Exception {
+    int failed = 0;
+    String json = "src/test/resources/sample_data/hello.json";
+    String suite = "src/test/munit/hello-test-suite.xml";
+    Map<String, String> onDisk = new LinkedHashMap<>(good);
+    failed += check("snapshot: a sample JSON on disk is found", missingResources(
+        MuleChecks.check(MuleChecks.snapshot(memory(onDisk), null))).isEmpty());
+
+    Map<String, String> before = new LinkedHashMap<>(good);
+    before.remove(json);
+    before.remove(suite);
+    ChangeSet changes = new ChangeSet();
+    ProjectTools tools = new ProjectTools(memory(before), changes, true, new SecretMask());
+    String first = tools.execute(write(suite, good.get(suite)));
+    failed += check("snapshot: the suite alone reports the missing sample", first.contains("is not under"));
+    tools.execute(write(json, good.get(json)));
+    List<Problem> after = missingResources(tools.problemsIntroduced());
+    failed += check("snapshot: a sample proposed after the suite clears it" + (after.isEmpty() ? "" : " " + after),
+        after.isEmpty());
+    return failed;
+  }
+
+  private static List<Problem> missingResources(List<Problem> problems) {
+    return problems.stream().filter(p -> p.message().contains("is not under src/test/resources")).toList();
+  }
+
+  private static ToolExecutionRequest write(String path, String content) throws Exception {
+    return ToolExecutionRequest.builder().id("w").name("write_file")
+        .arguments(new ObjectMapper().writeValueAsString(Map.of("path", path, "content", content))).build();
+  }
+
+  private static ProjectFiles memory(Map<String, String> disk) {
+    return new ProjectFiles() {
+      @Override
+      public String name() {
+        return "demo";
+      }
+
+      @Override
+      public String read(String path) {
+        return disk.get(path);
+      }
+
+      @Override
+      public List<String> list(String directory, int limit) {
+        return disk.keySet().stream().filter(p -> p.startsWith(directory + "/")).limit(limit).toList();
+      }
+    };
   }
 
   private static List<Problem> suiteProblems(Map<String, String> good, String suite) {
@@ -320,6 +381,9 @@ final class MunitOfflineChecks {
     failed += check("MUnit prompt's mock example returns JSON, not a Java map",
         munit.contains("<munit-tools:payload value=\"#[%dw 2.0&#10;output application/json&#10;---&#10;{ok: true}]\"")
             && !munit.contains("value=\"#[{ok: true}]\"") && munit.contains("Stream Compatible"));
+    failed += check("MUnit prompt reads sample files with getResourceAsString",
+        munit.contains("value=\"#[MunitTools::getResourceAsString('….json')]\"")
+            && !munit.contains("value=\"#[MunitTools::getResourceAsStream("));
     return failed;
   }
 

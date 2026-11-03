@@ -80,10 +80,13 @@ public final class MuleChecks {
   private MuleChecks() {}
 
   public static boolean watches(String path) {
+    return path.equals("pom.xml") || isConfig(path) || path.equals(TypesChecks.PATH) || isPropertyFile(path);
+  }
+
+  private static boolean isPropertyFile(String path) {
     String lower = path.toLowerCase(Locale.ROOT);
-    return path.equals("pom.xml") || isConfig(path)
-        || (under(path, RESOURCE_DIRS) && (lower.endsWith(".properties") || lower.endsWith(".yaml")
-            || lower.endsWith(".yml")));
+    return under(path, RESOURCE_DIRS) && (lower.endsWith(".properties") || lower.endsWith(".yaml")
+        || lower.endsWith(".yml"));
   }
 
   private static boolean isConfig(String path) {
@@ -95,6 +98,7 @@ public final class MuleChecks {
   }
 
   // The checked files as they would be with every proposal accepted; null changes means as on disk.
+  // Other resource files (sample JSON, scripts) are listed with empty content so references to them resolve.
   public static Map<String, String> snapshot(ProjectFiles files, ChangeSet changes) throws Exception {
     Map<String, String> out = new TreeMap<>();
     List<String> paths = new ArrayList<>(List.of("pom.xml"));
@@ -102,15 +106,24 @@ public final class MuleChecks {
       paths.addAll(files.list(dir, LIST_LIMIT));
     }
     for (String path : paths) {
-      String content = watches(path) ? files.read(path) : null;
-      if (content != null) {
-        out.put(path, content);
+      if (watches(path)) {
+        String content = files.read(path);
+        if (content != null) {
+          out.put(path, content);
+        }
+      } else if (under(path, RESOURCE_DIRS)) {
+        out.put(path, "");
       }
     }
     if (changes != null) {
       for (FileChange change : changes.all()) {
-        if (watches(change.path()) && change.after() != null) {
+        if (change.after() == null) {
+          continue;
+        }
+        if (watches(change.path())) {
           out.put(change.path(), change.after());
+        } else if (under(change.path(), RESOURCE_DIRS)) {
+          out.put(change.path(), "");
         }
       }
     }
@@ -166,7 +179,9 @@ public final class MuleChecks {
         }
       } else if (under(path, RESOURCE_DIRS)) {
         resources.add(path.substring(path.indexOf("/resources/") + "/resources/".length()));
-        collectKeys(path, file.getValue(), properties);
+        if (isPropertyFile(path)) {
+          collectKeys(path, file.getValue(), properties);
+        }
       }
     }
 
@@ -198,6 +213,7 @@ public final class MuleChecks {
       }
     }
     MunitChecks.check(project, found);
+    TypesChecks.check(project, resources, found);
     found.forEach(problem -> problems.putIfAbsent(problem.key(), problem));
     return new ArrayList<>(problems.values());
   }

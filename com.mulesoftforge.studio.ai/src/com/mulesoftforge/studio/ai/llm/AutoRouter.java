@@ -34,6 +34,11 @@ public final class AutoRouter {
   private static final Pattern NEEDS_STRONG = Pattern.compile("\\b(review|fix\\w*|bugs?|wrong|broken|fail\\w*|"
       + "errors?|exceptions?|debug\\w*|refactor\\w*|improve\\w*|optimi[sz]\\w*|migrat\\w*|secur\\w*|vulnerab\\w*|"
       + "write|generate|create|implement\\w*|design\\w*|convert\\w*|rewrite|test(s|ing)?|munit)\\b");
+  private static final int SHORT_RUN_CHARS = 60;
+  private static final Pattern RUN_ONLY = Pattern.compile("\\W*(?:(?:lets?|let's|please|now|can you)\\s+)*"
+      + "(?:re-?\\s?)?(?:run|test|call|start|stop|deploy|send)\\b[\\w\\s/:.-]*?(?:again)?\\W*");
+  private static final Pattern ASKS_MORE = Pattern.compile("\\b(fix\\w*|change\\w*|edit\\w*|update\\w*|add\\w*|"
+      + "write|create|refactor\\w*|why|explain\\w*|and then|then)\\b");
   private static final Pattern DATAWEAVE = Pattern.compile("dataweave|%dw|\\bdwl\\b|\\.dwl\\b|transform message");
 
   private AutoRouter() {}
@@ -65,11 +70,22 @@ public final class AutoRouter {
       throw new IllegalStateException("Auto needs a fast and a strong model. Set them in Preferences >"
           + " MuleSoftForge Studio AI, next to Model.");
     }
-    String reason = strongReason(mode, prompt == null ? "" : prompt, attachments, fix);
+    String asked = prompt == null ? "" : prompt;
+    if (onlyRuns(mode, asked, attachments, fix)) {
+      return new Choice(fast, strong.equals(fast) ? null : strong, "it only runs or calls something");
+    }
+    String reason = strongReason(mode, asked, attachments, fix);
     String model = reason == null ? fast : strong;
     String other = reason == null ? strong : fast;
     return new Choice(model, other.equals(model) ? null : other,
         reason == null ? "a question with little context" : reason);
+  }
+
+  // "run munit test", "test again", "call post flow": the tools do the work, in any mode that has them.
+  static boolean onlyRuns(ChatMode mode, String prompt, List<Attachment> attachments, boolean fix) {
+    String lower = prompt.toLowerCase(Locale.ROOT);
+    return mode != ChatMode.PLAN && !fix && prompt.length() <= SHORT_RUN_CHARS && RUN_ONLY.matcher(lower).matches()
+        && !ASKS_MORE.matcher(lower).find() && attachments.stream().noneMatch(Attachment::reportsFailure);
   }
 
   private static String strongReason(ChatMode mode, String prompt, List<Attachment> attachments, boolean fix) {

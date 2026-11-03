@@ -7,6 +7,7 @@ import java.net.http.HttpResponse.BodyHandlers;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -56,46 +57,21 @@ final class DiagnosingHttpClient implements HttpClient {
       }
     }
 
-    java.net.http.HttpRequest.Builder builder = java.net.http.HttpRequest.newBuilder()
-        .uri(URI.create(request.url()))
-        .timeout(readTimeout)
-        .method(request.method().name(), bodyPublisher(request));
-    for (Map.Entry<String, List<String>> header : request.headers().entrySet()) {
-      for (String value : header.getValue()) {
-        builder.header(header.getKey(), value);
-      }
-    }
-
-    CompletableFuture<HttpResponse<String>> future = jdk.sendAsync(builder.build(), BodyHandlers.ofString());
-    if (inFlight != null) {
-      inFlight.set(future);
-    }
-    HttpResponse<String> response;
-    try {
-      response = future.join();
-    } catch (CancellationException e) {
-      captured(request, null, null);
-      throw e;
-    } catch (CompletionException e) {
-      captured(request, null, null);
-      Throwable cause = e.getCause() == null ? e : e.getCause();
-      if (cause instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
-        throw new CancellationException("Interrupted calling " + request.method() + " " + request.url());
-      }
-      throw new TransportException(request.method().name(), request.url(),
-          "Transport failure calling " + request.method() + " " + request.url() + ": " + Errors.describe(cause),
-          cause);
-    } finally {
-      if (inFlight != null) {
-        inFlight.compareAndSet(future, null);
-      }
-    }
-
+    String sent = request.url().endsWith("/chat/completions")
+        ? ChatCompletions.withCacheBreakpoints(request.body()) : request.body();
+    HttpResponse<String> response = send(request, sent);
     int status = response.statusCode();
     String body = response.body() == null ? "" : response.body();
+    // A gateway that does not accept cache markers gets the request as LangChain4j wrote it.
+    if (status == 400 && !Objects.equals(sent, request.body())) {
+      captured(request, sent, status, body);
+      sent = request.body();
+      response = send(request, sent);
+      status = response.statusCode();
+      body = response.body() == null ? "" : response.body();
+    }
     // Raw keeps what the gateway sent; LangChain4j gets a single choice when a model returned several.
-    captured(request, status, body);
+    captured(request, sent, status, body);
     Map<String, List<String>> headers = response.headers().map();
     if (status >= 400) {
       throw new ProviderHttpException(request.method().name(), request.url(), status, headers, body);
@@ -124,9 +100,46 @@ final class DiagnosingHttpClient implements HttpClient {
     return streaming.stream(request, parser);
   }
 
-  private void captured(HttpRequest request, Integer status, String body) {
+  private HttpResponse<String> send(HttpRequest request, String body) {
+    java.net.http.HttpRequest.Builder builder = java.net.http.HttpRequest.newBuilder()
+        .uri(URI.create(request.url()))
+        .timeout(readTimeout)
+        .method(request.method().name(), body == null ? BodyPublishers.noBody() : BodyPublishers.ofString(body));
+    for (Map.Entry<String, List<String>> header : request.headers().entrySet()) {
+      for (String value : header.getValue()) {
+        builder.header(header.getKey(), value);
+      }
+    }
+
+    CompletableFuture<HttpResponse<String>> future = jdk.sendAsync(builder.build(), BodyHandlers.ofString());
+    if (inFlight != null) {
+      inFlight.set(future);
+    }
+    try {
+      return future.join();
+    } catch (CancellationException e) {
+      captured(request, body, null, null);
+      throw e;
+    } catch (CompletionException e) {
+      captured(request, body, null, null);
+      Throwable cause = e.getCause() == null ? e : e.getCause();
+      if (cause instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+        throw new CancellationException("Interrupted calling " + request.method() + " " + request.url());
+      }
+      throw new TransportException(request.method().name(), request.url(),
+          "Transport failure calling " + request.method() + " " + request.url() + ": " + Errors.describe(cause),
+          cause);
+    } finally {
+      if (inFlight != null) {
+        inFlight.compareAndSet(future, null);
+      }
+    }
+  }
+
+  private void captured(HttpRequest request, String sent, Integer status, String body) {
     if (capture != null) {
-      capture.http(request.method().name(), request.url(), status, request.body(), body);
+      capture.http(request.method().name(), request.url(), status, sent, body);
     }
   }
 
@@ -135,8 +148,4 @@ final class DiagnosingHttpClient implements HttpClient {
         || (request.formDataFiles() != null && !request.formDataFiles().isEmpty());
   }
 
-  private static java.net.http.HttpRequest.BodyPublisher bodyPublisher(HttpRequest request) {
-    String body = request.body();
-    return body == null ? BodyPublishers.noBody() : BodyPublishers.ofString(body);
-  }
 }

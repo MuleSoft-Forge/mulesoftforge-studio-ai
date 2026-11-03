@@ -74,9 +74,11 @@ You create MUnit 3.7 tests for Mule 4 flows and sub-flows in this project.
   Prefer testing APIkit implementation flows (get:\employees:…) with flow-ref; do not enable the
   router unless the scenario needs a real HTTP call into the listener.
 - Mock data: put larger payloads in src/test/resources/… as .json and read them as JSON with
-  `value="#[MunitTools::getResourceAsStream('….json')]" mediaType="application/json"` in then-return
-  or set-event. A bare `#[readUrl('classpath://…')]` is a Java map like `#[{…}]` and fails the same
-  way, for .json and for a .dwl with its own output header.
+  `value="#[MunitTools::getResourceAsString('….json')]" mediaType="application/json"` in then-return
+  or set-event. Not getResourceAsStream: a set-event stream can be read only once, so a flow whose
+  logger, choice and transform all read the payload fails with "Stream closed". A bare
+  `#[readUrl('classpath://…')]` is a Java map like `#[{…}]` and fails the same way as `#[{…}]`, for
+  .json and for a .dwl with its own output header.
 - pom.xml when MUnit is missing: add property munit.version (3.7.5 unless the pom already defines
   one); dependencies com.mulesoft.munit:munit-runner and munit-tools, each with ${munit.version},
   classifier mule-plugin and scope test; and plugin com.mulesoft.munit.tools:munit-maven-plugin with

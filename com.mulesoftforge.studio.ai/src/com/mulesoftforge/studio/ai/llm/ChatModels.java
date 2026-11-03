@@ -83,6 +83,8 @@ public final class ChatModels {
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxTokens(MAX_OUTPUT_TOKENS)
+          .cacheSystemMessages(true)
+          .cacheTools(true)
           .timeout(TIMEOUT)
           .maxRetries(0)
           .listeners(listeners)

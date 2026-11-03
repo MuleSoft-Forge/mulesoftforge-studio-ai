@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.http;
 
+import java.io.EOFException;
 import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
@@ -465,8 +466,26 @@ public final class HttpTools {
       Thread.currentThread().interrupt();
       return "ERROR: interrupted.";
     } catch (Exception e) {
+      if (closedWithoutAnswer(e)) {
+        return "ERROR: the app closed the connection without answering " + method + " " + shownUrl + ". After a"
+            + " request has waited at a breakpoint this usually means the app was stopped or redeployed, or the"
+            + " debug session ended, before the flow finished; it does not show a bug in the flow. Call it again"
+            + " if the result is still needed.";
+      }
       return "ERROR: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
     }
+  }
+
+  // The JDK client's words for a connection the server closed before sending a status line.
+  private static boolean closedWithoutAnswer(Exception e) {
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      String message = t.getMessage();
+      if (t instanceof EOFException || message != null && (message.contains("header parser received no bytes")
+          || message.contains("Connection reset") || message.contains("EOF reached while reading"))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private String format(Exchange exchange, HttpRequest request, URI uri, String method, String body,

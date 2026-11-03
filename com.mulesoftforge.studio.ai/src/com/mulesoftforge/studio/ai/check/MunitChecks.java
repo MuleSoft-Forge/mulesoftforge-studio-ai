@@ -52,6 +52,7 @@ public final class MunitChecks {
   private static final Pattern DW_STRING = Pattern.compile("^#\\[(['\"])(.*)\\1]$", Pattern.DOTALL);
   private static final Pattern WRITE_CALL = Pattern.compile("write\\s*\\(");
   private static final Pattern READ_URL_CALL = Pattern.compile("readUrl\\s*\\(");
+  private static final Pattern STREAM_CALL = Pattern.compile("getResourceAsStream\\s*\\(");
 
   private MunitChecks() {}
 
@@ -314,6 +315,12 @@ public final class MunitChecks {
       if ("payload".equals(localName) && (MUNIT_NS.equals(uri) || TOOLS_NS.equals(uri))) {
         checkJsonValue((MUNIT_NS.equals(uri) ? "munit:" : "munit-tools:") + localName, line,
             attributes.getValue("", "value"), attributes.getValue("", "mediaType"));
+        String value = attributes.getValue("", "value");
+        if (MUNIT_NS.equals(uri) && value != null && STREAM_CALL.matcher(value).find()) {
+          beyondSchema.add(new Problem(path, line, "munit:payload uses MunitTools::getResourceAsStream, which"
+              + " set-event does not make repeatable: the second processor that reads the payload fails with"
+              + " \"Stream closed\". Use MunitTools::getResourceAsString('…') with the same mediaType."));
+        }
       }
       if (!TOOLS_NS.equals(uri)) {
         return;
@@ -402,7 +409,8 @@ public final class MunitChecks {
     // MUnit 3.7.5 / Mule 4.13.1: a DataWeave object and any readUrl(…) (.json or .dwl, with or without a content
     // type) arrive as a Java map, which the first reader of the payload rejects ("requires a Stream Compatible
     // content"); write() gives a String that payload.field rejects. An output application/json header and
-    // MunitTools::getResourceAsStream / getResourceAsString work.
+    // MunitTools::getResourceAsString work; getResourceAsStream too in then-return, which MUnit makes repeatable,
+    // but in set-event it can be read only once ("Stream closed").
     private void checkJsonValue(String element, int line, String value, String mediaType) {
       if (value == null || mediaType == null || !mediaType.toLowerCase(Locale.ROOT).contains("json")) {
         return;
@@ -423,7 +431,7 @@ public final class MunitChecks {
       } else if (READ_URL_CALL.matcher(body).lookingAt()) {
         beyondSchema.add(new Problem(path, line, element + " value is readUrl(…), which gives a Java map whatever"
             + " mediaType says (a .dwl file's own output header included); a flow step that writes or logs the"
-            + " payload as JSON then fails. Read the file as JSON: value=\"#[MunitTools::getResourceAsStream('….json')]\""
+            + " payload as JSON then fails. Read the file as JSON: value=\"#[MunitTools::getResourceAsString('….json')]\""
             + " or value=\"#[%dw 2.0&#10;output application/json&#10;---&#10;readUrl('classpath://….json',"
             + " 'application/json')]\"."));
       }

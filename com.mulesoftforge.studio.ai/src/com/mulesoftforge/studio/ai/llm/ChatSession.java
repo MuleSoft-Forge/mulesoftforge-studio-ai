@@ -50,6 +50,12 @@ public class ChatSession {
   static final String DRAFT_NUDGE = "You put the changes in your reply as code instead of proposing them. Propose"
       + " them now with edit_file or write_file so the user can review the diffs. Do not repeat the explanation;"
       + " finish with one short line saying what you proposed.";
+  // Asked once when the answer says it proposed changes but no edit tool was called.
+  static final String CLAIM_NUDGE = "You said you proposed changes, but you called no edit tool, so nothing was"
+      + " proposed and the user has nothing to accept. Propose them now with edit_file or write_file, then finish"
+      + " with a short answer that matches what you proposed.";
+  private static final Pattern CLAIMS_PROPOSED = Pattern.compile(
+      "\\bI(?:'ve| have)? (?:now |also )?(?:proposed|re-proposed|drafted)\\b", Pattern.CASE_INSENSITIVE);
   private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
       + "delete|rename|refactor|implement|write|make|convert|move|migrate|generate|set ?up|configure|apply)\\b");
   // "What did we learn … to create the tests right first time" mentions a change but asks for an explanation;
@@ -58,7 +64,11 @@ public class ChatSession {
       "^\\W*(what|why|how|which|who|when|where|did|does|do|is|are|was|were|explain|tell me)\\b");
   // History notes the model sometimes copies into its own answer, where they would show twice.
   private static final Pattern ECHOED_NOTE = Pattern.compile(
-      "(?m)^[ \\t]*\\[(?:Proposed for review|Offered to make): [^\\]\\n]*][ \\t]*(?:\\n|$)");
+      "(?m)^[ \\t]*\\[(?:Proposed for review|Offered to make|What you did this turn): [^\\]\\n]*][ \\t]*(?:\\n|$)");
+  // Include the metadata guidance for type warnings, which models otherwise answer with an invented file format.
+  private static final Pattern ASKS_ABOUT_METADATA = Pattern.compile("\\b(metadata|meta data|metadate|"
+      + "application-types|datasense|unable to resolve reference|auto-coercing|warnings?)\\b",
+      Pattern.CASE_INSENSITIVE);
   // Include the MUnit guidance when the user asks for tests, or when a suite under src/test/munit is attached.
   private static final Pattern ASKS_FOR_MUNIT = Pattern.compile(
       "\\b(munit|unit tests?|tests? for|(re)?run (the |my |all |these |those )?(failing )?tests?|test suites?)\\b",
@@ -384,8 +394,10 @@ public class ChatSession {
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
     boolean munit = wantsMunit(prompt, attachments);
+    boolean metadata = wantsMetadata(prompt, attachments);
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, munit, fromHttp.text());
+        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, munit, metadata,
+        fromHttp.text());
 
     List<ChatMessage> past;
     boolean firstTurn;
@@ -439,6 +451,7 @@ public class ChatSession {
     String pastedAnswer = null;
     // Models often write the whole answer in the message that calls offer_changes, then only a closing line.
     String offeredWith = null;
+    boolean claimNudged = false;
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system));
@@ -469,6 +482,13 @@ public class ChatSession {
           answer = null;
           progress.step("Drafting the code from the answer as changes to review…");
           turn.add(UserMessage.from(DRAFT_NUDGE));
+          continue;
+        }
+        if (!claimNudged && claimedProposal(mode, tools, changes, answer)) {
+          claimNudged = true;
+          answer = null;
+          progress.step("The answer said it proposed changes but none were made; asking for them…");
+          turn.add(UserMessage.from(CLAIM_NUDGE));
           continue;
         }
         break;
@@ -511,7 +531,7 @@ public class ChatSession {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
-            true, dataWeaveTools != null, httpTools != null, munit, fromHttp.text());
+            true, dataWeaveTools != null, httpTools != null, munit, metadata, fromHttp.text());
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
     }
@@ -531,8 +551,17 @@ public class ChatSession {
     if (!offers.isEmpty()) {
       remembered += "\n\n" + ChangeOffer.remembered(offers);
     }
-    // Images are large and billed on every request that carries them, so later turns keep only the text.
+    // Without the tool traffic, a later turn cannot tell a real call from a described one and may disown either.
+    remembered += "\n\n[What you did this turn: "
+        + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, 0).activity() + "]";
+    // Every request resends the whole history, and attachments (the open file, console) come again with each new
+    // turn. The last turn keeps its attached text for follow-ups; older turns keep only what was attached.
+    // Images are dropped from history at once.
     synchronized (this) {
+      int previous = history.size() - 2;
+      if (previous >= 0 && history.get(previous) instanceof UserMessage) {
+        history.set(previous, UserMessage.from(saved.get(previous).text()));
+      }
       history.add(textOnly);
       history.add(AiMessage.from(remembered));
       saved.add(new ChatRecord.Message("user", savedText));
@@ -575,12 +604,30 @@ public class ChatSession {
     return false;
   }
 
+  public static boolean wantsMetadata(String prompt, List<Attachment> attachments) {
+    if (prompt != null && ASKS_ABOUT_METADATA.matcher(prompt).find()) {
+      return true;
+    }
+    for (Attachment attachment : attachments == null ? List.<Attachment>of() : attachments) {
+      if (attachment.kind() == Attachment.Kind.PROBLEMS && attachment.content() != null
+          && ASKS_ABOUT_METADATA.matcher(attachment.content()).find()
+          || attachment.path() != null && attachment.path().endsWith("application-types.xml")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static boolean pastedInsteadOfProposed(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer,
       String prompt) {
     String asked = prompt.toLowerCase(Locale.ROOT);
     return mode.canEdit && tools != null && changes.isEmpty() && tools.offers().isEmpty()
         && CodeBlocks.hasProjectCode(answer) && ASKS_FOR_CHANGE.matcher(asked).find()
         && !ASKS_A_QUESTION.matcher(asked).find();
+  }
+
+  static boolean claimedProposal(ChatMode mode, ProjectTools tools, ChangeSet changes, String answer) {
+    return mode.canEdit && tools != null && changes.isEmpty() && CLAIMS_PROPOSED.matcher(answer).find();
   }
 
   public static String withoutEchoedNotes(String answer) {

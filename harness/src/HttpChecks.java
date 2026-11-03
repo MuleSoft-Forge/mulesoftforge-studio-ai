@@ -1,5 +1,7 @@
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -280,6 +282,26 @@ final class HttpChecks {
           "http://localhost:" + freePort() + "/api")));
       failed += check("nothing listening: tells the model to ask for the app to be run",
           out.contains("nothing is answering on localhost") && out.contains("Run As > Mule Application"));
+      try (ServerSocket hangsUp = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+        // Twice: the JDK client retries a GET once on a fresh connection.
+        Thread closer = new Thread(() -> {
+          for (int i = 0; i < 2; i++) {
+            try (Socket client = hangsUp.accept()) {
+              client.getInputStream().read(new byte[256]);
+            } catch (Exception e) {
+              return;
+            }
+          }
+        });
+        closer.setDaemon(true);
+        closer.start();
+        out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url",
+            "http://localhost:" + hangsUp.getLocalPort() + "/api")));
+        closer.join(2_000);
+      }
+      failed += check("a connection closed without an answer is explained, not shown as a parser error"
+          + (out.contains("closed the connection") ? "" : " [" + out + "]"),
+          out.contains("closed the connection without answering") && !out.contains("header parser"));
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/slow")));
       failed += check("a request that does not finish stops at the timeout, mentioning breakpoints",
           out.startsWith("ERROR: no response within 1 s") && out.contains("breakpoint"));

@@ -37,6 +37,13 @@ public final class Prompts {
   // Preferences; the built-in http.md still always applies.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
       boolean debugging, boolean dataWeave, boolean http, boolean munit, String httpInstructions) {
+    return system(mode, project, projectInstructions, userInstructions, debugging, dataWeave, http, munit, false,
+        httpInstructions);
+  }
+
+  // metadata: the request is about metadata or Studio's type warnings.
+  public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
+      boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata, String httpInstructions) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md")).append('\n')
         .append(file("about.md"));
     if (project != null) {
@@ -62,6 +69,9 @@ public final class Prompts {
     if (munit) {
       out.append('\n').append(file("munit.md"));
     }
+    if (metadata && project != null) {
+      out.append('\n').append(metadata());
+    }
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
     if (fromProject || fromUser) {
@@ -85,6 +95,10 @@ public final class Prompts {
   }
 
   // Everything built in, with headings, for Preferences > Show built-in prompt.
+  public static String metadata() {
+    return file("metadata.md");
+  }
+
   public static String builtIn() {
     return "General guidance (your instructions can override this)\n\n" + file("guidance.md")
         + "\nRules (always apply)\n\n" + file("rules.md")
@@ -98,6 +112,7 @@ public final class Prompts {
         + "\nWith the DataWeave CLI (always applies)\n\n" + file("dataweave.md")
         + "\nCalling the local app and reading documentation (always applies)\n\n" + file("http.md")
         + "\nWhen creating or editing MUnit tests (always applies)\n\n" + file("munit.md")
+        + "\nWhen the request is about metadata or Studio's type warnings (always applies)\n\n" + metadata()
         + "\nThen any HTTP and docs instructions from Preferences, then " + AGENTS_FILE
         + " from the project root and your instructions from Preferences, each up to "
         + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";
