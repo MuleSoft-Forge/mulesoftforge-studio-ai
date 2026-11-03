@@ -7,6 +7,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import com.mulesoftforge.studio.ai.check.Problem;
@@ -22,6 +24,8 @@ import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
+import com.mulesoftforge.studio.ai.launch.AppLauncher;
+import com.mulesoftforge.studio.ai.launch.LaunchTools;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -101,6 +105,13 @@ public class ChatSession {
       if (toolCounts.getOrDefault(HttpTools.CONSOLE, 0) > 0) {
         parts.add("read the app's console");
       }
+      int started = toolCounts.getOrDefault(LaunchTools.RUN, 0);
+      if (started > 0) {
+        parts.add("started the app" + (started == 1 ? "" : " " + started + " times"));
+      }
+      if (toolCounts.getOrDefault(LaunchTools.STOP, 0) > 0) {
+        parts.add("stopped the app");
+      }
       int pages = toolCounts.getOrDefault(HttpTools.DOCS, 0);
       if (pages > 0) {
         parts.add("read " + plural(pages, "docs page"));
@@ -125,6 +136,10 @@ public class ChatSession {
   // Lock-free so Accept/Reject/Apply on the UI thread never block on an in-flight model call.
   private final Queue<String> reviewNotes = new ConcurrentLinkedQueue<>();
   private final Queue<String> cancelNotes = new ConcurrentLinkedQueue<>();
+  private final Queue<String> lateNotes = new ConcurrentLinkedQueue<>();
+  // Bumped by clear(), so a request from a cleared chat does not report into the next one.
+  private final AtomicInteger generation = new AtomicInteger();
+  private volatile Consumer<HttpTools.Late> lateListener;
   private final List<ChatRecord.Message> saved = new ArrayList<>();
   private volatile List<ChatRecord.Message> savedSnapshot = List.of();
   private final SecretMask secrets = new SecretMask();
@@ -133,6 +148,7 @@ public class ChatSession {
   private volatile DebugSession debugger;
   private volatile DataWeaveCli dataWeave;
   private volatile AppConsole appConsole;
+  private volatile AppLauncher appLauncher;
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
   private volatile List<String> docsHosts = List.of();
@@ -162,6 +178,32 @@ public class ChatSession {
   // The running app's console, so calls to the app report what it printed and read_console is offered; null without.
   public void appConsole(AppConsole console) {
     appConsole = console;
+  }
+
+  // Studio's Run As / Debug As > Mule Application, so Agent and Diagnose can start and stop the app; null without.
+  public void appLauncher(AppLauncher launcher) {
+    appLauncher = launcher;
+  }
+
+  // Told, off the UI thread, when a request call_endpoint stopped waiting for gets its answer. The model is told
+  // with the next prompt either way.
+  public void onLateResult(Consumer<HttpTools.Late> listener) {
+    lateListener = listener;
+  }
+
+  private Consumer<HttpTools.Late> lateSink() {
+    int chat = generation.get();
+    return late -> {
+      if (generation.get() != chat) {
+        return;
+      }
+      lateNotes.add("LATE RESULT: " + late.request() + " was sent in an earlier turn and answered after that turn"
+          + " ended:\n" + late.result());
+      Consumer<HttpTools.Late> listener = lateListener;
+      if (listener != null) {
+        listener.accept(late);
+      }
+    };
   }
 
   // The user's own instructions from Preferences, sent with every message.
@@ -279,8 +321,12 @@ public class ChatSession {
     String notes = "";
     List<String> cancelled = drain(cancelNotes);
     List<String> reviews = drain(reviewNotes);
+    List<String> lateResults = drain(lateNotes);
     if (!cancelled.isEmpty()) {
       notes += String.join("\n", cancelled) + "\n\n";
+    }
+    if (!lateResults.isEmpty()) {
+      notes += String.join("\n\n", lateResults) + "\n\n";
     }
     if (!reviews.isEmpty()) {
       notes += "REVIEW OF YOUR EARLIER PROPOSALS:\n" + String.join("\n", reviews) + "\n\n";
@@ -307,7 +353,10 @@ public class ChatSession {
     DataWeaveTools dataWeaveTools = cli == null ? null : new DataWeaveTools(cli, project, secrets);
     HttpTools httpTools = project == null ? null
         : new HttpTools(project, secrets, personalMask, mode.canChangeApp, currentDocsHosts, HttpTools.TIMEOUT,
-            appConsole);
+            appConsole).debugger(debug).lateResults(lateSink()).cancelledWhen(progress::isCancelled);
+    AppLauncher launcher = appLauncher;
+    LaunchTools launchTools = project == null || launcher == null || !mode.canChangeApp ? null
+        : new LaunchTools(project, launcher, appConsole, secrets, progress::isCancelled, LaunchTools.DEPLOY_TIMEOUT);
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
@@ -345,6 +394,9 @@ public class ChatSession {
     }
     if (httpTools != null) {
       specifications.addAll(httpTools.specifications());
+    }
+    if (launchTools != null) {
+      specifications.addAll(LaunchTools.SPECIFICATIONS);
     }
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
@@ -401,14 +453,17 @@ public class ChatSession {
         boolean debugCall = DebugTools.handles(call.name());
         boolean dataWeaveCall = DataWeaveTools.handles(call.name());
         boolean httpCall = HttpTools.handles(call.name());
+        boolean launchCall = LaunchTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
-            : httpCall ? HttpTools.describe(call) : ProjectTools.describe(call));
+            : httpCall ? HttpTools.describe(call) : launchCall ? LaunchTools.describe(call)
+            : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         String result = debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
             : httpCall && httpTools != null ? httpTools.execute(call)
-            : tools != null && !debugCall && !dataWeaveCall && !httpCall ? tools.execute(call)
+            : launchCall && launchTools != null ? launchTools.execute(call)
+            : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         int hidden = secrets.total() - before;
         if (hidden > 0) {
@@ -416,6 +471,15 @@ public class ChatSession {
         }
         notePersonal(progress, personal.total() - personalBeforeCall);
         turn.add(ToolExecutionResultMessage.from(call, result));
+      }
+      // A call that stopped at a breakpoint leaves the debugger stopped mid-turn: offer its tools from now on.
+      if (debugTools == null && debug != null && debug.current() != null && reply.toolExecutionRequests().stream()
+          .anyMatch(call -> HttpTools.CALL.equals(call.name()))) {
+        debugTools = new DebugTools(debug, secrets, personalMask);
+        specifications.addAll(DebugTools.SPECIFICATIONS);
+        system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
+            true, dataWeaveTools != null, httpTools != null, fromHttp.text());
+        progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
     }
     if (answer == null) {
@@ -514,6 +578,8 @@ public class ChatSession {
   }
 
   public synchronized void clear() {
+    generation.incrementAndGet();
+    lateNotes.clear();
     history.clear();
     saved.clear();
     savedSnapshot = List.of();

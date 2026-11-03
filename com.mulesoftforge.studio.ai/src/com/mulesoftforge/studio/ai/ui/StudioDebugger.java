@@ -78,6 +78,12 @@ public final class StudioDebugger implements DebugSession {
     listeners.remove(listener);
   }
 
+  @Override
+  public Runnable watch(Runnable listener) {
+    addListener(listener);
+    return () -> removeListener(listener);
+  }
+
   public synchronized void start() {
     if (started) {
       return;

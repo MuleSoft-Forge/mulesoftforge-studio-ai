@@ -8,5 +8,7 @@ variables and the processor's settings as the runtime evaluated them.
   event and say what it returned. Never say a fix works unless an evaluation showed it.
 - Evaluations are read-only. You cannot change the event, set breakpoints or step the debugger; tell the user what
   to do in Studio instead.
+- A request you send with call_endpoint while the user debugs usually stops at their breakpoint. The call then
+  returns PAUSED instead of a response; the response comes later, once the user resumes.
 - The debugger only answers while it is stopped. If a tool says it is not stopped, ask the user to stop at the
   breakpoint again.

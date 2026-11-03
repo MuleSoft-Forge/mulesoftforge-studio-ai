@@ -22,10 +22,15 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -34,7 +39,11 @@ import javax.net.ssl.X509TrustManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveTools;
+import com.mulesoftforge.studio.ai.debug.DebugSession;
+import com.mulesoftforge.studio.ai.debug.DebugSnapshot;
+import com.mulesoftforge.studio.ai.debug.DebugStop;
 import com.mulesoftforge.studio.ai.debug.PersonalData;
+import com.mulesoftforge.studio.ai.debug.ProcessorSource;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectPaths;
 import com.mulesoftforge.studio.ai.llm.Network;
@@ -58,6 +67,14 @@ public final class HttpTools {
   public static final List<String> DEFAULT_DOCS_HOSTS = List.of("docs.mulesoft.com", "developer.mulesoft.com",
       "dataweave.mulesoft.com", "dev-portal.mulesoft.com", "help.salesforce.com");
   public static final Duration TIMEOUT = Duration.ofSeconds(30);
+  // How long a request may stay open after call_endpoint stops waiting for it, e.g. while the user steps through it.
+  public static final Duration BACKGROUND_TIMEOUT = Duration.ofMinutes(10);
+  private static final long WAIT_POLL_MS = 100;
+  private static final ExecutorService WORKERS = Executors.newCachedThreadPool(task -> {
+    Thread thread = new Thread(task, "MuleSoftForge Studio AI call_endpoint");
+    thread.setDaemon(true);
+    return thread;
+  });
   private static final Pattern HOST = Pattern.compile(
       "(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$");
   private static final Pattern IPV4 = Pattern.compile("^\\d{1,3}(?:\\.\\d{1,3}){3}$");
@@ -73,12 +90,10 @@ public final class HttpTools {
   private static final int MAX_MARKDOWN_LINKS = 40;
   private static final int MAX_CONSOLE = 4_000;
   private static final int MAX_CONSOLE_READ = 8_000;
-  private static final int CONSOLE_ANCHOR = 200;
   // Mule writes its log asynchronously, so lines about a request can arrive after its response.
   private static final long CONSOLE_QUIET_MS = 300;
   private static final long CONSOLE_WAIT_MS = 2_000;
   private static final long CONSOLE_POLL_MS = 100;
-  private static final Pattern ANSI = Pattern.compile("\u001B\\[[0-9;?]*[A-Za-z]");
   private static final Pattern MARKDOWN_LINK = Pattern.compile("\\[([^\\]]+)\\]\\(([^)\\s]+)\\)");
   private static final Pattern LINK_HEADER = Pattern.compile(
       "<([^>]+)>\\s*;\\s*rel=\"?describedby\"?", Pattern.CASE_INSENSITIVE);
@@ -94,6 +109,9 @@ public final class HttpTools {
   private final Set<String> docsHosts;
   private final Duration timeout;
   private final AppConsole console;
+  private DebugSession debugger;
+  private Consumer<Late> late = result -> {};
+  private BooleanSupplier cancelled = () -> false;
 
   // files is null when no project is open; personal is null when personal data is sent as it is. canChange allows
   // requests that change data (POST, PUT, PATCH, DELETE), which Ask and Plan mode do not send. docsHosts is the
@@ -122,6 +140,25 @@ public final class HttpTools {
     this.docsHosts = Set.copyOf(docsHosts == null || docsHosts.isEmpty() ? DEFAULT_DOCS_HOSTS : docsHosts);
     this.timeout = timeout;
     this.console = console;
+  }
+
+  // With Studio's debugger, call_endpoint stops waiting when the debugger stops during a call, since the request is
+  // then usually held at a breakpoint, and reports the stop instead.
+  public HttpTools debugger(DebugSession session) {
+    debugger = session;
+    return this;
+  }
+
+  // Receives, as text for the model, the result of a request that finished after call_endpoint stopped waiting.
+  public HttpTools lateResults(Consumer<Late> sink) {
+    late = sink == null ? result -> {} : sink;
+    return this;
+  }
+
+  // Checked while call_endpoint waits, so cancelling the turn does not wait for the app.
+  public HttpTools cancelledWhen(BooleanSupplier check) {
+    cancelled = check == null ? () -> false : check;
+    return this;
   }
 
   public static String formatDocsHosts(Collection<String> hosts) {
@@ -202,7 +239,10 @@ public final class HttpTools {
             + ". Only localhost addresses are allowed. Use it to test an endpoint, reproduce a"
             + " bug or prove a fix. Masked values («masked-N») in the url, headers or body are sent as their real"
             + " values." + (canChange ? "" : " This mode only sends " + String.join(", ", READ_METHODS)
-            + "; requests that change data need Agent or Diagnose mode."))
+            + "; requests that change data need Agent or Diagnose mode.")
+            + (debugger == null ? "" : " If Studio's debugger stops while the call waits, it returns PAUSED with the"
+                + " stopped event instead of waiting; the request stays open while the user steps through it.")
+            + " A response that arrives after the call stopped waiting comes with the user's next message.")
         .parameters(JsonObjectSchema.builder()
             .addEnumProperty("method", methods)
             .addStringProperty("url", "e.g. http://localhost:8081/api/employees?limit=5")
@@ -218,6 +258,8 @@ public final class HttpTools {
             .addStringProperty("file", "Project-relative file to send as the body, e.g. src/test/resources/new.json")
             .addStringProperty("expected_status", "Optional: the status the call should return, e.g. 201")
             .addStringProperty("expected_body", "Optional: the body it should return, compared with the response")
+            .addBooleanProperty("wait", "Optional, default true. false sends the request and returns at once without"
+                + " the response, for when the user asks you not to wait or will step through it in the debugger")
             .required("method", "url")
             .build())
         .build());
@@ -329,7 +371,10 @@ public final class HttpTools {
       body = secrets.unmask(args.get("body").asText());
     }
 
-    HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(timeout);
+    boolean wait = args.path("wait").asBoolean(true);
+    // A request the turn may stop waiting for gets the longer limit; the turn itself still waits only timeout.
+    Duration limit = wait && debugger == null ? timeout : BACKGROUND_TIMEOUT;
+    HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(limit);
     List<String> skipped = new ArrayList<>();
     boolean contentType = false;
     for (JsonNode header : args.path("headers")) {
@@ -349,21 +394,94 @@ public final class HttpTools {
     }
     builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
         : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+    HttpRequest request = builder.build();
+    URI target = uri;
+    String sentBody = body;
 
     AppConsole.Text before = consoleNow();
+    Exchange exchange = new Exchange(limit);
+    DebugSession debug = wait ? debugger : null;
+    DebugStop stoppedBefore = debug == null ? null : debug.current();
+    CompletableFuture<DebugStop> paused = new CompletableFuture<>();
+    // Watching starts before the request is sent, so a breakpoint it hits at once is not missed.
+    Runnable unwatch = debug == null ? () -> {} : debug.watch(() -> {
+      DebugStop now = debug.current();
+      if (now != null && now != stoppedBefore) {
+        paused.complete(now);
+      }
+    });
+    try {
+      CompletableFuture<String> result = CompletableFuture.supplyAsync(
+          () -> exchange(exchange, request, target, method, sentBody, shownUrl, skipped, args, before), WORKERS);
+      if (!wait) {
+        deliverLate(result, method + " " + shownUrl);
+        return "SENT " + method + " " + shownUrl + " without waiting for the response, as asked. Its result comes"
+            + " with the user's next message; do not call it again to check on it.";
+      }
+      long deadline = System.nanoTime() + timeout.toNanos();
+      while (!result.isDone() && !paused.isDone()) {
+        if (cancelled.getAsBoolean()) {
+          exchange.abandon();
+          return "ERROR: the user cancelled before the app answered.";
+        }
+        long left = (deadline - System.nanoTime()) / 1_000_000;
+        if (left <= 0) {
+          exchange.abandon();
+          return masked(noResponse(timeout) + consoleDuring(before));
+        }
+        try {
+          CompletableFuture.anyOf(result, paused).get(Math.min(WAIT_POLL_MS, left), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+          // Check for Cancel and the deadline again.
+        } catch (InterruptedException e) {
+          exchange.abandon();
+          throw e;
+        }
+      }
+      if (result.isDone()) {
+        return result.join();
+      }
+      deliverLate(result, method + " " + shownUrl);
+      return pausedAt(paused.join(), method + " " + shownUrl);
+    } finally {
+      unwatch.run();
+    }
+  }
+
+  private static String noResponse(Duration waited) {
+    return "ERROR: no response within " + waited.toSeconds() + " s. If Studio's debugger is stopped at a"
+        + " breakpoint, the request is waiting there: look at the event, then resume. Otherwise the flow is slow"
+        + " or stuck.";
+  }
+
+  // Runs on a worker thread and never throws: failures come back as text.
+  private String exchange(Exchange exchange, HttpRequest request, URI uri, String method, String body,
+      String shownUrl, List<String> skipped, JsonNode args, AppConsole.Text before) {
+    try {
+      return format(exchange, request, uri, method, body, shownUrl, skipped, args, before);
+    } catch (CancellationException e) {
+      return "ERROR: the request was cancelled.";
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return "ERROR: interrupted.";
+    } catch (Exception e) {
+      return "ERROR: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+    }
+  }
+
+  private String format(Exchange exchange, HttpRequest request, URI uri, String method, String body,
+      String shownUrl, List<String> skipped, JsonNode args, AppConsole.Text before) throws Exception {
     long started = System.nanoTime();
     Received received;
     try {
-      received = send(localClient(), builder.build(), uri, method, body, HttpTools::localProblem);
+      received = send(localClient(), request, uri, method, body, HttpTools::localProblem, exchange.limit, exchange);
     } catch (ConnectException | HttpConnectTimeoutException e) {
       return masked("ERROR: nothing is answering on " + uri.getHost() + ":" + port(uri) + ". The app is not"
           + " running, or listens on another port. Ask the user to run it in Studio (Run As > Mule Application) and"
           + " wait for DEPLOYED in the console" + (files == null ? "." : "; list_endpoints shows the port it uses.")
           + consoleEnd(before));
     } catch (HttpTimeoutException | TimeoutException e) {
-      return masked("ERROR: no response within " + timeout.toSeconds() + " s. If Studio's debugger is stopped at a"
-          + " breakpoint, the request is waiting there: look at the event, then resume. Otherwise the flow is slow"
-          + " or stuck." + consoleDuring(before));
+      return masked(noResponse(exchange.limit) + consoleDuring(before));
     }
     long millis = (System.nanoTime() - started) / 1_000_000;
 
@@ -398,6 +516,75 @@ public final class HttpTools {
     }
     out.append(consoleDuring(before));
     return masked(out.toString().strip());
+  }
+
+  private void deliverLate(CompletableFuture<String> result, String request) {
+    Consumer<Late> sink = late;
+    result.thenAccept(text -> {
+      try {
+        sink.accept(new Late(request, text));
+      } catch (RuntimeException e) {
+        // The chat that asked may be gone.
+      }
+    });
+  }
+
+  private String pausedAt(DebugStop stop, String request) {
+    ProcessorSource.Located source = null;
+    try {
+      source = ProcessorSource.find(files, stop);
+    } catch (Exception e) {
+      // The event is still worth showing without its XML.
+    }
+    DebugSnapshot.Snapshot snapshot = DebugSnapshot.render(stop, null, source);
+    return masked("PAUSED: Studio's debugger stopped at " + snapshot.title() + " while " + request + " was waiting,"
+        + " so the request is most likely held at that breakpoint. It stays open while the user steps through the"
+        + " flow, and its response comes with the user's next message. Do not call it again or wait for it: tell"
+        + " the user where it stopped and what the event shows. Another flow (a scheduler or another request) can"
+        + " also stop the debugger, so check the flow before saying it is this request.\n\nLIVE MULE EVENT:\n"
+        + snapshot.text());
+  }
+
+  // A request call_endpoint stopped waiting for, e.g. "GET http://localhost:8081/api", and its result as the model
+  // would have seen it.
+  public record Late(String request, String result) {
+    // The status and time, e.g. "STATUS 200 (5234 ms)", or the first sentence of an error, without a final full stop.
+    public String summary() {
+      String first = result.lines().findFirst().orElse("").strip();
+      int end = first.startsWith("STATUS ") ? first.indexOf("): ") + 1 : first.indexOf(". ");
+      String shown = end > 0 ? first.substring(0, end) : first;
+      return shown.endsWith(".") ? shown.substring(0, shown.length() - 1) : shown;
+    }
+  }
+
+  // One call_endpoint request, so the turn can drop it while a worker thread waits on it.
+  private static final class Exchange {
+    final Duration limit;
+    private volatile boolean abandoned;
+    private volatile CompletableFuture<?> pending;
+
+    Exchange(Duration limit) {
+      this.limit = limit;
+    }
+
+    boolean abandoned() {
+      return abandoned;
+    }
+
+    void sending(CompletableFuture<?> next) {
+      pending = next;
+      if (abandoned) {
+        next.cancel(true);
+      }
+    }
+
+    void abandon() {
+      abandoned = true;
+      CompletableFuture<?> current = pending;
+      if (current != null) {
+        current.cancel(true);
+      }
+    }
   }
 
   private String readConsole() {
@@ -477,37 +664,16 @@ public final class HttpTools {
     return (System.nanoTime() - nanos) / 1_000_000;
   }
 
-  // The text after appears to have gained since before. Consoles drop their oldest lines past a size limit, so the
-  // end of before is looked for in after rather than trusting its length.
   private static String added(AppConsole.Text before, AppConsole.Text after) {
-    String old = before.text();
-    String now = after.text();
-    if (!before.name().equals(after.name()) || old.isEmpty()) {
-      return now;
-    }
-    String anchor = old.substring(Math.max(0, old.length() - CONSOLE_ANCHOR));
-    if (now.length() >= old.length() && now.startsWith(anchor, old.length() - anchor.length())) {
-      return now.substring(old.length());
-    }
-    int at = now.lastIndexOf(anchor);
-    return at >= 0 ? now.substring(at + anchor.length()) : now;
+    return AppConsole.added(before, after);
   }
 
   private static String clean(String text) {
-    return ANSI.matcher(text).replaceAll("").strip();
+    return AppConsole.clean(text);
   }
 
-  // The end of text, from a whole line, where errors usually are.
   private static String tail(String text, int max) {
-    if (text.length() <= max) {
-      return text;
-    }
-    String end = text.substring(text.length() - max);
-    int line = end.indexOf('\n');
-    if (line >= 0 && line < 500) {
-      end = end.substring(line + 1);
-    }
-    return "… (earlier lines cut)\n" + end;
+    return AppConsole.tail(text, max);
   }
 
   private String masked(String text) {
@@ -593,7 +759,7 @@ public final class HttpTools {
         .header("Accept", "text/markdown, text/plain;q=0.9, application/json;q=0.8, text/html;q=0.5")
         .header("User-Agent", "MuleSoftForge-Studio-AI")
         .build();
-    return send(docsClient(), request, uri, "GET", null, link -> docsProblem(link, docsHosts));
+    return send(docsClient(), request, uri, "GET", null, link -> docsProblem(link, docsHosts), timeout, null);
   }
 
   // docs.mulesoft.com pages have a Markdown twin at the same path with .md (View as Markdown).
@@ -678,16 +844,23 @@ public final class HttpTools {
   }
 
   // Follows redirects only to addresses the same rule allows; 303, and 301 or 302 for a POST, continue as GET.
-  private Received send(HttpClient client, HttpRequest first, URI uri, String method, String body, Rule rule)
-      throws Exception {
+  // exchange is null for requests that are never dropped while they run.
+  private Received send(HttpClient client, HttpRequest first, URI uri, String method, String body, Rule rule,
+      Duration limit, Exchange exchange) throws Exception {
     HttpRequest request = first;
     List<URI> redirects = new ArrayList<>();
     for (int hop = 0;; hop++) {
+      if (exchange != null && exchange.abandoned()) {
+        throw new CancellationException();
+      }
       CompletableFuture<HttpResponse<InputStream>> pending = client.sendAsync(request,
           HttpResponse.BodyHandlers.ofInputStream());
+      if (exchange != null) {
+        exchange.sending(pending);
+      }
       HttpResponse<InputStream> response;
       try {
-        response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        response = pending.get(limit.toMillis(), TimeUnit.MILLISECONDS);
       } catch (TimeoutException e) {
         pending.cancel(true);
         throw e;
@@ -717,7 +890,7 @@ public final class HttpTools {
       next = local(next);
       boolean keep = status == 307 || status == 308 || (method.equals("GET") || method.equals("HEAD"))
           && status != 303;
-      HttpRequest.Builder builder = HttpRequest.newBuilder(next).timeout(timeout);
+      HttpRequest.Builder builder = HttpRequest.newBuilder(next).timeout(limit);
       first.headers().map().forEach((name, values) -> {
         if (!(name.equalsIgnoreCase("Content-Type") && !keep)) {
           values.forEach(value -> builder.header(name, value));

@@ -112,6 +112,7 @@ public final class ChatJob extends Job {
       StudioDebugger debugger = StudioDebugger.get();
       session.debugger(debugger.available() ? debugger : null);
       session.appConsole(Consoles.MULE_APP);
+      session.appLauncher(new StudioLauncher(display));
       session.dataWeave(DataWeaveCli.lookup(AiSettings.dataWeaveCli(), false).cli());
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {

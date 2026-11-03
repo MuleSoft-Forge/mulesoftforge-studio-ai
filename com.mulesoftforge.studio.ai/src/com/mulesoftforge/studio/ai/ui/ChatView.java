@@ -270,6 +270,9 @@ public class ChatView extends ViewPart {
     debuggerListener = () -> Ui.async(display, root, () -> debugBar.show(debugger.current()));
     debugger.addListener(debuggerListener);
     debugBar.show(debugger.current());
+    session.onLateResult(late -> Ui.async(display, root, () -> append("Note", late.request() + " answered after"
+        + " the AI stopped waiting. Result: " + late.summary() + ". The AI sees the full response with your next"
+        + " message.")));
     stopWatchingSettings = AiSettings.onChange(key -> {
       if (AiSettings.affectsModels(key) && settingsRefreshPending.compareAndSet(false, true)) {
         Ui.async(display, header, this::settingsChanged);

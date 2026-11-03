@@ -16,21 +16,26 @@ public final class HtmlPage {
     boolean dark = theme.background().isDark();
     String border = dark ? "rgba(255,255,255,0.10)" : "#d6e2ec";
     String bubble = dark ? "rgba(0,163,224,0.20)" : "#dff1fa";
-    // The product site's look: glass cards over a navy base with blue and purple glows and, in dark, a faint grid.
+    // Same atmosphere as https://mulesoftforge.com/studio-ai/: navy #070b14, blue/purple/cyan glows, 48px grid.
     String cards = dark
         ? "--card:rgba(255,255,255,0.05);--card-border:rgba(255,255,255,0.10);--pill:rgba(255,255,255,0.07);"
             + "--pill-hover:rgba(255,255,255,0.12);--focus:#38bdf8;--shadow:rgba(0,0,0,0.30);"
             + "--error-bg:rgba(214,69,69,0.14);--note-bg:rgba(56,189,248,0.10);"
-            + "--glow-a:rgba(0,119,182,0.38);--glow-b:rgba(91,63,214,0.34);--grid-line:rgba(255,255,255,0.04);"
+            + "--glow-a:rgba(0,119,182,0.55);--glow-b:rgba(91,63,214,0.55);--glow-c:rgba(0,163,224,0.30);"
+            + "--grid-line:rgba(255,255,255,0.04);"
         : "--card:#ffffff;--card-border:#d6e2ec;--pill:#eef4f8;--pill-hover:#e2edf5;--focus:#00a3e0;"
             + "--shadow:rgba(16,42,67,0.06);--error-bg:rgba(214,69,69,0.06);--note-bg:rgba(0,163,224,0.06);"
-            + "--glow-a:rgba(0,163,224,0.14);--glow-b:rgba(109,93,252,0.13);--grid-line:transparent;";
+            + "--glow-a:rgba(0,163,224,0.16);--glow-b:rgba(109,93,252,0.14);--glow-c:rgba(0,119,182,0.08);"
+            + "--grid-line:rgba(16,42,67,0.07);";
+    // Dark chat always uses the site navy, even when Studio's panel colour drifts.
+    String bg = dark ? "#070b14" : theme.background().css();
+    String fg = dark ? "#e6ecf5" : theme.foreground().css();
     return cards + """
         --scheme:%s;--bg:%s;--fg:%s;--bubble:%s;--border:%s;--muted:%s;--error:%s;--note:%s;
         --inline:%s;--code:%s;--link:%s;--panel:%s;--tag:%s;--attr-name:%s;--attr-value:%s;
         --comment:%s;--string:%s;--number:%s;--keyword:%s;--key:%s;--expression:%s;--directive:%s;
         --you:%s;--ai:%s;
-        """.formatted(dark ? "dark" : "light", theme.background().css(), theme.foreground().css(), bubble, border,
+        """.formatted(dark ? "dark" : "light", bg, fg, bubble, border,
         p.muted().css(), p.error().css(), p.note().css(), p.inlineCodeBackground().css(), p.codeBackground().css(),
         p.link().css(), p.panel().css(), p.tag().css(), p.attrName().css(), p.attrValue().css(), p.comment().css(),
         p.string().css(), p.number().css(), p.keyword().css(), p.key().css(), p.expression().css(),
@@ -47,20 +52,23 @@ public final class HtmlPage {
         html { background: var(--bg); }
         body { background: transparent; min-height: 100vh; }
         body::before, body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+        /* Glows match the Studio AI hero: blue left, purple right, soft cyan lower. */
         body::before { background:
-          radial-gradient(45%% 55%% at 12%% 0%%, var(--glow-a), transparent 70%%),
-          radial-gradient(40%% 50%% at 90%% 6%%, var(--glow-b), transparent 70%%); }
+          radial-gradient(ellipse 55%% 60%% at 8%% -8%%, var(--glow-a), transparent 70%%),
+          radial-gradient(ellipse 50%% 55%% at 94%% 10%%, var(--glow-b), transparent 70%%),
+          radial-gradient(ellipse 45%% 45%% at 42%% 88%%, var(--glow-c), transparent 70%%); }
         body::after { background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
           linear-gradient(90deg, var(--grid-line) 1px, transparent 1px); background-size: 48px 48px;
-          -webkit-mask-image: radial-gradient(ellipse 80%% 60%% at 50%% 0%%, #000 30%%, transparent 75%%);
-          mask-image: radial-gradient(ellipse 80%% 60%% at 50%% 0%%, #000 30%%, transparent 75%%); }
+          -webkit-mask-image: radial-gradient(ellipse 80%% 60%% at 50%% 20%%, #000 30%%, transparent 75%%);
+          mask-image: radial-gradient(ellipse 80%% 60%% at 50%% 20%%, #000 30%%, transparent 75%%); }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 999px; }
         ::-webkit-scrollbar-track { background: transparent; }
         #log { padding: 12px 12px 18px; max-width: 900px; margin: 0 auto; }
         #log:empty { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
         #log:empty::before { content: "Ask about this Mule project, or ask for a change."; color: var(--muted);
-          font-size: 1.05em; padding: 18px 22px; border: 1px dashed var(--card-border); border-radius: 14px; }
+          font-size: 1.05em; padding: 18px 22px; border: 1px dashed var(--card-border); border-radius: 14px;
+          background: linear-gradient(var(--card), var(--card)), var(--bg); }
         @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
         .msg, .offer, .actions, .raw { animation: rise .18s ease-out; }
         .msg { margin: 14px 0 6px; display: flex; flex-direction: column; }

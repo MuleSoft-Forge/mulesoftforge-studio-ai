@@ -8,15 +8,24 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mulesoftforge.studio.ai.debug.DebugStop;
+import com.mulesoftforge.studio.ai.debug.DebugTools;
 import com.mulesoftforge.studio.ai.debug.PersonalData;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.Endpoints;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.http.PageText;
+import com.mulesoftforge.studio.ai.launch.AppLauncher;
+import com.mulesoftforge.studio.ai.launch.LaunchTools;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
@@ -42,8 +51,11 @@ final class HttpChecks {
     failed += rules();
     failed += calls();
     failed += console();
+    failed += background();
+    failed += launch();
     failed += pages();
     failed += loop();
+    failed += debugLoop();
     if ("1".equals(System.getenv("MSF_LIVE_DOCS"))) {
       failed += liveDocs();
     } else {
@@ -388,6 +400,332 @@ final class HttpChecks {
     return failed;
   }
 
+  // Studio's launches as LaunchTools sees them: starting prints Mule's deployment table into a fresh console.
+  private static final class FakeLauncher implements AppLauncher {
+    final List<String> calls = new CopyOnWriteArrayList<>();
+    final FakeConsole[] console = new FakeConsole[1];
+    volatile Running running;
+    volatile String outcome = "DEPLOYED";
+    volatile boolean stubborn;
+    // Mule 4.9+ prints "* app * STATUS *"; older runtimes add a domain column.
+    volatile boolean domainColumn;
+    // What Studio's runtime events report shortly after the start, before Mule logs anything; null for none.
+    volatile Deployment reports;
+    volatile Deployment reported;
+    // The console never prints the deployment table.
+    volatile boolean quiet;
+
+    @Override
+    public Running running(String project) {
+      return running;
+    }
+
+    @Override
+    public Deployment deployment(String app) {
+      return reported;
+    }
+
+    @Override
+    public void start(String project, String mode) {
+      calls.add("start " + mode);
+      console[0] = new FakeConsole(project + " [Mule Applications] Mule Server 4.9.0 EE (" + mode + ")", 10_000);
+      running = new Running(project, mode);
+      reported = null;
+      new Thread(() -> {
+        try {
+          Thread.sleep(200);
+          reported = reports;
+          Thread.sleep(100);
+        } catch (InterruptedException ignored) {
+          return;
+        }
+        if (quiet) {
+          return;
+        }
+        console[0].log("**********************************************************************");
+        console[0].log("*              - - + DOMAIN + - -               * - - + STATUS + - - *");
+        console[0].log("**********************************************************************");
+        console[0].log("* default                                       * DEPLOYED           *");
+        console[0].log("**********************************************************************");
+        try {
+          Thread.sleep(400);
+        } catch (InterruptedException ignored) {
+          return;
+        }
+        console[0].log("INFO  Deploying artifact " + project);
+        if (outcome.equals("FAILED")) {
+          console[0].log("ERROR Failed to deploy artifact [" + project + "]: property ${db.url} not found");
+        }
+        console[0].log("**********************************************************************");
+        if (domainColumn) {
+          console[0].log("*            - - + APPLICATION + - -            *       - - + DOMAIN + - -       *"
+              + "  - - + STATUS + - -  *");
+          console[0].log("**********************************************************************");
+          console[0].log("* " + project + "                                * default                        * "
+              + outcome + "             *");
+        } else {
+          console[0].log("*            - - + APPLICATION + - -            *       - - + STATUS + - -       *");
+          console[0].log("**********************************************************************");
+          console[0].log("* " + project + "                                * " + outcome + "             *");
+        }
+        console[0].log("**********************************************************************");
+      }).start();
+    }
+
+    @Override
+    public boolean stop() {
+      calls.add("stop");
+      boolean was = running != null;
+      if (!stubborn) {
+        running = null;
+      }
+      return was;
+    }
+  }
+
+  private static int launch() throws Exception {
+    int failed = 0;
+    ProjectFiles project = DebugChecks.project("employees-app");
+    FakeLauncher launcher = new FakeLauncher();
+    AppConsole console = name -> launcher.console[0] == null ? null : launcher.console[0].read(name);
+    LaunchTools tools = new LaunchTools(project, launcher, console, new SecretMask(), null, Duration.ofSeconds(5));
+
+    String out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "debug")));
+    failed += check("run_app: starts in debug mode and waits for the app, not the domain, to deploy",
+        launcher.calls.equals(List.of("start debug")) && out.startsWith("DEPLOYED: employees-app is running in debug"
+            + " mode") && out.contains("breakpoints") && out.contains("* employees-app"));
+    failed += check("run_app: starting the app is the whole request, so the AI is told not to call a flow next",
+        out.contains("do not call an endpoint unless the user asked for that too")
+        && LaunchTools.SPECIFICATIONS.get(0).description().contains("do not call an endpoint afterwards"));
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "debug")));
+    failed += check("run_app: already running in that mode is left alone", out.startsWith("ALREADY RUNNING")
+        && launcher.calls.size() == 1);
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
+    failed += check("run_app: running in the other mode is stopped, then started", launcher.calls.equals(List.of(
+        "start debug", "stop", "start run")) && out.startsWith("Stopped employees-app (debug mode) first.")
+        && out.contains("DEPLOYED: employees-app is running in run mode"));
+    launcher.domainColumn = true;
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
+    failed += check("run_app: restart true restarts the same mode; older three-column table read",
+        launcher.calls.size() == 5 && out.contains("DEPLOYED: employees-app"));
+    launcher.domainColumn = false;
+
+    launcher.outcome = "FAILED";
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
+    failed += check("run_app: a failed deployment comes back with the console", out.contains("\nFAILED:")
+        && out.contains("Failed to deploy artifact") && out.contains("${db.url}"));
+
+    launcher.outcome = "DEPLOYED";
+    launcher.reports = AppLauncher.Deployment.STARTED;
+    launcher.quiet = true;
+    long started = System.nanoTime();
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
+    long waited = (System.nanoTime() - started) / 1_000_000;
+    failed += check("run_app: Studio's runtime event says started, without any deployment table in the console",
+        out.contains("DEPLOYED: employees-app is running in run mode") && waited < 3_500);
+    launcher.quiet = false;
+    launcher.reports = AppLauncher.Deployment.FAILED;
+    launcher.outcome = "FAILED";
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
+    failed += check("run_app: a reported failure waits for the console to say why", out.contains("\nFAILED:")
+        && out.contains("${db.url} not found"));
+    launcher.reports = null;
+
+    out = tools.execute(request(LaunchTools.STOP, Map.of()));
+    failed += check("stop_app: stops the running app", out.startsWith("STOPPED: employees-app")
+        && launcher.running == null);
+    out = tools.execute(request(LaunchTools.STOP, Map.of()));
+    failed += check("stop_app: nothing running says so", out.startsWith("NOT RUNNING"));
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "profile")));
+    failed += check("run_app: only run and debug modes", out.startsWith("ERROR: mode must be run or debug"));
+    failed += check("run_app: progress names Studio's menu item", LaunchTools.describe(request(LaunchTools.RUN,
+        Map.of("mode", "debug"))).equals("Starting the app in debug mode (Debug As > Mule Application)"));
+    return failed;
+  }
+
+  // An app whose /held request waits, like one stopped at a breakpoint, until resume is completed.
+  private static HttpServer heldApp(CompletableFuture<Void> resume) throws Exception {
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.setExecutor(Executors.newCachedThreadPool());
+    server.createContext("/held", exchange -> {
+      try {
+        resume.get(10, TimeUnit.SECONDS);
+      } catch (Exception ignored) {
+        // Answer anyway.
+      }
+      respond(exchange, 200, "text/plain", "resumed".getBytes(StandardCharsets.UTF_8));
+    });
+    server.createContext("/slow", exchange -> {
+      try {
+        Thread.sleep(1_500);
+      } catch (InterruptedException ignored) {
+        Thread.currentThread().interrupt();
+      }
+      respond(exchange, 200, "text/plain", "late".getBytes(StandardCharsets.UTF_8));
+    });
+    server.createContext("/quick", exchange -> respond(exchange, 200, "text/plain",
+        "ok".getBytes(StandardCharsets.UTF_8)));
+    server.start();
+    return server;
+  }
+
+  private static void stopLater(DebugChecks.FakeSession debugger, DebugStop at, long millis) {
+    new Thread(() -> {
+      try {
+        Thread.sleep(millis);
+      } catch (InterruptedException ignored) {
+        return;
+      }
+      debugger.moveTo(at);
+    }).start();
+  }
+
+  // call_endpoint while debugging: a breakpoint ends the wait, wait false does not wait, late results arrive, and
+  // Cancel does not wait for the app.
+  private static int background() throws Exception {
+    int failed = 0;
+    CompletableFuture<Void> resume = new CompletableFuture<>();
+    HttpServer server = heldApp(resume);
+    try {
+      String base = "http://localhost:" + server.getAddress().getPort();
+      ProjectFiles project = DebugChecks.project("employees-app");
+      DebugChecks.FakeSession debugger = new DebugChecks.FakeSession();
+      List<HttpTools.Late> lates = new CopyOnWriteArrayList<>();
+      HttpTools tools = new HttpTools(project, new SecretMask(), new PersonalData(), true, Duration.ofSeconds(5))
+          .debugger(debugger).lateResults(lates::add);
+
+      DebugStop stop = DebugChecks.stop("logger-get.json");
+      stopLater(debugger, stop, 300);
+      long started = System.nanoTime();
+      String out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/held")));
+      long waited = (System.nanoTime() - started) / 1_000_000;
+      failed += check("debugging: a breakpoint during the call ends the wait with PAUSED and the event",
+          out.startsWith("PAUSED: Studio's debugger stopped at") && out.contains("LIVE MULE EVENT:")
+              && out.contains("STOPPED AT: ") && waited < 2_000);
+      failed += check("debugging: the paused request is still open", lates.isEmpty() && debugger.watchers.isEmpty());
+      debugger.moveTo(null);
+      resume.complete(null);
+      failed += check("debugging: once resumed, its response arrives as a late result",
+          waitFor(() -> !lates.isEmpty(), 5_000) && lates.get(0).request().equals("GET " + base + "/held")
+              && lates.get(0).result().startsWith("STATUS 200") && lates.get(0).result().contains("resumed")
+              && lates.get(0).summary().matches("STATUS 200 \\(\\d+ ms\\)"));
+
+      lates.clear();
+      debugger.moveTo(stop);
+      out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/quick")));
+      failed += check("debugging: a debugger already stopped elsewhere does not pause a call that answers",
+          out.startsWith("STATUS 200"));
+      debugger.moveTo(null);
+
+      started = System.nanoTime();
+      out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/slow", "wait", false)));
+      waited = (System.nanoTime() - started) / 1_000_000;
+      failed += check("wait false: returns at once without a response", out.startsWith("SENT GET") && waited < 1_000
+          && !out.contains("late"));
+      failed += check("wait false: the response arrives as a late result", waitFor(() -> !lates.isEmpty(), 5_000)
+          && lates.get(0).result().contains("late"));
+      failed += check("wait is offered", tools.specifications().stream().anyMatch(s -> s.name().equals(HttpTools.CALL)
+          && s.parameters().properties().containsKey("wait") && s.description().contains("PAUSED")));
+
+      AtomicBoolean cancel = new AtomicBoolean();
+      HttpTools cancellable = new HttpTools(project, new SecretMask(), null, true, Duration.ofSeconds(5))
+          .cancelledWhen(cancel::get);
+      new Thread(() -> {
+        try {
+          Thread.sleep(300);
+        } catch (InterruptedException ignored) {
+          return;
+        }
+        cancel.set(true);
+      }).start();
+      started = System.nanoTime();
+      out = cancellable.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/slow")));
+      waited = (System.nanoTime() - started) / 1_000_000;
+      failed += check("cancel: the call stops waiting when the turn is cancelled",
+          out.startsWith("ERROR: the user cancelled") && waited < 1_200);
+      failed += check("late summary: an error's first sentence", new HttpTools.Late("GET x",
+          "ERROR: nothing is answering on localhost:8081. The app is not running.").summary()
+          .equals("ERROR: nothing is answering on localhost:8081"));
+    } finally {
+      resume.complete(null);
+      server.stop(0);
+    }
+    return failed;
+  }
+
+  private static boolean waitFor(BooleanSupplier condition, long millis)
+      throws InterruptedException {
+    long end = System.nanoTime() + millis * 1_000_000;
+    while (System.nanoTime() < end) {
+      if (condition.getAsBoolean()) {
+        return true;
+      }
+      Thread.sleep(50);
+    }
+    return condition.getAsBoolean();
+  }
+
+  // The chat loop: a call held at a breakpoint returns PAUSED, the debug tools join the same turn, and the late
+  // response goes to the model with the next message.
+  private static int debugLoop() throws Exception {
+    int failed = 0;
+    CompletableFuture<Void> resume = new CompletableFuture<>();
+    HttpServer app = heldApp(resume);
+    List<String> bodies = new CopyOnWriteArrayList<>();
+    String toolCall = DebugChecks.reply(Map.of("role", "assistant", "tool_calls", List.of(Map.of("id", "call_1",
+        "type", "function", "function", Map.of("name", HttpTools.CALL, "arguments", JSON.writeValueAsString(
+            Map.of("method", "GET", "url", "http://localhost:" + app.getAddress().getPort() + "/held")))))),
+        "tool_calls");
+    String answer = DebugChecks.reply(Map.of("role", "assistant", "content", "It stopped at the logger."), "stop");
+    HttpServer model = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    model.createContext("/v1/chat/completions", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      bodies.add(body);
+      boolean first = bodies.size() == 1;
+      respond(exchange, 200, "application/json", (first ? toolCall : answer).getBytes(StandardCharsets.UTF_8));
+    });
+    model.start();
+    try {
+      Connection connection = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + model.getAddress().getPort()
+          + "/v1", "m", "");
+      DebugChecks.FakeSession debugger = new DebugChecks.FakeSession();
+      ChatSession chat = new ChatSession();
+      chat.debugger(debugger);
+      List<HttpTools.Late> shown = new CopyOnWriteArrayList<>();
+      chat.onLateResult(shown::add);
+      stopLater(debugger, DebugChecks.stop("logger-get.json"), 300);
+      ChatSession.Turn turn = chat.send(ChatModels.create(connection), ChatMode.AGENT, "Call /held, I am debugging",
+          List.of(), DebugChecks.project("employees-app"), Progress.NONE);
+      failed += check("debug loop: no debug tools before the debugger stopped",
+          !DebugChecks.tool(bodies.get(0), DebugTools.EVALUATE));
+      failed += check("debug loop: PAUSED goes to the model, with the debug tools and guidance from then on",
+          bodies.size() == 2 && bodies.get(1).contains("PAUSED: Studio") && DebugChecks.tool(bodies.get(1),
+              DebugTools.EVALUATE) && bodies.get(1).contains("The user is debugging a Mule app in Studio"));
+      failed += check("debug loop: the turn ends with the model's answer", turn.text().equals(
+          "It stopped at the logger."));
+
+      debugger.moveTo(null);
+      resume.complete(null);
+      failed += check("debug loop: the late response is reported to the view", waitFor(() -> !shown.isEmpty(), 5_000)
+          && shown.get(0).result().contains("resumed"));
+      bodies.clear();
+      chat.send(ChatModels.create(connection), ChatMode.AGENT, "What did it return?", List.of(),
+          DebugChecks.project("employees-app"), Progress.NONE);
+      failed += check("debug loop: the late response reaches the model with the next message",
+          bodies.get(0).contains("LATE RESULT: GET http://localhost:") && bodies.get(0).contains("resumed"));
+      bodies.clear();
+      chat.send(ChatModels.create(connection), ChatMode.AGENT, "And now?", List.of(),
+          DebugChecks.project("employees-app"), Progress.NONE);
+      failed += check("debug loop: a late result is added once, then stays in history",
+          bodies.get(0).split("LATE RESULT: GET", -1).length == 2);
+    } finally {
+      resume.complete(null);
+      model.stop(0);
+      app.stop(0);
+    }
+    return failed;
+  }
+
   private static int pages() {
     int failed = 0;
     String html = """
@@ -448,6 +786,7 @@ final class HttpChecks {
       ChatSession chat = new ChatSession();
       chat.httpInstructions("Always show curl with -i.");
       chat.docsHosts(List.of("docs.example.com"));
+      chat.appLauncher(new FakeLauncher());
       ChatSession.Turn turn = chat.send(ChatModels.create(connection), ChatMode.ASK, "Is it up?",
           List.of(), DebugChecks.project("employees-app"), Progress.NONE);
       failed += check("loop: HTTP tools and guidance offered with a project", DebugChecks.tool(bodies.get(0),
@@ -457,12 +796,19 @@ final class HttpChecks {
           bodies.get(0).contains("HTTP AND DOCS INSTRUCTIONS") && bodies.get(0).contains("Always show curl with -i.")
               && bodies.get(0).contains("Only these sites: docs.example.com"));
       failed += check("loop: Ask mode offers only reading methods", !bodies.get(0).contains("\"POST\""));
+      failed += check("loop: Ask mode cannot start or stop the app", !DebugChecks.tool(bodies.get(0),
+          LaunchTools.RUN) && !DebugChecks.tool(bodies.get(0), LaunchTools.STOP));
       failed += check("loop: the app's reply went back to the model", bodies.size() == 2
           && bodies.get(1).contains("STATUS 200") && bodies.get(1).contains("UP"));
       failed += check("loop: activity says the app was called", turn.activity().contains("called the app once"));
       bodies.clear();
-      new ChatSession().send(ChatModels.create(connection), ChatMode.DIAGNOSE, "Why does it fail?", List.of(),
+      ChatSession diagnose = new ChatSession();
+      diagnose.appLauncher(new FakeLauncher());
+      diagnose.send(ChatModels.create(connection), ChatMode.DIAGNOSE, "Why does it fail?", List.of(),
           DebugChecks.project("employees-app"), Progress.NONE);
+      failed += check("loop: Diagnose can run, debug and stop the app", DebugChecks.tool(bodies.get(0),
+          LaunchTools.RUN) && DebugChecks.tool(bodies.get(0), LaunchTools.STOP)
+          && bodies.get(0).contains("Debug As > Mule Application"));
       failed += check("loop: Diagnose can send any method but has no edit tools", bodies.get(0).contains("\"POST\"")
           && !DebugChecks.tool(bodies.get(0), "edit_file") && !DebugChecks.tool(bodies.get(0), "write_file")
           && DebugChecks.tool(bodies.get(0), "offer_changes") && bodies.get(0).contains("You are in Diagnose mode"));

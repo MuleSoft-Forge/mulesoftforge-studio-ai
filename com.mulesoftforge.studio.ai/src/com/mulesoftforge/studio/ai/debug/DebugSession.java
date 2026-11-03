@@ -15,4 +15,10 @@ public interface DebugSession {
 
   // The field at accessor with the children Studio had not sent yet, or null when no such field was shown.
   DebugField expand(String accessor, Duration timeout) throws Exception;
+
+  // Runs listener, off the UI thread, whenever the debugger stops, steps, resumes or disconnects, until the returned
+  // Runnable is run. A session that cannot report changes never calls it.
+  default Runnable watch(Runnable listener) {
+    return () -> {};
+  }
 }

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 
@@ -53,12 +54,13 @@ final class DebugChecks {
 
   // A debugger that answers from the fixtures and records what it was asked.
   static final class FakeSession implements DebugSession {
-    DebugStop stop;
+    volatile DebugStop stop;
     DebugSession.Evaluation next;
     DebugField expanded;
     boolean timeout;
     String lastScript;
     int evaluations;
+    final List<Runnable> watchers = new CopyOnWriteArrayList<>();
 
     @Override
     public DebugStop current() {
@@ -78,6 +80,18 @@ final class DebugChecks {
     @Override
     public DebugField expand(String accessor, Duration limit) {
       return expanded != null && accessor.equals(expanded.accessor()) ? expanded : null;
+    }
+
+    @Override
+    public Runnable watch(Runnable listener) {
+      watchers.add(listener);
+      return () -> watchers.remove(listener);
+    }
+
+    // Like Studio's debugger arriving at a breakpoint, or resuming when next is null.
+    void moveTo(DebugStop next) {
+      stop = next;
+      watchers.forEach(Runnable::run);
     }
   }
 
