@@ -29,12 +29,14 @@ final class WorkspaceChecks {
       "org.eclipse.equinox.preferences", "org.eclipse.core.contenttype", "org.eclipse.equinox.app",
       "org.eclipse.core.runtime", "org.eclipse.core.expressions", "org.eclipse.core.filesystem",
       "org.eclipse.core.resources");
+  // Needed by the file system and resources plugins in newer Studios (7.29); older ones do not ship it.
+  private static final List<String> OPTIONAL = List.of("com.sun.jna", "com.sun.jna.platform");
   private static final Path SOURCES = Path.of("workspace");
   private static final Path WRITES = Path.of("..", "com.mulesoftforge.studio.ai", "src", "com", "mulesoftforge",
       "studio", "ai", "ui", "WorkspaceWrites.java");
 
   static void run() throws Exception {
-    Path plugins = Path.of(System.getenv().getOrDefault("STUDIO_APP", "/Applications/AnypointStudio728.app"),
+    Path plugins = Path.of(System.getenv().getOrDefault("STUDIO_APP", "/Applications/AnypointStudio729.app"),
         "Contents", "Eclipse", "plugins");
     if (!Files.isDirectory(plugins)) {
       System.out.println("SKIP  no Anypoint Studio plugins at " + plugins + ": set STUDIO_APP");
@@ -42,6 +44,13 @@ final class WorkspaceChecks {
     }
     Path osgi = bundle(plugins, "org.eclipse.osgi");
     List<Path> bundles = new ArrayList<>();
+    for (String name : OPTIONAL) {
+      try {
+        bundles.add(bundle(plugins, name));
+      } catch (IllegalStateException absent) {
+        // This Studio does not need it.
+      }
+    }
     for (String name : BUNDLES) {
       bundles.add(bundle(plugins, name));
     }

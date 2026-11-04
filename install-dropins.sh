@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17}"
 export JAVA_HOME
 
-STUDIO_APP="${STUDIO_APP:-/Applications/AnypointStudio728.app}"
+STUDIO_APP="${STUDIO_APP:-/Applications/AnypointStudio729.app}"
 DROPINS="${DROPINS:-$STUDIO_APP/Contents/Eclipse/dropins}"
 VERSION="$(sed -n 's/^Bundle-Version: *\([0-9.]*\)\..*/\1/p' "$ROOT/com.mulesoftforge.studio.ai/META-INF/MANIFEST.MF")"
 JAR_SRC="$ROOT/com.mulesoftforge.studio.ai/target/com.mulesoftforge.studio.ai-$VERSION-SNAPSHOT.jar"
@@ -78,5 +78,5 @@ fi
 echo "Restart Anypoint Studio to load it."
 if [[ "$REMIND_CLEAN" -eq 1 ]]; then
   echo "If the view does not appear, start once with -clean:"
-  echo "  open -a AnypointStudio728 --args -clean"
+  echo "  open -a AnypointStudio729 --args -clean"
 fi
