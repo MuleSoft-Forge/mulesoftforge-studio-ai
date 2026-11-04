@@ -21,8 +21,9 @@ public final class ChatCompletions {
 
   // Claude caches a request prefix only up to a block marked cache_control, and OpenAI-format gateways in front of
   // Claude pass the marker through. Marked (Claude allows four): the first system message; the history up to the
-  // latest user message, which the next turn sends unchanged (that message goes into history without its
-  // attachments and request instructions); the latest user message, which every tool round of this turn sends
+  // latest user message, which the next turn sends unchanged (each turn goes into history as it was sent, so the
+  // previous turn's attachments and tool traffic are read from the cache too); the latest user message, which every
+  // tool round of this turn sends
   // again; and the latest tool result, so the next round reads this round's calls and results from the cache too.
   // Anything else is returned as it came.
   public static String withCacheBreakpoints(String body) {

@@ -47,6 +47,9 @@ import dev.langchain4j.model.output.FinishReason;
 
 public class ChatSession {
   private static final int MAX_TOOL_ROUNDS = 12;
+  // Share of the model's context window at which the chat is compacted before the next message (Cline and Codex
+  // use 90%; a little earlier leaves room for that message's attachments and tool output).
+  public static final double COMPACT_AT = 0.85;
   public static final String EMPTY_REPLY = "(empty reply)";
   // Asked once in Agent mode when the answer to a change request pastes code but proposes nothing.
   static final String DRAFT_NUDGE = "You put the changes in your reply as code instead of proposing them. Propose"
@@ -178,7 +181,12 @@ public class ChatSession {
     }
   }
 
-  private final List<ChatMessage> history = new ArrayList<>();
+  private final History history = new History();
+  // The mode of the last answered turn, so the next message can say the user switched.
+  private volatile ChatMode lastMode;
+  // Tokens the last model call read and wrote, as the provider counted them: the size of the context now.
+  private volatile long contextTokens;
+  private volatile boolean compactNext;
   // Lock-free so Accept/Reject/Apply on the UI thread never block on an in-flight model call.
   private final Queue<String> reviewNotes = new ConcurrentLinkedQueue<>();
   private final Queue<String> cancelNotes = new ConcurrentLinkedQueue<>();
@@ -186,8 +194,6 @@ public class ChatSession {
   // Bumped by clear(), so a request from a cleared chat does not report into the next one.
   private final AtomicInteger generation = new AtomicInteger();
   private volatile Consumer<HttpTools.Late> lateListener;
-  private final List<ChatRecord.Message> saved = new ArrayList<>();
-  private volatile List<ChatRecord.Message> savedSnapshot = List.of();
   private final SecretMask secrets = new SecretMask();
   private final PersonalData personal = new PersonalData();
   private volatile boolean maskPersonal = true;
@@ -348,7 +354,9 @@ public class ChatSession {
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
     prompt = secrets.mask(null, prompt).text();
-    StringBuilder context = new StringBuilder();
+    record Block(String label, String text, boolean image) {}
+    List<Block> blocks = new ArrayList<>();
+    int attachedChars = 0;
     List<String> sent = new ArrayList<>();
     List<String> dropped = new ArrayList<>();
     List<ImageContent> images = new ArrayList<>();
@@ -361,20 +369,17 @@ public class ChatSession {
       String block = attachment.toPrompt();
       if (attachment.kind() == Attachment.Kind.IMAGE) {
         images.add(attachment.toImage());
-        context.append(block);
+        blocks.add(new Block(attachment.label(), block, true));
+        attachedChars += block.length();
         sent.add(attachment.label());
-      } else if (context.length() + block.length() > Attachment.MAX_TOTAL_CHARS) {
+      } else if (attachedChars + block.length() > Attachment.MAX_TOTAL_CHARS) {
         dropped.add(attachment.label());
       } else {
-        context.append(block);
+        blocks.add(new Block(attachment.label(), block, false));
+        attachedChars += block.length();
         sent.add(attachment.label());
       }
     }
-    if (!dropped.isEmpty()) {
-      context.append("NOT ATTACHED (too large to send together; read them with tools if needed): ")
-          .append(String.join(", ", dropped)).append("\n\n");
-    }
-    String text = context + prompt;
     String savedText = sent.isEmpty() ? prompt : "[Attached at the time: " + String.join(", ", sent) + "]\n" + prompt;
     String notes = "";
     List<String> cancelled = drain(cancelNotes);
@@ -391,7 +396,6 @@ public class ChatSession {
     }
     boolean munit = wantsMunit(prompt, attachments);
     boolean metadata = wantsMetadata(prompt, attachments) && project != null;
-    text = Prompts.extras(munit, metadata) + notes + text;
     savedText = notes + savedText;
     int maskedInMessage = secrets.total() - maskedBefore;
     if (maskedInMessage > 0) {
@@ -418,17 +422,12 @@ public class ChatSession {
         fromHttp.text());
     String from = switchedFrom;
     switchedFrom = null;
-    Prompts.SystemParts system = from == null ? built
-        : new Prompts.SystemParts(built.shared(), built.perRequest().strip() + "\n\n" + Prompts.modelSwitch(from));
-    UserMessage message = current(system, text, images);
+    ChatMode previousMode = lastMode;
+    String changed = (previousMode == null || previousMode == mode ? "" : "\n\n" + Prompts.modeSwitch(previousMode, mode))
+        + (from == null ? "" : "\n\n" + Prompts.modelSwitch(from));
+    Prompts.SystemParts system = withNotes(built, changed);
 
-    List<ChatMessage> past;
-    boolean firstTurn;
-    synchronized (this) {
-      past = List.copyOf(history);
-      firstTurn = history.isEmpty();
-    }
-    if (firstTurn) {
+    if (history.isEmpty()) {
       String following = following(fromProject, fromUser, fromHttp,
           projectText.count() + userText.count() + httpText.count());
       if (following != null) {
@@ -464,10 +463,36 @@ public class ChatSession {
     if (project != null && tester != null) {
       specifications.addAll(MunitTools.SPECIFICATIONS);
     }
+    // Tool calls and results go back only to a request that offers tools; without, history is text only.
+    boolean withTools = !specifications.isEmpty();
+    List<CallUsage> calls = new ArrayList<>();
+    if (compactNext || needsCompaction(model)) {
+      compactNext = false;
+      compact(model, system, specifications, withTools, calls, progress);
+    }
+    List<ChatMessage> past = history.messages(withTools);
+
+    StringBuilder context = new StringBuilder();
+    Map<String, String> sentInFull = new HashMap<>();
+    for (Block block : blocks) {
+      if (!block.image() && withTools && history.hasAttached(block.label(), block.text())) {
+        context.append(Prompts.unchangedAttachment(block.label()));
+      } else {
+        context.append(block.text());
+        if (!block.image()) {
+          sentInFull.put(block.label(), block.text());
+        }
+      }
+    }
+    if (!dropped.isEmpty()) {
+      context.append("NOT ATTACHED (too large to send together; read them with tools if needed): ")
+          .append(String.join(", ", dropped)).append("\n\n");
+    }
+    String text = Prompts.extras(munit, metadata) + notes + context + prompt;
+    UserMessage message = current(system, text, images);
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
     int toolCalls = 0;
-    List<CallUsage> calls = new ArrayList<>();
     Map<String, Integer> toolCounts = new LinkedHashMap<>();
 
     String answer = null;
@@ -502,6 +527,8 @@ public class ChatSession {
       progress.answered(usage, (System.nanoTime() - started) / 1_000_000_000);
       progress.checkCancelled();
       AiMessage reply = response.aiMessage();
+      long counted = usage.input() + usage.output();
+      contextTokens = counted > 0 ? counted : History.tokens(messages) + History.tokens(List.of(reply));
       turn.add(reply);
       boolean cutOff = response.finishReason() == FinishReason.LENGTH;
       boolean blank = reply.text() == null || reply.text().isBlank();
@@ -601,8 +628,8 @@ public class ChatSession {
           .anyMatch(call -> HttpTools.CALL.equals(call.name()))) {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
-        system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
-            true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text());
+        system = withNotes(Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
+            fromUser.text(), true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text()), changed);
         turn.set(0, current(system, text, images));
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
@@ -619,26 +646,18 @@ public class ChatSession {
     }
     answer = withoutEchoedNotes(withOfferText(answer, offeredWith));
 
-    // Tool traffic stays out of history: some providers reject tool messages in a request without tools.
+    // The text-only form, for requests without tools and for disk: what was proposed, offered and done, since a
+    // later turn without the tool traffic cannot tell a real call from a described one and may disown either.
     String remembered = changes.isEmpty() ? answer : answer + "\n\n[Proposed for review: "
         + String.join(", ", changes.all().stream().map(c -> c.path()).toList()) + "]";
     List<ChangeOffer> offers = tools == null ? List.of() : tools.offers();
     if (!offers.isEmpty()) {
       remembered += "\n\n" + ChangeOffer.remembered(offers);
     }
-    // Without the tool traffic, a later turn cannot tell a real call from a described one and may disown either.
     remembered += "\n\n[What you did this turn: "
         + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, 0).activity() + "]";
-    // Every request resends the whole history, and attachments (the open file, console) come again with each new
-    // turn, so history keeps only what was attached; the tools can read a file again. Unchanged history is what
-    // lets the next turn read all of it from Claude's prompt cache.
-    synchronized (this) {
-      history.add(UserMessage.from(savedText));
-      history.add(AiMessage.from(remembered));
-      saved.add(new ChatRecord.Message("user", savedText));
-      saved.add(new ChatRecord.Message("ai", remembered));
-      savedSnapshot = List.copyOf(saved);
-    }
+    history.add(new History.Exchange(asSent(turn, answer), savedText, remembered), sentInFull);
+    lastMode = mode;
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
   }
@@ -651,6 +670,90 @@ public class ChatSession {
     List<Content> parts = new ArrayList<>(images);
     parts.add(TextContent.from(full));
     return UserMessage.from(parts);
+  }
+
+  private static Prompts.SystemParts withNotes(Prompts.SystemParts parts, String notes) {
+    return notes.isEmpty() ? parts : new Prompts.SystemParts(parts.shared(), parts.perRequest().strip() + notes);
+  }
+
+  // The turn as the provider saw it, ending with an answer: a turn stopped after tool results or a cut-off gets
+  // the stop message, and an empty reply the text shown, since providers reject an empty assistant message.
+  private static List<ChatMessage> asSent(List<ChatMessage> turn, String answer) {
+    List<ChatMessage> out = new ArrayList<>(turn);
+    if (out.get(out.size() - 1) instanceof AiMessage last && !last.hasToolExecutionRequests()) {
+      if (last.text() == null || last.text().isBlank()) {
+        out.set(out.size() - 1, AiMessage.from(answer));
+      }
+    } else {
+      out.add(AiMessage.from(answer));
+    }
+    return out;
+  }
+
+  private boolean needsCompaction(ChatModel model) {
+    return !history.isEmpty()
+        && contextTokens >= COMPACT_AT * ContextWindow.of(model.defaultRequestParameters().modelName());
+  }
+
+  // Asks the chat's own model for a summary at the end of the history it already has cached, as Codex does, then
+  // keeps that summary and the most recent turns. A failed summary leaves the history as it was.
+  private void compact(ChatModel model, Prompts.SystemParts system, List<ToolSpecification> specifications,
+      boolean withTools, List<CallUsage> calls, Progress progress) {
+    int summarised = history.toSummarise();
+    if (summarised == 0) {
+      return;
+    }
+    long before = Math.max(contextTokens, history.tokens());
+    progress.step("Compacting the chat: summarising " + (summarised == 1 ? "the earliest turn" : "the earliest "
+        + summarised + " turns") + " to stay within the model's context window…");
+    List<ChatMessage> messages = new ArrayList<>();
+    messages.add(SystemMessage.from(system.shared()));
+    messages.addAll(history.messages(withTools));
+    messages.add(UserMessage.from(Prompts.compact()));
+    ChatRequest.Builder request = ChatRequest.builder().messages(messages);
+    if (!specifications.isEmpty()) {
+      request.toolSpecifications(specifications);
+    }
+    String summary;
+    try {
+      long started = System.nanoTime();
+      ReportedCost.take();
+      if (model instanceof StreamingChat streamed) {
+        streamed.progress(progress);
+      }
+      ChatResponse response = model.chat(request.build());
+      CallUsage usage = CallUsage.from(response, model.defaultRequestParameters().modelName(), ReportedCost.take());
+      calls.add(usage);
+      progress.answered(usage, (System.nanoTime() - started) / 1_000_000_000);
+      summary = response.aiMessage().text();
+    } catch (RuntimeException e) {
+      progress.checkCancelled();
+      progress.step("Could not compact the chat (" + Errors.describe(e) + "); sending it as it is");
+      return;
+    }
+    progress.checkCancelled();
+    if (summary == null || summary.isBlank()) {
+      progress.step("The model wrote no summary, so the chat was not compacted");
+      return;
+    }
+    history.compact(summarised, summary);
+    contextTokens = history.tokens();
+    progress.step("Compacted the chat from about " + ContextWindow.tokens(before) + " to about "
+        + ContextWindow.tokens(contextTokens) + " tokens");
+  }
+
+  // The size of the context after the last model call, in tokens; 0 before the first.
+  public long contextTokens() {
+    return contextTokens;
+  }
+
+  // Compacts the chat before the next message, where the summary reads the history from the prompt cache.
+  public void compactBeforeNext() {
+    compactNext = true;
+  }
+
+  public boolean canCompact() {
+    return history.size() > 1 || history.tokens() > History.KEEP_RECENT_TOKENS;
   }
 
   static String cutOffStop(boolean proposed) {
@@ -735,22 +838,15 @@ public class ChatSession {
 
   // History safe to write to disk: same turns, without the open-file contents.
   public List<ChatRecord.Message> savedHistory() {
-    return savedSnapshot;
+    return history.saved();
   }
 
   public synchronized void restore(List<ChatRecord.Message> messages) {
     clear();
-    if (messages == null) {
-      return;
+    if (messages != null) {
+      history.restore(messages);
+      contextTokens = history.tokens();
     }
-    for (ChatRecord.Message m : messages) {
-      if (m.text() == null) {
-        continue;
-      }
-      history.add("user".equals(m.role()) ? UserMessage.from(m.text()) : AiMessage.from(m.text()));
-      saved.add(m);
-    }
-    savedSnapshot = List.copyOf(saved);
   }
 
   // Told to the model with the next prompt, so it knows which proposals actually landed.
@@ -770,8 +866,9 @@ public class ChatSession {
     generation.incrementAndGet();
     lateNotes.clear();
     history.clear();
-    saved.clear();
-    savedSnapshot = List.of();
+    lastMode = null;
+    contextTokens = 0;
+    compactNext = false;
     secrets.clear();
     personal.clear();
     reviewNotes.clear();

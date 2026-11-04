@@ -212,6 +212,7 @@ public class Harness {
       case "check-feedback" -> FeedbackChecks.run();
       case "check-munit" -> MunitOfflineChecks.run();
       case "check-stream" -> StreamChecks.run();
+      case "check-context" -> ContextChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -353,10 +354,16 @@ public class Harness {
     ChatSession.Turn turn = session.send(modelFor(connection, session, mode, prompt, attachments, autoModel), mode,
         prompt, attachments, project, progress);
     System.out.println(turn.text());
-    // --then mode:prompt runs another turn in the same chat, attaching the same files again as Studio does.
+    // --then mode:prompt runs another turn in the same chat, attaching the same files again as Studio does;
+    // compact-mode:prompt presses Compact first.
     for (String next : then) {
       int colon = next.indexOf(':');
-      ChatMode nextMode = ChatMode.valueOf(next.substring(0, colon).toUpperCase(Locale.ROOT));
+      String modeName = next.substring(0, colon).toUpperCase(Locale.ROOT);
+      if (modeName.startsWith("COMPACT-")) {
+        session.compactBeforeNext();
+        modeName = modeName.substring("COMPACT-".length());
+      }
+      ChatMode nextMode = ChatMode.valueOf(modeName);
       String nextPrompt = next.substring(colon + 1);
       System.out.println("\nTHEN  " + nextMode + "  " + nextPrompt);
       turn = session.send(modelFor(connection, session, nextMode, nextPrompt, attachments, autoModel), nextMode,
@@ -2539,7 +2546,7 @@ public class Harness {
     return ok ? 0 : 1;
   }
 
-  private static final class DiskProject implements ProjectFiles {
+  static final class DiskProject implements ProjectFiles {
     final Path root;
     private final Path models;
 

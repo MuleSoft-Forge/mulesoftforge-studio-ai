@@ -62,6 +62,7 @@ import com.mulesoftforge.studio.ai.llm.CallUsage;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
+import com.mulesoftforge.studio.ai.llm.ContextWindow;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
@@ -121,6 +122,8 @@ public class ChatView extends ViewPart {
   private String chatProject;
   // The model Auto used for this chat's last message.
   private String chatAuto;
+  // The model of the last call, whose window the context size is shown against.
+  private String contextModel;
   private final List<ChatRecord.Entry> entries = new ArrayList<>();
   private boolean replaying;
   // Messages sent in this chat; raw log calls carry the number of the turn they belong to.
@@ -205,7 +208,7 @@ public class ChatView extends ViewPart {
     ThemeStyles.applyClass(middle, "MsfDivider");
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
     transcript.showRaw(AiSettings.rawLog());
-    status = new StatusPanel(middle, () -> composer.refreshPrices());
+    status = new StatusPanel(middle, () -> composer.refreshPrices(), this::compactChat);
     middle.setWeights(78, 22);
     middle.setSashWidth(1);
 
@@ -577,8 +580,34 @@ public class ChatView extends ViewPart {
     chatCreated = null;
     chatProject = null;
     chatAuto = null;
+    contextModel = null;
     transcript.clear();
     refreshCost();
+    refreshContext();
+  }
+
+  private void compactChat() {
+    if (!session.canCompact()) {
+      return;
+    }
+    session.compactBeforeNext();
+    appendStep("The older turns will be summarised before your next message, where the summary reads the chat"
+        + " from the prompt cache.");
+  }
+
+  private void refreshContext() {
+    if (status.isDisposed()) {
+      return;
+    }
+    String model = contextModel;
+    if (model == null) {
+      try {
+        model = chatAuto != null ? chatAuto : AiSettings.model(AiSettings.provider());
+      } catch (Exception e) {
+        model = null;
+      }
+    }
+    status.showContext(session.contextTokens(), ContextWindow.of(model), session.canCompact());
   }
 
   private void pruneOldChats() {
@@ -679,6 +708,7 @@ public class ChatView extends ViewPart {
     }
     entries.addAll(record.entries());
     session.restore(record.history());
+    refreshContext();
     chatCost.restore(record.cost());
     if (record.pending() > 0) {
       append("Note", record.pending() + " proposed change(s) were not reviewed before this chat was closed and"
@@ -862,6 +892,10 @@ public class ChatView extends ViewPart {
               }
             }
             showRawTurn(rawCalls);
+            if (result != null && !result.calls().isEmpty()) {
+              contextModel = result.calls().get(result.calls().size() - 1).model();
+            }
+            refreshContext();
             running = null;
             composer.setBusy(false);
             saveChat();

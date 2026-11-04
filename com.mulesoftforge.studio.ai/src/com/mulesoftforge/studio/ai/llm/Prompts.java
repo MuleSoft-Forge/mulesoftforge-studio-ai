@@ -65,6 +65,33 @@ public final class Prompts {
         + " from now on. Treat what it said as context, and check a claim before you build on it.";
   }
 
+  public static String modeSwitch(ChatMode from, ChatMode to) {
+    return "Mode change: the user switched from " + from.label + " mode to " + to.label + " mode before this"
+        + " message. Follow the " + to.label + " mode rules above; earlier answers followed the " + from.label
+        + " mode rules.";
+  }
+
+  // In place of an attachment whose exact content is already in an earlier message of the chat.
+  public static String unchangedAttachment(String label) {
+    return "ATTACHED AGAIN, UNCHANGED: " + label + ". Its content is the same as in your earlier message where it"
+        + " was attached last.\n\n";
+  }
+
+  // The request for the summary that replaces the oldest turns of a long chat.
+  public static String compact() {
+    return "This chat is close to the model's context window, so its older turns are about to be replaced by a"
+        + " summary that you write now. Do not call any tools. Write the summary for yourself, to carry on the"
+        + " work without the original turns:\n"
+        + "- what the user asked for and still wants, and the decisions, constraints and preferences they gave;\n"
+        + "- the files you read and the changes you proposed, and which the user accepted, rejected or has not"
+        + " reviewed yet;\n"
+        + "- facts later turns rely on: flow, config and file names, paths, property keys, error messages and"
+        + " values you found;\n"
+        + "- what is left to do.\n"
+        + "Use short bullet points and stay under about 1,000 words. Do not repeat what the project's files"
+        + " already show; they can be read again.";
+  }
+
   public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
       String userInstructions, boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata,
       String httpInstructions) {
@@ -101,7 +128,7 @@ public final class Prompts {
       out.append("\nTHE USER'S INSTRUCTIONS (from their Studio preferences):\n").append(userInstructions.strip())
           .append('\n');
     }
-    StringBuilder perRequest = new StringBuilder();
+    StringBuilder perRequest = new StringBuilder("Current mode: ").append(mode.label).append(".\n");
     if (project != null) {
       perRequest.append(mode(mode, project));
       if (mode == ChatMode.AGENT) {

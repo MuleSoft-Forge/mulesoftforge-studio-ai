@@ -14,6 +14,9 @@ import org.eclipse.swt.widgets.Link;
 import org.eclipse.ui.ISharedImages;
 import org.eclipse.ui.PlatformUI;
 
+import com.mulesoftforge.studio.ai.llm.ChatSession;
+import com.mulesoftforge.studio.ai.llm.ContextWindow;
+
 // The column beside the transcript: the model in use, its list price, what chats have cost, and the list
 // price of every model in the picker.
 final class StatusPanel {
@@ -29,6 +32,8 @@ final class StatusPanel {
   private final Label chatCost;
   private final Label todayCost;
   private final Label monthCost;
+  private final Label context;
+  private final Link compact;
   private final Label pricesNote;
   private final Label pricesHelp;
   private final ScrolledComposite pricesScroll;
@@ -38,7 +43,7 @@ final class StatusPanel {
   private boolean pricesShown;
   private Color muted;
 
-  StatusPanel(Composite parent, Runnable refreshPrices) {
+  StatusPanel(Composite parent, Runnable refreshPrices, Runnable compactChat) {
     panel = new Composite(parent, SWT.NONE);
     ThemeStyles.applyClass(panel, "MsfPanel");
     panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
@@ -56,6 +61,15 @@ final class StatusPanel {
     chatCost = value(false);
     todayCost = value(false);
     monthCost = value(false);
+    gap();
+    heading("Context");
+    context = value(false);
+    compact = new Link(panel, SWT.NONE);
+    compact.setText("<a>Compact</a>");
+    compact.setToolTipText("Summarise the older turns before your next message, so the chat stays within the model's"
+        + " context window. It happens by itself at " + Math.round(ChatSession.COMPACT_AT * 100) + "%.");
+    compact.addListener(SWT.Selection, e -> compactChat.run());
+    showContext(0, 0, false);
     gap();
 
     // The full price list is reference material, so it stays folded away until asked for.
@@ -137,6 +151,15 @@ final class StatusPanel {
     for (Label label : new Label[] {chatCost, todayCost, monthCost}) {
       label.setToolTipText(details);
     }
+    relayout();
+  }
+
+  // tokens: the size of the chat's context after the last call; window: the model's limit, 0 before a model is known.
+  void showContext(long tokens, int window, boolean canCompact) {
+    context.setText(tokens == 0 || window == 0 ? "Nothing sent yet" : ContextWindow.describe(tokens, window));
+    context.setToolTipText("Tokens the model read and wrote in its last call: the system prompt, tools, this chat's"
+        + " history and the latest message. The window is the model's published limit; 128k when it is not known.");
+    compact.setEnabled(canCompact);
     relayout();
   }
 
