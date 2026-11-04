@@ -1757,11 +1757,13 @@ public class Harness {
         "what is this", List.of(Attachment.image("shot.png", 10, 10, "image/png", new byte[] {1, 2, 3})), false, pair,
         "fast-model")
         .model().equals("strong-model"));
-    AutoRouter.Choice kept = AutoRouter.choose(ChatMode.ASK, "what is a flow", none, false, pair, "strong-model");
-    failed += check("a strong chat never goes back to fast", kept.model().equals("strong-model")
+    AutoRouter.Choice kept = AutoRouter.choose(ChatMode.AGENT, "run tests", none, false, pair, "strong-model");
+    failed += check("a strong chat stays strong in Agent mode for a run request", kept.model().equals("strong-model")
         && "fast-model".equals(kept.fallback()) && kept.reason().startsWith("kept for this chat"));
-    failed += check("a strong chat stays strong for a run request", AutoRouter.choose(ChatMode.AGENT, "run tests",
-        none, false, pair, "strong-model").model().equals("strong-model"));
+    failed += check("a strong chat goes back to fast for a plain Ask question", AutoRouter.choose(ChatMode.ASK,
+        "what is a flow", none, false, pair, "strong-model").model().equals("fast-model"));
+    failed += check("a strong chat stays strong for an Ask review", AutoRouter.choose(ChatMode.ASK,
+        "review this flow", none, false, pair, "strong-model").model().equals("strong-model"));
     failed += check("a model no longer in Preferences is chosen afresh", AutoRouter.choose(ChatMode.ASK,
         "what is a flow", none, false, pair, "old-model").model().equals("fast-model"));
     failed += check("Auto is first-class in the picker", ModelLists.suggestionsOnly(Provider.ANTHROPIC, "claude-sonnet-4-6")

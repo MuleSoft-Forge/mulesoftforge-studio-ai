@@ -17,8 +17,9 @@ import dev.langchain4j.exception.RetriableException;
 import dev.langchain4j.model.chat.ChatModel;
 
 // "Auto" in the model picker: a fast model for plain questions, a strong one for changes, reviews, images and
-// large context, chosen from rules. A chat starts fast and moves to strong once a message needs it, then stays
-// there: each change of model loses the prompt cache, so a chat changes at most once. If the chosen model fails
+// large context, chosen from rules. A chat starts fast and moves to strong once a message needs it. In Agent, Plan
+// and Diagnose it then stays strong, since each change of model loses the prompt cache; a plain Ask question goes
+// back to fast, as only a short history is cached between turns. If the chosen model fails
 // before answering anything (rate limit, server error, timeout), the turn runs once more on the other model. A
 // turn never switches model mid-way.
 public final class AutoRouter {
@@ -90,7 +91,7 @@ public final class AutoRouter {
       Models models, String previous) {
     Choice fresh = choose(mode, prompt, attachments, fix, models);
     String strong = models.strong().trim();
-    if (strong.equals(previous) && !strong.equals(fresh.model())) {
+    if (strong.equals(previous) && !strong.equals(fresh.model()) && mode != ChatMode.ASK) {
       return new Choice(strong, fresh.model(), "kept for this chat, since changing model loses the cache");
     }
     return fresh;
