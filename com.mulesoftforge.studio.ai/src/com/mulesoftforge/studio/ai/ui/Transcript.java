@@ -31,6 +31,10 @@ interface Transcript {
 
   void step(String text);
 
+  // One line under the steps, replaced on each call, for the model call in progress, with the answer text so far
+  // under it. A null status removes it; so does the next step or message.
+  void live(String status, String preview);
+
   // A button under the last message, e.g. "Build this plan".
   void action(String label, String id);
 

@@ -20,8 +20,12 @@ public interface Progress {
     step("Model answered in " + seconds + " s");
   }
 
-  // What a streamed reply is doing now ("Thinking…", "Writing the answer…"); called when it changes.
+  // What the model call is doing now ("Waiting for the first data…", "Thinking…", "Writing the answer…"); called
+  // when it changes, from the start of each call until it answered.
   default void receiving(String what) {}
+
+  // Answer text as it streams in, piece by piece. A preview only: the finished answer replaces it.
+  default void partial(String text) {}
 
   boolean isCancelled();
 

@@ -125,6 +125,11 @@ final class HtmlTranscript implements Transcript {
   }
 
   @Override
+  public void live(String status, String preview) {
+    run("msfLive(" + (status == null ? "null" : js(status)) + "," + js(preview == null ? "" : preview) + ")");
+  }
+
+  @Override
   public void action(String label, String id) {
     run("msfAction(" + js(label) + "," + js(id) + ")");
   }

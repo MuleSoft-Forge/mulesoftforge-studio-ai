@@ -88,6 +88,7 @@ public class ChatSession {
   private static final String REPEATED_START = "ERROR: not run. This is call number";
   static final String REPEATED_CALL = REPEATED_START + " %d to %s with exactly these arguments this turn, and the"
       + " result would be the same. Use the result you already have, or try a different approach.";
+  public static final String WAITING_FOR_DATA = "Waiting for the first data…";
   static final int MAX_RETRIES = 3;
   // A provider asking to wait longer than this is reported to the user rather than waited out.
   static final Duration MAX_RETRY_AFTER = Duration.ofSeconds(60);
@@ -826,6 +827,7 @@ public class ChatSession {
       if (model instanceof StreamingChat streamed) {
         streamed.progress(progress);
       }
+      progress.receiving(model instanceof StreamingChat ? WAITING_FOR_DATA : "Waiting for the answer…");
       try {
         return model.chat(request);
       } catch (RuntimeException e) {

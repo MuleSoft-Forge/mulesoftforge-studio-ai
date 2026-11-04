@@ -75,6 +75,7 @@ final class StreamChecks {
   private static int text(Connection connection, List<String> bodies) throws Exception {
     int failed = 0;
     List<String> receiving = new CopyOnWriteArrayList<>();
+    StringBuffer pieces = new StringBuffer();
     AtomicReference<CallUsage> usage = new AtomicReference<>();
     Progress progress = new Progress() {
       @Override
@@ -91,14 +92,21 @@ final class StreamChecks {
       }
 
       @Override
+      public void partial(String text) {
+        pieces.append(text);
+      }
+
+      @Override
       public boolean isCancelled() {
         return false;
       }
     };
     RawCapture capture = new RawCapture(1, "Custom", call -> {});
     bodies.clear();
-    ChatSession.Turn turn = new ChatSession().send(ChatModels.create(connection, capture), ChatMode.ASK, "say hello",
-        List.of(), null, progress);
+    // Through AutoRouter, as the chat view sends every turn, so its progress wrapper is covered too.
+    ChatSession.Turn turn = AutoRouter.send(new ChatSession(),
+        List.of(new AutoRouter.Option("stream-model", ChatModels.create(connection, capture))), ChatMode.ASK,
+        "say hello", List.of(), null, progress);
     failed += check("a streamed answer is put together from its pieces", turn.text().equals("Hello there."));
     failed += check("the request asks for a stream with usage", bodies.size() == 1
         && JSON.readTree(bodies.get(0)).path("stream").asBoolean()
@@ -107,7 +115,10 @@ final class StreamChecks {
     failed += check("usage, cache reads and the billed cost come from the final chunk", call != null
         && call.output() == 3 && call.cacheRead() == 4 && call.uncachedInput() == 6
         && Double.valueOf(0.0021).equals(call.reportedCost()));
-    failed += check("progress shows the answer arriving", receiving.contains("Writing the answer…"));
+    failed += check("progress shows the answer arriving, through Auto as well", receiving.contains("Writing the answer…"));
+    failed += check("progress says it is waiting from the start of the call", !receiving.isEmpty()
+        && receiving.get(0).equals(ChatSession.WAITING_FOR_DATA));
+    failed += check("the answer text reaches the view as it streams", pieces.toString().equals("Hello there."));
     RawCapture.Call raw = capture.calls().isEmpty() ? null : capture.calls().get(0);
     failed += check("the raw log keeps the stream as received", raw != null && raw.http() != null
         && raw.http().response().contains("data: ") && raw.http().response().contains("\"Hello\"")

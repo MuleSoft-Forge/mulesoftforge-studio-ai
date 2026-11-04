@@ -35,6 +35,9 @@ final class PlainTranscript implements Transcript {
   private final List<Clickable> clickables = new ArrayList<>();
   private final List<Offer> offers = new ArrayList<>();
   private boolean showRaw = true;
+  private static final int LIVE_PREVIEW_CHARS = 1_500;
+  // Where the live line starts; it is always the last text, and -1 when there is none.
+  private int liveStart = -1;
 
   PlainTranscript(Composite parent, Actions actions) {
     this.actions = actions;
@@ -65,6 +68,7 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void clear() {
+    liveStart = -1;
     codeBlocks.clear();
     clickables.clear();
     offers.clear();
@@ -73,6 +77,7 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void message(String speaker, String body, String context) {
+    dropLive();
     label(speaker, false);
     int start = text.getCharCount();
     text.append(body);
@@ -92,6 +97,7 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void markdown(String speaker, String markdown) {
+    dropLive();
     int base = label(speaker, true);
     Rendered rendered = MarkdownRenderer.render(markdown, true);
     int firstBlock = codeBlocks.size();
@@ -126,12 +132,35 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void step(String line) {
+    dropLive();
     muted("\n    · " + line);
     scrollToEnd();
   }
 
   @Override
+  public void live(String status, String preview) {
+    dropLive();
+    if (status == null) {
+      return;
+    }
+    liveStart = text.getCharCount();
+    String shown = preview == null || preview.isEmpty() ? ""
+        : "\n" + (preview.length() > LIVE_PREVIEW_CHARS ? "…" + preview.substring(preview.length()
+            - LIVE_PREVIEW_CHARS) : preview);
+    muted("\n    … " + status + shown);
+    scrollToEnd();
+  }
+
+  private void dropLive() {
+    if (liveStart >= 0 && liveStart <= text.getCharCount()) {
+      text.replaceTextRange(liveStart, text.getCharCount() - liveStart, "");
+    }
+    liveStart = -1;
+  }
+
+  @Override
   public void action(String label, String id) {
+    dropLive();
     button(label, "cmd:" + id);
   }
 
@@ -151,6 +180,7 @@ final class PlainTranscript implements Transcript {
 
   @Override
   public void offer(String id, List<String> items, boolean suggested) {
+    dropLive();
     muted(suggested
         ? "\n\nPossible fixes Agent mode can draft for review (click a box to tick it):"
         : "\n\nChanges it can make (click a box to untick it):");
@@ -171,6 +201,7 @@ final class PlainTranscript implements Transcript {
   // No collapsible sections here: one line per turn, and the full exchange opens in an editor.
   @Override
   public void raw(String title, List<RawCall> calls, String open) {
+    dropLive();
     if (!showRaw) {
       return;
     }

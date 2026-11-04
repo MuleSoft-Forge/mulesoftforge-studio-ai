@@ -194,6 +194,16 @@ public final class AutoRouter {
       }
 
       @Override
+      public void receiving(String what) {
+        progress.receiving(what);
+      }
+
+      @Override
+      public void partial(String text) {
+        progress.partial(text);
+      }
+
+      @Override
       public boolean isCancelled() {
         return progress.isCancelled();
       }

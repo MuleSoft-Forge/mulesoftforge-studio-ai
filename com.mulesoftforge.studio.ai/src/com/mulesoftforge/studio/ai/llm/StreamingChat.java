@@ -57,6 +57,7 @@ final class StreamingChat implements ChatModel {
       @Override
       public void onPartialResponse(String text) {
         receiving("Writing the answer…");
+        shown.partial(text);
       }
 
       @Override
@@ -64,7 +65,7 @@ final class StreamingChat implements ChatModel {
         if (call.index() != toolIndex && call.name() != null && !call.name().isBlank()) {
           toolIndex = call.index();
           state = null;
-          receiving("Writing a " + call.name() + " call…");
+          receiving("Writing the " + call.name() + " call…");
         }
       }
 

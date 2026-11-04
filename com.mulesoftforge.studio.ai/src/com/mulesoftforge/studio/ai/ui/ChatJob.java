@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -42,6 +43,10 @@ public final class ChatJob extends Job {
 
     void answered(CallUsage usage, Pricing.CallCost cost, long seconds, boolean showModel);
 
+    // What the current model call is doing, the answer text so far, and when the call started (System.nanoTime);
+    // state is null when no call is running.
+    void live(String state, String preview, long since);
+
     void finished(ChatSession.Turn turn, Errors.UserError failure, boolean cancelled, long seconds,
         CostMeter answerCost, List<RawCapture.Call> rawCalls);
   }
@@ -60,6 +65,14 @@ public final class ChatJob extends Job {
   private final Listener listener;
   private final AtomicReference<CompletableFuture<?>> inFlight = new AtomicReference<>();
   private final CostMeter answerCost = new CostMeter();
+  // A stream sends many small pieces; the view is updated at most every LIVE_MS with the latest of them.
+  private static final int LIVE_MS = 150;
+  private static final int PREVIEW_CHARS = 20_000;
+  private final Object liveLock = new Object();
+  private final AtomicBoolean liveQueued = new AtomicBoolean();
+  private final StringBuilder livePreview = new StringBuilder();
+  private String liveState;
+  private long liveSince;
 
   ChatJob(ChatSession session, ChatMode mode, String prompt, List<Attachment> attachments, ProjectFiles project,
       String chatId, int turn, boolean showModel, List<AutoRouter.Option> prebuilt, AutoRouter.Choice auto,
@@ -153,6 +166,7 @@ public final class ChatJob extends Job {
     Errors.UserError error = failure;
     boolean wasCancelled = cancelled || sub.isCanceled();
     List<RawCapture.Call> rawCalls = capture == null ? List.of() : capture.calls();
+    clearLive();
     Ui.async(display, null, () -> listener.finished(result, error, wasCancelled, seconds, answerCost, rawCalls));
     return wasCancelled ? Status.CANCEL_STATUS : Status.OK_STATUS;
   }
@@ -179,6 +193,7 @@ public final class ChatJob extends Job {
     return new Progress() {
       @Override
       public void step(String message) {
+        clearLive();
         if (!isCancelled()) {
           Ui.async(display, null, () -> listener.step(message));
         }
@@ -186,6 +201,7 @@ public final class ChatJob extends Job {
 
       @Override
       public void answered(CallUsage usage, long seconds) {
+        clearLive();
         // Price only from the already-loaded list so a stalled openrouter.ai fetch cannot block the turn.
         Pricing.CallCost cost = Pricing.costCached(provider, usage);
         answerCost.add(cost);
@@ -195,6 +211,24 @@ public final class ChatJob extends Job {
       @Override
       public void receiving(String what) {
         sub.subTask(what);
+        synchronized (liveLock) {
+          if (liveState == null) {
+            liveSince = System.nanoTime();
+          }
+          liveState = what;
+        }
+        queueLive();
+      }
+
+      @Override
+      public void partial(String text) {
+        synchronized (liveLock) {
+          livePreview.append(text);
+          if (livePreview.length() > PREVIEW_CHARS) {
+            livePreview.delete(0, livePreview.length() - PREVIEW_CHARS);
+          }
+        }
+        queueLive();
       }
 
       @Override
@@ -202,6 +236,32 @@ public final class ChatJob extends Job {
         return sub.isCanceled() || Thread.currentThread().isInterrupted();
       }
     };
+  }
+
+  private void clearLive() {
+    synchronized (liveLock) {
+      liveState = null;
+      livePreview.setLength(0);
+    }
+    queueLive();
+  }
+
+  private void queueLive() {
+    if (!liveQueued.compareAndSet(false, true)) {
+      return;
+    }
+    Ui.async(display, null, () -> display.timerExec(LIVE_MS, () -> {
+      liveQueued.set(false);
+      String state;
+      String preview;
+      long since;
+      synchronized (liveLock) {
+        state = liveState;
+        preview = livePreview.toString();
+        since = liveSince;
+      }
+      listener.live(state, preview, since);
+    }));
   }
 
   @Override

@@ -123,6 +123,11 @@ public class ChatView extends ViewPart {
   private String chatProject;
   // The model Auto used for this chat's last message.
   private String chatAuto;
+  // The model call in progress, shown in the transcript's live line and ticked every second.
+  private String liveState;
+  private String livePreview = "";
+  private long liveSince;
+  private final Runnable liveTicker = this::tickLive;
   // The mode of the turn that paused at the step limit, which Continue resumes in.
   private ChatMode continueMode;
   // The model of the last call, whose window the context size is shown against.
@@ -838,11 +843,28 @@ public class ChatView extends ViewPart {
           }
 
           @Override
+          public void live(String state, String preview, long since) {
+            if (transcript.control().isDisposed() || running == null) {
+              return;
+            }
+            boolean starting = liveState == null && state != null;
+            liveState = state;
+            livePreview = preview;
+            liveSince = since;
+            showLive();
+            if (starting) {
+              display.timerExec(1000, liveTicker);
+            }
+          }
+
+          @Override
           public void finished(ChatSession.Turn result, Errors.UserError failure, boolean cancelled, long seconds,
               CostMeter answerCost, List<RawCapture.Call> rawCalls) {
             if (transcript.control().isDisposed()) {
               return;
             }
+            liveState = null;
+            transcript.live(null, null);
             String spent = answerCost.isEmpty() ? "" : " · this answer " + answerCost.summary();
             if (cancelled) {
               session.noteCancelled(prompt);
@@ -1074,6 +1096,22 @@ public class ChatView extends ViewPart {
   private void appendStep(String text) {
     record("Step", text);
     transcript.step(text);
+  }
+
+  // The live line is not recorded: it is replaced by the steps and the answer.
+  private void showLive() {
+    if (transcript.control().isDisposed()) {
+      return;
+    }
+    long seconds = (System.nanoTime() - liveSince) / 1_000_000_000;
+    transcript.live(liveState == null ? null : liveState + " · " + seconds + " s", livePreview);
+  }
+
+  private void tickLive() {
+    if (liveState != null && running != null && !transcript.control().isDisposed()) {
+      showLive();
+      transcript.control().getDisplay().timerExec(1000, liveTicker);
+    }
   }
 
   private void insertAtCursor(String code) {

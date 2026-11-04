@@ -95,6 +95,8 @@ public final class HtmlPage {
         .step::before { content: ""; position: absolute; left: -19px; top: 0.55em; width: 8px; height: 8px;
           border-radius: 50%%; background: var(--bg); border: 2px solid var(--card-border); }
         .steps > .step:last-child::before { border-color: var(--focus); }
+        .live .preview { white-space: pre-wrap; color: var(--fg); font-size: 1.15em; max-height: 16em;
+          overflow-y: auto; margin-top: 2px; }
         .h1 { font-size: 1.2em; font-weight: 650; }
         .h2 { font-size: 1.05em; font-weight: 650; }
         .quote { color: var(--muted); font-style: italic; border-left: 3px solid var(--card-border);
@@ -165,7 +167,34 @@ public final class HtmlPage {
           return window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
         }
         function scrollIfNeeded(was) { if (was) { window.scrollTo(0, document.body.scrollHeight); } }
+        function dropLive() {
+          var live = document.getElementById('live');
+          if (live) { live.remove(); }
+        }
+        function msfLive(status, preview) {
+          if (status === null) { dropLive(); return; }
+          var was = nearBottom();
+          var live = document.getElementById('live');
+          if (!live) {
+            if (!steps) {
+              steps = document.createElement('div');
+              steps.className = 'steps';
+              log.appendChild(steps);
+            }
+            live = document.createElement('div');
+            live.id = 'live';
+            live.className = 'step live';
+            live.innerHTML = '<div class="status"></div><div class="preview"></div>';
+            steps.appendChild(live);
+          }
+          live.querySelector('.status').textContent = status;
+          var text = live.querySelector('.preview');
+          text.textContent = preview;
+          text.scrollTop = text.scrollHeight;
+          scrollIfNeeded(was);
+        }
         function closeSteps() {
+          dropLive();
           if (steps && steps.children.length >= 3) {
             var details = document.createElement('details');
             details.className = 'steps';
@@ -192,6 +221,7 @@ public final class HtmlPage {
         }
         function msfStep(text) {
           var was = nearBottom();
+          dropLive();
           if (!steps) {
             steps = document.createElement('div');
             steps.className = 'steps';
