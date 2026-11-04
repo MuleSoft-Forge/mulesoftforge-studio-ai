@@ -33,7 +33,7 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClientBuilde
 
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
-  static final int MAX_OUTPUT_TOKENS = 8192;
+  static final int MAX_OUTPUT_TOKENS = 16384;
   private static final String AZURE_API_VERSION = "2024-10-21";
 
   private record BedrockKey(String region, String apiKey) {}
@@ -104,7 +104,8 @@ public final class ChatModels {
           .apiKey(apiKey)
           .deploymentName(connection.model())
           .serviceVersion(AZURE_API_VERSION)
-          .maxTokens(MAX_OUTPUT_TOKENS)
+          // Azure and Bedrock use their own SDK clients, not DiagnosingHttpClient, so no OutputCap fallback.
+          .maxTokens(OutputCap.FALLBACK_TOKENS)
           .timeout(TIMEOUT)
           .maxRetries(0)
           .listeners(listeners)
@@ -131,7 +132,7 @@ public final class ChatModels {
         .modelId(connection.model())
         .timeout(TIMEOUT)
         .defaultRequestParameters(BedrockChatRequestParameters.builder()
-            .maxOutputTokens(MAX_OUTPUT_TOKENS)
+            .maxOutputTokens(OutputCap.FALLBACK_TOKENS)
             .build())
         .listeners(listeners)
         .build();

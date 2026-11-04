@@ -58,8 +58,7 @@ public class ChatSession {
       + " with a short answer that matches what you proposed.";
   // A reply that reached the output limit was cut off, so its tool calls lost their arguments: they are not run,
   // and the model is told why instead of getting "missing argument", which it answers by resending the same call.
-  static final String CUT_OFF_CALL = "ERROR: not run. Your response reached the "
-      + String.format(Locale.ROOT, "%,d", ChatModels.MAX_OUTPUT_TOKENS) + "-token output limit and was cut off, so"
+  static final String CUT_OFF_CALL = "ERROR: not run. Your response reached the output limit and was cut off, so"
       + " the arguments of this call are incomplete. Do not send it again. Change existing files with edit_file,"
       + " one small old_text and new_text per change, several calls in one response; keep write_file for new"
       + " files short enough to fit.";
@@ -642,9 +641,7 @@ public class ChatSession {
   }
 
   static String cutOffStop(boolean proposed) {
-    return "Stopped: the model's replies were cut off at the "
-        + String.format(Locale.ROOT, "%,d", ChatModels.MAX_OUTPUT_TOKENS) + "-token output limit " + MAX_CUT_OFFS
-        + " times, so it could not finish." + (proposed ? " What it proposed so far is ready to review." : "")
+    return "Stopped: the model's replies were cut off at the output limit " + MAX_CUT_OFFS + " times, so it could not finish." + (proposed ? " What it proposed so far is ready to review." : "")
         + " Ask for fewer changes at a time.";
   }
 

@@ -57,15 +57,25 @@ final class DiagnosingHttpClient implements HttpClient {
       }
     }
 
+    String original = OutputCap.forTarget(request.url(), request.body());
     String sent = request.url().endsWith("/chat/completions")
-        ? ChatCompletions.withCacheBreakpoints(request.body()) : request.body();
+        ? ChatCompletions.withCacheBreakpoints(original) : original;
     HttpResponse<String> response = send(request, sent);
     int status = response.statusCode();
     String body = response.body() == null ? "" : response.body();
-    // A gateway that does not accept cache markers gets the request as LangChain4j wrote it.
-    if (status == 400 && !Objects.equals(sent, request.body())) {
+    if (OutputCap.rejects(status, body) && !Objects.equals(OutputCap.lowered(sent), sent)) {
       captured(request, sent, status, body);
-      sent = request.body();
+      OutputCap.remember(request.url(), sent);
+      original = OutputCap.lowered(original);
+      sent = OutputCap.lowered(sent);
+      response = send(request, sent);
+      status = response.statusCode();
+      body = response.body() == null ? "" : response.body();
+    }
+    // A gateway that does not accept cache markers gets the request as LangChain4j wrote it.
+    if (status == 400 && !Objects.equals(sent, original)) {
+      captured(request, sent, status, body);
+      sent = original;
       response = send(request, sent);
       status = response.statusCode();
       body = response.body() == null ? "" : response.body();

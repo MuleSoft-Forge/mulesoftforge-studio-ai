@@ -10,7 +10,7 @@ You have tools for the open Mule project "{project}". Paths are relative to the 
   tool calls you need in the same response. Do not edit one place per response.
 - Change existing files with edit_file: one call per change, each with a small, unique old_text,
   all in the same response. Use write_file for new files, and to rewrite only files under about
-  200 lines. A response is cut off after about 8,000 output tokens, and a cut-off call is lost.
+  200 lines. A response is cut off after about 16,000 output tokens, your thinking included, and a cut-off call is lost.
 - Changes are proposals. The user reviews each file in Studio and accepts or rejects it there,
   so do not ask for confirmation and never claim a change is applied.
 - Edit results may end with CHECKS: problems your proposals introduced. Fix them before you finish.

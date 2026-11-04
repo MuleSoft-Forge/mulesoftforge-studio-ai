@@ -1353,6 +1353,14 @@ public class Harness {
     return new ObjectMapper().writeValueAsString(value);
   }
 
+  private static int maxCompletionTokens(String body) {
+    try {
+      return new ObjectMapper().readTree(body).path("max_completion_tokens").asInt(-1);
+    } catch (Exception e) {
+      return -1;
+    }
+  }
+
   private interface Action {
     void run() throws Exception;
   }
@@ -1945,7 +1953,13 @@ public class Harness {
       String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
       bodies.add(body);
       String reply;
-      if (body.contains("Rewrite the flow")) {
+      int status = 200;
+      if (body.contains("Small output model")) {
+        boolean tooBig = maxCompletionTokens(body) > 8192;
+        status = tooBig ? 400 : 200;
+        reply = tooBig ? "{\"error\":{\"message\":\"max_completion_tokens is too large: 16384. This model supports at"
+            + " most 8192 completion tokens.\"}}" : textReply("Fits.");
+      } else if (body.contains("Rewrite the flow")) {
         reply = body.contains("Proposed change to") ? textReply("Proposed the edit.")
             : body.contains("output limit and was cut off") ? smallEdit : truncatedWrite;
       } else if (body.contains("Edit then get cut off")) {
@@ -1961,12 +1975,25 @@ public class Harness {
       }
       byte[] bytes = reply.getBytes(StandardCharsets.UTF_8);
       exchange.getResponseHeaders().add("Content-Type", "application/json");
-      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.sendResponseHeaders(status, bytes.length);
       exchange.getResponseBody().write(bytes);
       exchange.close();
     });
     server.start();
     try {
+      Connection small = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+          "small-model", "");
+      ChatSession smallChat = new ChatSession();
+      ChatSession.Turn fits = smallChat.send(ChatModels.create(small), ChatMode.ASK, "Small output model", List.of(),
+          null, Progress.NONE);
+      smallChat.send(ChatModels.create(small), ChatMode.ASK, "Small output model again", List.of(), null,
+          Progress.NONE);
+      failed += check("output cap: 16,384 asked first, 8,192 after the model refuses it, and from then on",
+          bodies.size() == 3 && maxCompletionTokens(bodies.get(0)) == 16384
+              && maxCompletionTokens(bodies.get(1)) == 8192 && maxCompletionTokens(bodies.get(2)) == 8192
+              && fits.text().equals("Fits."));
+      bodies.clear();
+
       Path root = Files.createTempDirectory("studio-ai-cut-off");
       Files.createDirectories(root.resolve("src/main/mule"));
       Files.writeString(root.resolve("src/main/mule/api.xml"), "<mule>\n<flow name=\"a\"/>\n</mule>\n");
