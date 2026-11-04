@@ -721,7 +721,9 @@ public class ChatView extends ViewPart {
         attachments.add(open);
       }
       attachments.addAll(attached);
-      project = EclipseProject.find(getSite().getPage());
+      EclipseProject shown = EclipseProject.find(getSite().getPage());
+      // With no editor open and nothing selected (after a restart, say), keep working on the chat's project.
+      project = shown != null ? shown : EclipseProject.named(chatProject);
       if (mode == ChatMode.DIAGNOSE && project != null) {
         attachments.addAll(diagnoseContext(project, attachments));
       }

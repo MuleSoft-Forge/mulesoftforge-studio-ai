@@ -1998,6 +1998,9 @@ public class Harness {
     String noProject = Prompts.system(ChatMode.AGENT, null, "", "");
     failed += check("no project: no mode rules", !noProject.contains("You are in Agent mode")
         && !noProject.contains("You are in Ask mode") && !noProject.contains("Mule rules for changes"));
+    failed += check("no project: the model is told why it cannot edit, not to switch modes",
+        noProject.contains("No Mule project is attached") && noProject.contains("Do not tell them to switch modes")
+            && !Prompts.system(ChatMode.AGENT, "demo", "", "").contains("No Mule project is attached"));
     String about = Prompts.system(ChatMode.ASK, null, "", "");
     failed += check("what-can-you-do guidance always present", about.contains("When the user asks what you can do")
         && about.contains("not as a generic MuleSoft tutorial")

@@ -51,6 +51,8 @@ public final class Prompts {
       if (mode == ChatMode.AGENT) {
         out.append('\n').append(file("mule-edits.md"));
       }
+    } else {
+      out.append('\n').append(file("no-project.md"));
     }
     if (debugging) {
       out.append('\n').append(file("debug.md"));
@@ -125,6 +127,7 @@ public final class Prompts {
         + "\nAgent mode, Mule guidance (your instructions can override this)\n\n" + file("mule-edits.md")
         + "\nPlan mode, with a project open (always applies)\n\n" + mode(ChatMode.PLAN, "<project>")
         + "\nDiagnose mode, with a project open (always applies)\n\n" + mode(ChatMode.DIAGNOSE, "<project>")
+        + "\nWith no project open (always applies)\n\n" + file("no-project.md")
         + "\nWhile Studio's debugger is stopped (always applies)\n\n" + file("debug.md")
         + "\nWith the DataWeave CLI (always applies)\n\n" + file("dataweave.md")
         + "\nCalling the local app and reading documentation (always applies)\n\n" + file("http.md")

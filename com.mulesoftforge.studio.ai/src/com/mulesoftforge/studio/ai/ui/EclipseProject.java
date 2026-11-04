@@ -15,6 +15,7 @@ import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceProxy;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.Adapters;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.viewers.ISelection;
@@ -60,6 +61,14 @@ final class EclipseProject implements ProjectFiles {
       }
     }
     return null;
+  }
+
+  // The open workspace project with this name, or null.
+  static EclipseProject named(String name) {
+    if (name == null || name.isBlank()) {
+      return null;
+    }
+    return of(ResourcesPlugin.getWorkspace().getRoot().getProject(name));
   }
 
   static EclipseProject of(IProject project) {
