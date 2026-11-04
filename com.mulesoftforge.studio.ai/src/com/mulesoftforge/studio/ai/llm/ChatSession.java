@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.llm;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -42,6 +43,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.FinishReason;
 
 public class ChatSession {
   private static final int MAX_TOOL_ROUNDS = 12;
@@ -54,6 +56,20 @@ public class ChatSession {
   static final String CLAIM_NUDGE = "You said you proposed changes, but you called no edit tool, so nothing was"
       + " proposed and the user has nothing to accept. Propose them now with edit_file or write_file, then finish"
       + " with a short answer that matches what you proposed.";
+  // A reply that reached the output limit was cut off, so its tool calls lost their arguments: they are not run,
+  // and the model is told why instead of getting "missing argument", which it answers by resending the same call.
+  static final String CUT_OFF_CALL = "ERROR: not run. Your response reached the "
+      + String.format(Locale.ROOT, "%,d", ChatModels.MAX_OUTPUT_TOKENS) + "-token output limit and was cut off, so"
+      + " the arguments of this call are incomplete. Do not send it again. Change existing files with edit_file,"
+      + " one small old_text and new_text per change, several calls in one response; keep write_file for new"
+      + " files short enough to fit.";
+  static final String CUT_OFF_EMPTY = "Your last response reached the output limit before you wrote anything the"
+      + " user can see. Answer now, briefly. Make file changes with several small edit_file calls rather than one"
+      + " large write_file.";
+  // After this many cut-off replies in one turn the turn stops: each one is a full output budget spent for nothing.
+  static final int MAX_CUT_OFFS = 2;
+  // Counted in toolCounts so the activity line can say the model hit the limit.
+  public static final String CUT_OFF = "(cut off)";
   private static final Pattern CLAIMS_PROPOSED = Pattern.compile(
       "\\bI(?:'ve| have)? (?:now |also )?(?:proposed|re-proposed|drafted)\\b", Pattern.CASE_INSENSITIVE);
   private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
@@ -150,6 +166,10 @@ public class ChatSession {
       }
       if (!offers.isEmpty()) {
         parts.add("offered " + plural(offers.size(), "change"));
+      }
+      int cut = toolCounts.getOrDefault(CUT_OFF, 0);
+      if (cut > 0) {
+        parts.add("hit the output limit " + (cut == 1 ? "once" : cut + " times"));
       }
       return parts.isEmpty() ? "answered directly" : String.join(", ", parts);
     }
@@ -364,7 +384,9 @@ public class ChatSession {
     if (!reviews.isEmpty()) {
       notes += "REVIEW OF YOUR EARLIER PROPOSALS:\n" + String.join("\n", reviews) + "\n\n";
     }
-    text = notes + text;
+    boolean munit = wantsMunit(prompt, attachments);
+    boolean metadata = wantsMetadata(prompt, attachments) && project != null;
+    text = Prompts.extras(munit, metadata) + notes + text;
     savedText = notes + savedText;
     UserMessage textOnly = UserMessage.from(text);
     UserMessage message = textOnly;
@@ -393,10 +415,8 @@ public class ChatSession {
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
-    boolean munit = wantsMunit(prompt, attachments);
-    boolean metadata = wantsMetadata(prompt, attachments);
     String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, munit, metadata,
+        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
         fromHttp.text());
 
     List<ChatMessage> past;
@@ -452,6 +472,9 @@ public class ChatSession {
     // Models often write the whole answer in the message that calls offer_changes, then only a closing line.
     String offeredWith = null;
     boolean claimNudged = false;
+    int cutOffs = 0;
+    // Edits that failed this turn, by tool and exact arguments, so an identical retry is refused, not re-run.
+    Map<String, String> failedEdits = new HashMap<>();
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system));
@@ -473,10 +496,34 @@ public class ChatSession {
       progress.checkCancelled();
       AiMessage reply = response.aiMessage();
       turn.add(reply);
+      boolean cutOff = response.finishReason() == FinishReason.LENGTH;
+      boolean blank = reply.text() == null || reply.text().isBlank();
+      if (cutOff && (reply.hasToolExecutionRequests() || blank)) {
+        cutOffs++;
+        toolCounts.merge(CUT_OFF, 1, Integer::sum);
+        if (reply.hasToolExecutionRequests()) {
+          for (ToolExecutionRequest call : reply.toolExecutionRequests()) {
+            turn.add(ToolExecutionResultMessage.from(call, CUT_OFF_CALL));
+          }
+        } else {
+          // Providers reject an assistant message with no content.
+          turn.remove(turn.size() - 1);
+          turn.add(UserMessage.from(CUT_OFF_EMPTY));
+        }
+        if (cutOffs >= MAX_CUT_OFFS) {
+          answer = cutOffStop(!changes.isEmpty());
+          break;
+        }
+        progress.step("The model's reply was cut off at the output limit; asking for smaller steps…");
+        continue;
+      }
       if (specifications.isEmpty() || !reply.hasToolExecutionRequests()) {
-        answer = reply.text() == null || reply.text().isBlank()
+        answer = blank
             ? (changes.isEmpty() ? EMPTY_REPLY : "Proposed changes are ready for review.")
             : reply.text();
+        if (cutOff) {
+          answer += "\n\n(This answer was cut off at the output limit.)";
+        }
         if (pastedAnswer == null && pastedInsteadOfProposed(mode, tools, changes, answer, prompt)) {
           pastedAnswer = answer;
           answer = null;
@@ -510,7 +557,12 @@ public class ChatSession {
             : munitCall ? MunitTools.describe(call) : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
-        String result = debugCall && debugTools != null ? debugTools.execute(call)
+        boolean editCall = ProjectTools.isEdit(call.name());
+        String signature = call.name() + "\n" + call.arguments();
+        String repeated = editCall ? failedEdits.get(signature) : null;
+        String result = repeated != null ? "ERROR: not run. You already sent this exact call this turn and it"
+                + " failed: " + repeated + "\nChange the call or the approach instead of repeating it."
+            : debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
@@ -518,6 +570,9 @@ public class ChatSession {
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
+        if (editCall && repeated == null && result.startsWith("ERROR")) {
+          failedEdits.put(signature, result);
+        }
         int hidden = secrets.total() - before;
         if (hidden > 0) {
           progress.step("Hid " + hidden + (hidden == 1 ? " secret value" : " secret values") + " before sending");
@@ -531,7 +586,7 @@ public class ChatSession {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
-            true, dataWeaveTools != null, httpTools != null, munit, metadata, fromHttp.text());
+            true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text());
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
     }
@@ -570,6 +625,13 @@ public class ChatSession {
     }
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+  }
+
+  static String cutOffStop(boolean proposed) {
+    return "Stopped: the model's replies were cut off at the "
+        + String.format(Locale.ROOT, "%,d", ChatModels.MAX_OUTPUT_TOKENS) + "-token output limit " + MAX_CUT_OFFS
+        + " times, so it could not finish." + (proposed ? " What it proposed so far is ready to review." : "")
+        + " Ask for fewer changes at a time.";
   }
 
   private static void notePersonal(Progress progress, int hidden) {

@@ -33,7 +33,7 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClientBuilde
 
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
-  private static final int MAX_OUTPUT_TOKENS = 8192;
+  static final int MAX_OUTPUT_TOKENS = 8192;
   private static final String AZURE_API_VERSION = "2024-10-21";
 
   private record BedrockKey(String region, String apiKey) {}

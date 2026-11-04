@@ -1882,7 +1882,103 @@ public class Harness {
     } finally {
       server.stop(0);
     }
+    failed += checkCutOff();
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  // Replies cut off at the output limit: their tool calls are not run, an empty one is asked again once, the turn
+  // stops after two, and an identical failing edit is refused rather than re-run.
+  private static int checkCutOff() throws Exception {
+    int failed = 0;
+    String truncatedWrite = completion(toolCall("write_file", "{\"path\":\"src/main/mule/api.xml\"}"), "length");
+    String smallEdit = completion(toolCall("edit_file",
+        "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"<flow name=\\\"a\\\"/>\",\"new_text\":\"<flow name=\\\"b\\\"/>\"}"),
+        "tool_calls");
+    String badEdit = completion(toolCall("edit_file",
+        "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"nope\",\"new_text\":\"x\"}"), "tool_calls");
+    String emptyCutOff = "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{"
+        + "\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"length\"}],"
+        + "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8192,\"total_tokens\":8197}}";
+    List<String> bodies = new ArrayList<>();
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/v1/chat/completions", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      bodies.add(body);
+      String reply;
+      if (body.contains("Rewrite the flow")) {
+        reply = body.contains("Proposed change to") ? textReply("Proposed the edit.")
+            : body.contains("output limit and was cut off") ? smallEdit : truncatedWrite;
+      } else if (body.contains("Keep cutting off")) {
+        reply = truncatedWrite;
+      } else if (body.contains("Think too long")) {
+        reply = body.contains("before you wrote anything") ? textReply("Short answer.") : emptyCutOff;
+      } else if (body.contains("Repeat the bad edit")) {
+        reply = body.contains("You already sent this exact call") ? textReply("Gave up.") : badEdit;
+      } else {
+        reply = textReply("ok");
+      }
+      byte[] bytes = reply.getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
+    server.start();
+    try {
+      Path root = Files.createTempDirectory("studio-ai-cut-off");
+      Files.createDirectories(root.resolve("src/main/mule"));
+      Files.writeString(root.resolve("src/main/mule/api.xml"), "<mule>\n<flow name=\"a\"/>\n</mule>\n");
+      Connection connection = new Connection(Provider.CUSTOM, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+          "m", "");
+
+      ChatSession.Turn rewrite = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Rewrite the flow", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("a cut-off write_file is not run", bodies.stream().noneMatch(b -> b.contains("missing argument")));
+      failed += check("the model is told its call was cut off, then edits", bodies.size() == 3
+          && rewrite.changes().all().size() == 1 && rewrite.text().equals("Proposed the edit."));
+      failed += check("the activity says the limit was hit", rewrite.activity().contains("hit the output limit once")
+          && !rewrite.activity().contains("did not apply"));
+
+      bodies.clear();
+      ChatSession.Turn looping = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Keep cutting off", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("the turn stops after two cut-off replies", bodies.size() == 2
+          && looping.text().startsWith("Stopped: the model's replies were cut off"));
+
+      bodies.clear();
+      ChatSession.Turn thinking = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Think too long", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("an empty cut-off reply is asked again once", bodies.size() == 2
+          && thinking.text().equals("Short answer."));
+
+      bodies.clear();
+      ChatSession.Turn repeat = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Repeat the bad edit", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("an identical failing edit is refused, not re-run", bodies.size() == 3
+          && repeat.text().equals("Gave up.") && repeat.changes().isEmpty());
+
+      bodies.clear();
+      new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT, "Create MUnit tests for flow a",
+          List.of(), new DiskProject(root), Progress.NONE);
+      JsonNode messages = new ObjectMapper().readTree(bodies.get(0)).get("messages");
+      failed += check("MUnit guidance goes with the message, not the system prompt",
+          !messages.get(0).toString().contains("You create MUnit 3.7 tests")
+              && messages.get(messages.size() - 1).toString().contains("You create MUnit 3.7 tests"));
+    } finally {
+      server.stop(0);
+    }
+    return failed;
+  }
+
+  private static String toolCall(String name, String arguments) throws Exception {
+    return "{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"" + name + "\",\"arguments\":"
+        + new ObjectMapper().writeValueAsString(arguments) + "}}";
+  }
+
+  private static String completion(String toolCall, String finish) {
+    return "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,"
+        + "\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[" + toolCall + "]},\"finish_reason\":\""
+        + finish + "\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}";
   }
 
   // The system prompt: built-in rules always present, AGENTS.md and the user's instructions added masked, labelled

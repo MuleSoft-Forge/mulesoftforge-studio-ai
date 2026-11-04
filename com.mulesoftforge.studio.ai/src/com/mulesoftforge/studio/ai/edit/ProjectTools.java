@@ -68,7 +68,9 @@ public final class ProjectTools {
       ToolSpecification.builder()
           .name("edit_file")
           .description("Propose replacing one exact snippet in an existing file. old_text must occur exactly"
-              + " once; include enough surrounding lines to make it unique. Prefer this for small changes.")
+              + " once; include enough surrounding lines to make it unique. Use this for every change to an"
+              + " existing file: for several changes, call it once per change in the same response; each call"
+              + " sees the ones before it.")
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path")
               .addStringProperty("old_text", "Exact current text to replace, including whitespace")
@@ -78,7 +80,9 @@ public final class ProjectTools {
           .build(),
       ToolSpecification.builder()
           .name("write_file")
-          .description("Propose the complete content of a new file, or a full rewrite of an existing one.")
+          .description("Propose the complete content of a new file. Rewrite an existing file this way only when"
+              + " it is short (under about 200 lines): a response is cut off at the output limit, and a cut-off"
+              + " call is lost.")
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path")
               .addStringProperty("content", "Complete file content")
@@ -149,7 +153,7 @@ public final class ProjectTools {
     return canEdit ? SPECIFICATIONS : READ_ONLY_SPECIFICATIONS;
   }
 
-  private static boolean isEdit(String tool) {
+  public static boolean isEdit(String tool) {
     return tool.equals("edit_file") || tool.equals("write_file");
   }
 

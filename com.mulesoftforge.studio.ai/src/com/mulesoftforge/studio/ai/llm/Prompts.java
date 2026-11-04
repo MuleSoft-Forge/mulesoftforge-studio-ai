@@ -90,6 +90,23 @@ public final class Prompts {
     return out.toString();
   }
 
+  // The MUnit and metadata guidance for one request, sent with the user's message rather than in the system
+  // prompt: Claude caches the prompt only up to the first byte that changes, so the system prompt stays the same
+  // from turn to turn. Empty when neither applies.
+  public static String extras(boolean munit, boolean metadata) {
+    if (!munit && !metadata) {
+      return "";
+    }
+    StringBuilder out = new StringBuilder("GUIDANCE FOR THIS REQUEST (always applies):\n");
+    if (munit) {
+      out.append(file("munit.md")).append('\n');
+    }
+    if (metadata) {
+      out.append(metadata()).append('\n');
+    }
+    return out.append("END OF GUIDANCE\n\n").toString();
+  }
+
   static String mode(ChatMode mode, String project) {
     return file(mode.name().toLowerCase(Locale.ROOT) + ".md").replace("{project}", project);
   }
