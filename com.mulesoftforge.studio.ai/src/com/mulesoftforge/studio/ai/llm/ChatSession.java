@@ -415,7 +415,7 @@ public class ChatSession {
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
-    String system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(),
+    Prompts.SystemParts system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
         fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
         fromHttp.text());
 
@@ -454,10 +454,11 @@ public class ChatSession {
     if (httpTools != null) {
       specifications.addAll(httpTools.specifications());
     }
-    if (launchTools != null) {
+    // Offered in every mode, like the edit tools, so switching modes keeps the prompt cache; Ask and Plan refuse them.
+    if (project != null && launcher != null) {
       specifications.addAll(LaunchTools.SPECIFICATIONS);
     }
-    if (munitTools != null) {
+    if (project != null && tester != null) {
       specifications.addAll(MunitTools.SPECIFICATIONS);
     }
     List<ChatMessage> turn = new ArrayList<>();
@@ -477,7 +478,8 @@ public class ChatSession {
     Map<String, String> failedEdits = new HashMap<>();
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
-      messages.add(SystemMessage.from(system));
+      messages.add(SystemMessage.from(system.shared()));
+      messages.add(SystemMessage.from(system.perRequest()));
       messages.addAll(past);
       messages.addAll(turn);
       ChatRequest.Builder request = ChatRequest.builder().messages(messages);
@@ -498,24 +500,27 @@ public class ChatSession {
       turn.add(reply);
       boolean cutOff = response.finishReason() == FinishReason.LENGTH;
       boolean blank = reply.text() == null || reply.text().isBlank();
+      // A model writes its calls in order, so only the last call of a cut-off reply can be incomplete; the
+      // gateway may still close its JSON, so it is refused whatever it looks like. The earlier calls are run.
+      ToolExecutionRequest truncated = null;
       if (cutOff && (reply.hasToolExecutionRequests() || blank)) {
         cutOffs++;
         toolCounts.merge(CUT_OFF, 1, Integer::sum);
-        if (reply.hasToolExecutionRequests()) {
-          for (ToolExecutionRequest call : reply.toolExecutionRequests()) {
-            turn.add(ToolExecutionResultMessage.from(call, CUT_OFF_CALL));
-          }
-        } else {
+        if (!reply.hasToolExecutionRequests()) {
           // Providers reject an assistant message with no content.
           turn.remove(turn.size() - 1);
           turn.add(UserMessage.from(CUT_OFF_EMPTY));
+          if (cutOffs >= MAX_CUT_OFFS) {
+            answer = cutOffStop(!changes.isEmpty());
+            break;
+          }
+          progress.step("The model's reply was cut off at the output limit; asking for smaller steps…");
+          continue;
         }
-        if (cutOffs >= MAX_CUT_OFFS) {
-          answer = cutOffStop(!changes.isEmpty());
-          break;
-        }
-        progress.step("The model's reply was cut off at the output limit; asking for smaller steps…");
-        continue;
+        List<ToolExecutionRequest> requests = reply.toolExecutionRequests();
+        truncated = requests.get(requests.size() - 1);
+        progress.step("The model's reply was cut off at the output limit; running the complete calls and asking"
+            + " for the rest in smaller steps…");
       }
       if (specifications.isEmpty() || !reply.hasToolExecutionRequests()) {
         answer = blank
@@ -545,6 +550,10 @@ public class ChatSession {
         offeredWith = reply.text().strip();
       }
       for (ToolExecutionRequest call : reply.toolExecutionRequests()) {
+        if (call == truncated) {
+          turn.add(ToolExecutionResultMessage.from(call, CUT_OFF_CALL));
+          continue;
+        }
         toolCalls++;
         toolCounts.merge(call.name(), 1, Integer::sum);
         boolean debugCall = DebugTools.handles(call.name());
@@ -567,6 +576,8 @@ public class ChatSession {
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
             : munitCall && munitTools != null ? munitTools.execute(call)
+            : (launchCall || munitCall) && !mode.canChangeApp ? "ERROR: " + mode.label + " mode cannot run or stop"
+                + " the app or run tests. Answer without it; the user can switch to Agent or Diagnose mode for that."
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
@@ -585,9 +596,12 @@ public class ChatSession {
           .anyMatch(call -> HttpTools.CALL.equals(call.name()))) {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
-        system = Prompts.system(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
+        system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
             true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text());
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
+      }
+      if (truncated != null && cutOffs >= MAX_CUT_OFFS) {
+        answer = cutOffStop(!changes.isEmpty());
       }
     }
     if (answer == null) {

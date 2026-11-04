@@ -221,8 +221,8 @@ public final class HttpTools {
     return value;
   }
 
+  // The same in every mode, so switching modes keeps the prompt cache; execute refuses methods the mode cannot send.
   public List<ToolSpecification> specifications() {
-    List<String> methods = canChange ? ALL_METHODS : READ_METHODS;
     List<ToolSpecification> out = new ArrayList<>();
     if (files != null) {
       out.add(ToolSpecification.builder()
@@ -239,13 +239,13 @@ public final class HttpTools {
             + " headers and body" + (console == null ? "" : ", and what the app's console printed while it ran")
             + ". Only localhost addresses are allowed. Use it to test an endpoint, reproduce a"
             + " bug or prove a fix. Masked values («masked-N») in the url, headers or body are sent as their real"
-            + " values." + (canChange ? "" : " This mode only sends " + String.join(", ", READ_METHODS)
-            + "; requests that change data need Agent or Diagnose mode.")
+            + " values. Ask and Plan mode only send " + String.join(", ", READ_METHODS) + "; requests that change"
+            + " data need Agent or Diagnose mode."
             + (debugger == null ? "" : " If Studio's debugger stops while the call waits, it returns PAUSED with the"
                 + " stopped event instead of waiting; the request stays open while the user steps through it.")
             + " A response that arrives after the call stopped waiting comes with the user's next message.")
         .parameters(JsonObjectSchema.builder()
-            .addEnumProperty("method", methods)
+            .addEnumProperty("method", ALL_METHODS)
             .addStringProperty("url", "e.g. http://localhost:8081/api/employees?limit=5")
             .addProperty("headers", JsonArraySchema.builder()
                 .description("Request headers")

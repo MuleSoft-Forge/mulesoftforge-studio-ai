@@ -373,9 +373,8 @@ public class Harness {
     failed += expect(tools, "write_file", "{\"path\":\"target/x.xml\",\"content\":\"x\"}", "ERROR: Refusing to write");
     failed += expect(tools, "list_files", "{\"directory\":\"\"}", "src/main/mule/api.xml");
     ProjectTools readOnly = new ProjectTools(new DiskProject(root), new ChangeSet(), false);
-    failed += check("Ask/Plan offer only read tools and offer_changes", readOnly.specifications().stream()
-        .map(spec -> spec.name()).toList()
-        .equals(List.of("list_files", "read_file", "connector_reference", "check_project", "offer_changes")));
+    failed += check("Ask/Plan offer the same tools as Agent, so the prompt cache survives a mode switch",
+        readOnly.specifications().equals(tools.specifications()));
     failed += expect(readOnly, "write_file", "{\"path\":\"src/x.xml\",\"content\":\"x\"}",
         "ERROR: this mode cannot change files");
     failed += expect(readOnly, "offer_changes", "{\"items\":[]}", "ERROR: items must be");
@@ -1009,8 +1008,24 @@ public class Harness {
         breakpoints.add(i);
       }
     }
-    failed += check("cache breakpoints: system, end of the settled history, latest user message " + breakpoints,
-        breakpoints.equals(List.of(0, 2, 5)) && marked.get(2).path("content").path(0).path("text").asText().equals("a1"));
+    failed += check("cache breakpoints: system, settled history, latest user message, latest tool result "
+        + breakpoints, breakpoints.equals(List.of(0, 2, 5, 7))
+            && marked.get(2).path("content").path(0).path("text").asText().equals("a1")
+            && marked.get(7).path("content").path(0).path("text").asText().equals("result")
+            && marked.get(7).path("tool_call_id").asText().equals("t"));
+    JsonNode firstRound = new ObjectMapper().readTree(ChatCompletions.withCacheBreakpoints(
+        "{\"model\":\"claude-opus-5-5\",\"messages\":[{\"role\":\"system\",\"content\":\"rules\"},"
+            + "{\"role\":\"user\",\"content\":\"one\"}]}")).get("messages");
+    JsonNode twoSystems = new ObjectMapper().readTree(ChatCompletions.withCacheBreakpoints(
+        "{\"model\":\"claude-opus-5-5\",\"messages\":[{\"role\":\"system\",\"content\":\"shared\"},"
+            + "{\"role\":\"system\",\"content\":\"agent mode\"},{\"role\":\"user\",\"content\":\"one\"},"
+            + "{\"role\":\"assistant\",\"content\":\"a1\"},{\"role\":\"user\",\"content\":\"two\"}]}")).get("messages");
+    failed += check("cache breakpoints: only the shared system message is marked, not the per-mode one",
+        twoSystems.get(0).path("content").path(0).has("cache_control") && twoSystems.get(1).path("content").isTextual()
+            && twoSystems.get(4).path("content").path(0).has("cache_control"));
+    failed += check("cache breakpoints: the first round marks the system prompt and the message only",
+        firstRound.size() == 2 && firstRound.get(0).path("content").path(0).has("cache_control")
+            && firstRound.get(1).path("content").path(0).has("cache_control"));
     failed += check("cache breakpoints only for Claude", ChatCompletions.withCacheBreakpoints(
         completion.replace("claude-opus-5-5", "gpt-5")).equals(completion.replace("claude-opus-5-5", "gpt-5")));
     failed += check("cache breakpoints leave a body that already has them alone", ChatCompletions.withCacheBreakpoints(
@@ -1896,6 +1911,10 @@ public class Harness {
         "tool_calls");
     String badEdit = completion(toolCall("edit_file",
         "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"nope\",\"new_text\":\"x\"}"), "tool_calls");
+    String editThenCut = completion(toolCall("edit_file",
+        "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"<flow name=\\\"a\\\"/>\",\"new_text\":\"<flow name=\\\"c\\\"/>\"}")
+        + "," + toolCall("call_2", "edit_file", "{\"path\":\"src/main/mule/api.xml\",\"old_text\":\"</mule>\"}"),
+        "length");
     String emptyCutOff = "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"m\",\"choices\":[{"
         + "\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"length\"}],"
         + "\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8192,\"total_tokens\":8197}}";
@@ -1908,6 +1927,8 @@ public class Harness {
       if (body.contains("Rewrite the flow")) {
         reply = body.contains("Proposed change to") ? textReply("Proposed the edit.")
             : body.contains("output limit and was cut off") ? smallEdit : truncatedWrite;
+      } else if (body.contains("Edit then get cut off")) {
+        reply = body.contains("output limit and was cut off") ? textReply("Done.") : editThenCut;
       } else if (body.contains("Keep cutting off")) {
         reply = truncatedWrite;
       } else if (body.contains("Think too long")) {
@@ -1940,6 +1961,14 @@ public class Harness {
           && !rewrite.activity().contains("did not apply"));
 
       bodies.clear();
+      ChatSession.Turn partial = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
+          "Edit then get cut off", List.of(), new DiskProject(root), Progress.NONE);
+      failed += check("a cut-off reply's complete calls run; only the last is refused", bodies.size() == 2
+          && partial.changes().all().size() == 1 && partial.changes().all().get(0).after().contains("name=\"c\"")
+          && bodies.get(1).contains("Proposed change to") && bodies.get(1).contains("output limit and was cut off")
+          && partial.text().equals("Done."));
+
+      bodies.clear();
       ChatSession.Turn looping = new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT,
           "Keep cutting off", List.of(), new DiskProject(root), Progress.NONE);
       failed += check("the turn stops after two cut-off replies", bodies.size() == 2
@@ -1961,6 +1990,16 @@ public class Harness {
       new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT, "Create MUnit tests for flow a",
           List.of(), new DiskProject(root), Progress.NONE);
       JsonNode messages = new ObjectMapper().readTree(bodies.get(0)).get("messages");
+      bodies.clear();
+      new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Plain question", List.of(),
+          new DiskProject(root), Progress.NONE);
+      new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT, "Plain question", List.of(),
+          new DiskProject(root), Progress.NONE);
+      JsonNode ask = new ObjectMapper().readTree(bodies.get(0));
+      JsonNode agent = new ObjectMapper().readTree(bodies.get(1));
+      failed += check("Ask and Agent send the same tools and shared system prompt, so a switch keeps the cache",
+          ask.get("tools").equals(agent.get("tools")) && ask.get("messages").get(0).equals(agent.get("messages").get(0))
+              && !ask.get("messages").get(1).equals(agent.get("messages").get(1)));
       failed += check("MUnit guidance goes with the message, not the system prompt",
           !messages.get(0).toString().contains("You create MUnit 3.7 tests")
               && messages.get(messages.size() - 1).toString().contains("You create MUnit 3.7 tests"));
@@ -1971,7 +2010,11 @@ public class Harness {
   }
 
   private static String toolCall(String name, String arguments) throws Exception {
-    return "{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"" + name + "\",\"arguments\":"
+    return toolCall("call_1", name, arguments);
+  }
+
+  private static String toolCall(String id, String name, String arguments) throws Exception {
+    return "{\"id\":\"" + id + "\",\"type\":\"function\",\"function\":{\"name\":\"" + name + "\",\"arguments\":"
         + new ObjectMapper().writeValueAsString(arguments) + "}}";
   }
 

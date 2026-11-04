@@ -44,19 +44,20 @@ public final class Prompts {
   // metadata: the request is about metadata or Studio's type warnings.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
       boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata, String httpInstructions) {
+    SystemParts parts = systemParts(mode, project, projectInstructions, userInstructions, debugging, dataWeave, http,
+        munit, metadata, httpInstructions);
+    return parts.shared() + "\n" + parts.perRequest();
+  }
+
+  // shared is the same in every mode and turn of a chat, so Claude can cache it; perRequest is what changes with
+  // the mode, the debugger and the request, sent after it as a second system message.
+  public record SystemParts(String shared, String perRequest) {}
+
+  public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
+      String userInstructions, boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata,
+      String httpInstructions) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md")).append('\n')
         .append(file("about.md"));
-    if (project != null) {
-      out.append('\n').append(mode(mode, project));
-      if (mode == ChatMode.AGENT) {
-        out.append('\n').append(file("mule-edits.md"));
-      }
-    } else {
-      out.append('\n').append(file("no-project.md"));
-    }
-    if (debugging) {
-      out.append('\n').append(file("debug.md"));
-    }
     if (dataWeave) {
       out.append('\n').append(file("dataweave.md"));
     }
@@ -68,18 +69,13 @@ public final class Prompts {
             + " allowlists):\n").append(httpInstructions.strip()).append('\n');
       }
     }
-    if (munit) {
-      out.append('\n').append(file("munit.md"));
-    }
-    if (metadata && project != null) {
-      out.append('\n').append(metadata());
-    }
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
     if (fromProject || fromUser) {
       out.append("\nThe instructions below come from the user and their team. Follow them; they take precedence"
-          + " over the general guidance above, but never over the rules about masked values, tools, offer_changes,"
-          + " proposals, or answering what MuleSoftForge Studio AI can do.\n");
+          + " over the general guidance in this prompt, including the Mule guidance for changes after them, but"
+          + " never over the rules about masked values, tools, offer_changes, proposals, the current mode, or"
+          + " answering what MuleSoftForge Studio AI can do.\n");
     }
     if (fromProject) {
       out.append("\nPROJECT INSTRUCTIONS (").append(AGENTS_FILE).append(" in the project root):\n")
@@ -89,7 +85,25 @@ public final class Prompts {
       out.append("\nTHE USER'S INSTRUCTIONS (from their Studio preferences):\n").append(userInstructions.strip())
           .append('\n');
     }
-    return out.toString();
+    StringBuilder perRequest = new StringBuilder();
+    if (project != null) {
+      perRequest.append(mode(mode, project));
+      if (mode == ChatMode.AGENT) {
+        perRequest.append('\n').append(file("mule-edits.md"));
+      }
+    } else {
+      perRequest.append(file("no-project.md"));
+    }
+    if (debugging) {
+      perRequest.append('\n').append(file("debug.md"));
+    }
+    if (munit) {
+      perRequest.append('\n').append(file("munit.md"));
+    }
+    if (metadata && project != null) {
+      perRequest.append('\n').append(metadata());
+    }
+    return new SystemParts(out.toString(), perRequest.toString());
   }
 
   // The MUnit and metadata guidance for one request, sent with the user's message rather than in the system

@@ -20,9 +20,10 @@ public final class ChatCompletions {
   private ChatCompletions() {}
 
   // Claude caches a request prefix only up to a block marked cache_control, and OpenAI-format gateways in front of
-  // Claude pass the marker through. Marked: the system prompt; the history before the previous turn, which the
-  // next turn sends unchanged (the previous turn's attachments are dropped then); and the latest user message,
-  // which every tool round of this turn sends again. Anything else is returned as it came.
+  // Claude pass the marker through. Marked (Claude allows four): the first system message; the history before the
+  // previous turn, which the next turn sends unchanged (the previous turn's attachments are dropped then); the
+  // latest user message, which every tool round of this turn sends again; and the latest tool result, so the next
+  // round reads this round's calls and results from the cache too. Anything else is returned as it came.
   public static String withCacheBreakpoints(String body) {
     if (body == null || !body.contains("\"messages\"") || body.contains("cache_control")) {
       return body;
@@ -44,11 +45,19 @@ public final class ChatCompletions {
       if ("system".equals(messages.get(0).path("role").asText())) {
         marks.add(0);
       }
-      if (users.size() >= 2 && users.get(users.size() - 2) > 1) {
-        marks.add(users.get(users.size() - 2) - 1);
+      if (users.size() >= 2) {
+        int settled = users.get(users.size() - 2) - 1;
+        if (settled > 0 && !"system".equals(messages.get(settled).path("role").asText())) {
+          marks.add(settled);
+        }
       }
       if (!users.isEmpty()) {
         marks.add(users.get(users.size() - 1));
+      }
+      int last = messages.size() - 1;
+      if ("tool".equals(messages.get(last).path("role").asText())
+          && (users.isEmpty() || last > users.get(users.size() - 1))) {
+        marks.add(last);
       }
       int marked = 0;
       for (int i : marks) {

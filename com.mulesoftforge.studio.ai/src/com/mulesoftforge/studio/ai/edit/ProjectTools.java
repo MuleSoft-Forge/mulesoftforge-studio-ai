@@ -70,7 +70,7 @@ public final class ProjectTools {
           .description("Propose replacing one exact snippet in an existing file. old_text must occur exactly"
               + " once; include enough surrounding lines to make it unique. Use this for every change to an"
               + " existing file: for several changes, call it once per change in the same response; each call"
-              + " sees the ones before it.")
+              + " sees the ones before it. Agent mode only.")
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path")
               .addStringProperty("old_text", "Exact current text to replace, including whitespace")
@@ -82,7 +82,7 @@ public final class ProjectTools {
           .name("write_file")
           .description("Propose the complete content of a new file. Rewrite an existing file this way only when"
               + " it is short (under about 200 lines): a response is cut off at the output limit, and a cut-off"
-              + " call is lost.")
+              + " call is lost. Agent mode only.")
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path")
               .addStringProperty("content", "Complete file content")
@@ -112,10 +112,6 @@ public final class ProjectTools {
               .required("items")
               .build())
           .build());
-
-  public static final List<ToolSpecification> READ_ONLY_SPECIFICATIONS = SPECIFICATIONS.stream()
-      .filter(spec -> !isEdit(spec.name()))
-      .toList();
 
   private final ProjectFiles files;
   private final ChangeSet changes;
@@ -149,8 +145,10 @@ public final class ProjectTools {
     dataWeave = cli;
   }
 
+  // The same in every mode, so switching modes keeps the prompt cache; execute refuses edits where they are not
+  // allowed.
   public List<ToolSpecification> specifications() {
-    return canEdit ? SPECIFICATIONS : READ_ONLY_SPECIFICATIONS;
+    return SPECIFICATIONS;
   }
 
   public static boolean isEdit(String tool) {

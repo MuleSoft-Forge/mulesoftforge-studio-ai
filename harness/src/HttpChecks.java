@@ -817,9 +817,10 @@ final class HttpChecks {
       failed += check("loop: Preferences HTTP instructions and custom docs hosts are sent",
           bodies.get(0).contains("HTTP AND DOCS INSTRUCTIONS") && bodies.get(0).contains("Always show curl with -i.")
               && bodies.get(0).contains("Only these sites: docs.example.com"));
-      failed += check("loop: Ask mode offers only reading methods", !bodies.get(0).contains("\"POST\""));
-      failed += check("loop: Ask mode cannot start or stop the app", !DebugChecks.tool(bodies.get(0),
-          LaunchTools.RUN) && !DebugChecks.tool(bodies.get(0), LaunchTools.STOP));
+      failed += check("loop: Ask mode is told it only sends reading methods",
+          bodies.get(0).contains("Ask and Plan mode only send GET, HEAD, OPTIONS"));
+      failed += check("loop: Ask mode is offered the same run tools as Agent (it refuses them)",
+          DebugChecks.tool(bodies.get(0), LaunchTools.RUN) && DebugChecks.tool(bodies.get(0), LaunchTools.STOP));
       failed += check("loop: the app's reply went back to the model", bodies.size() == 2
           && bodies.get(1).contains("STATUS 200") && bodies.get(1).contains("UP"));
       failed += check("loop: activity says the app was called", turn.activity().contains("called the app once"));
@@ -831,8 +832,8 @@ final class HttpChecks {
       failed += check("loop: Diagnose can run, debug and stop the app", DebugChecks.tool(bodies.get(0),
           LaunchTools.RUN) && DebugChecks.tool(bodies.get(0), LaunchTools.STOP)
           && bodies.get(0).contains("Debug As > Mule Application"));
-      failed += check("loop: Diagnose can send any method but has no edit tools", bodies.get(0).contains("\"POST\"")
-          && !DebugChecks.tool(bodies.get(0), "edit_file") && !DebugChecks.tool(bodies.get(0), "write_file")
+      failed += check("loop: Diagnose can send any method and is offered the same edit tools (it refuses them)",
+          bodies.get(0).contains("\"POST\"") && DebugChecks.tool(bodies.get(0), "edit_file")
           && DebugChecks.tool(bodies.get(0), "offer_changes") && bodies.get(0).contains("You are in Diagnose mode"));
       bodies.clear();
       new ChatSession().send(ChatModels.create(connection), ChatMode.AGENT, "Hi", List.of(), null, Progress.NONE);
