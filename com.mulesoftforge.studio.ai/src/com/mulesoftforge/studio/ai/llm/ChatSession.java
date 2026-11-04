@@ -1,5 +1,7 @@
 package com.mulesoftforge.studio.ai.llm;
 
+import java.net.http.HttpTimeoutException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -7,11 +9,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Queue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveTools;
@@ -72,6 +77,24 @@ public class ChatSession {
   static final int MAX_CUT_OFFS = 2;
   // Counted in toolCounts so the activity line can say the model hit the limit.
   public static final String CUT_OFF = "(cut off)";
+  // Counted in toolCounts in place of the tool: calls the mode did not allow, and identical calls refused.
+  public static final String MODE_REFUSED = "(not in this mode)";
+  public static final String REPEATED = "(repeated)";
+  // In toolCounts when the turn stopped at MAX_TOOL_ROUNDS, so the view can offer Continue.
+  public static final String STEP_LIMIT = "(step limit)";
+  // The third identical call in a turn is refused, as Roo-Code's ToolRepetitionDetector does; its result will not
+  // change, and a model that repeats a call usually keeps repeating it.
+  static final int MAX_IDENTICAL_CALLS = 3;
+  private static final String REPEATED_START = "ERROR: not run. This is call number";
+  static final String REPEATED_CALL = REPEATED_START + " %d to %s with exactly these arguments this turn, and the"
+      + " result would be the same. Use the result you already have, or try a different approach.";
+  static final int MAX_RETRIES = 3;
+  // A provider asking to wait longer than this is reported to the user rather than waited out.
+  static final Duration MAX_RETRY_AFTER = Duration.ofSeconds(60);
+  private static volatile Duration firstRetryWait = Duration.ofSeconds(2);
+  private static volatile Duration maxRetryWait = Duration.ofSeconds(15);
+  private static final ObjectMapper CANONICAL = new ObjectMapper()
+      .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
   private static final Pattern CLAIMS_PROPOSED = Pattern.compile(
       "\\bI(?:'ve| have)? (?:now |also )?(?:proposed|re-proposed|drafted)\\b", Pattern.CASE_INSENSITIVE);
   private static final Pattern ASKS_FOR_CHANGE = Pattern.compile("\\b(add|create|fix|change|update|replace|remove|"
@@ -169,11 +192,27 @@ public class ChatSession {
       if (!offers.isEmpty()) {
         parts.add("offered " + plural(offers.size(), "change"));
       }
+      int refused = toolCounts.getOrDefault(MODE_REFUSED, 0);
+      if (refused > 0) {
+        parts.add("skipped " + plural(refused, "call") + " this mode does not allow");
+      }
+      int repeated = toolCounts.getOrDefault(REPEATED, 0);
+      if (repeated > 0) {
+        parts.add("refused " + plural(repeated, "repeated call"));
+      }
       int cut = toolCounts.getOrDefault(CUT_OFF, 0);
       if (cut > 0) {
         parts.add("hit the output limit " + (cut == 1 ? "once" : cut + " times"));
       }
+      if (stoppedAtLimit()) {
+        parts.add("paused at the step limit");
+      }
       return parts.isEmpty() ? "answered directly" : String.join(", ", parts);
+    }
+
+    // The model was still working when the turn reached MAX_TOOL_ROUNDS; the user can let it continue.
+    public boolean stoppedAtLimit() {
+      return toolCounts.containsKey(STEP_LIMIT);
     }
 
     private static String plural(int n, String noun) {
@@ -354,7 +393,6 @@ public class ChatSession {
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
     prompt = secrets.mask(null, prompt).text();
-    record Block(String label, String text, boolean image) {}
     List<Block> blocks = new ArrayList<>();
     int attachedChars = 0;
     List<String> sent = new ArrayList<>();
@@ -471,24 +509,9 @@ public class ChatSession {
       compact(model, system, specifications, withTools, calls, progress);
     }
     List<ChatMessage> past = history.messages(withTools);
-
-    StringBuilder context = new StringBuilder();
-    Map<String, String> sentInFull = new HashMap<>();
-    for (Block block : blocks) {
-      if (!block.image() && withTools && history.hasAttached(block.label(), block.text())) {
-        context.append(Prompts.unchangedAttachment(block.label()));
-      } else {
-        context.append(block.text());
-        if (!block.image()) {
-          sentInFull.put(block.label(), block.text());
-        }
-      }
-    }
-    if (!dropped.isEmpty()) {
-      context.append("NOT ATTACHED (too large to send together; read them with tools if needed): ")
-          .append(String.join(", ", dropped)).append("\n\n");
-    }
-    String text = Prompts.extras(munit, metadata) + notes + context + prompt;
+    String lead = Prompts.extras(munit, metadata) + notes;
+    Attached attached = attached(blocks, dropped, withTools);
+    String text = lead + attached.text() + prompt;
     UserMessage message = current(system, text, images);
     List<ChatMessage> turn = new ArrayList<>();
     turn.add(message);
@@ -502,8 +525,11 @@ public class ChatSession {
     String offeredWith = null;
     boolean claimNudged = false;
     int cutOffs = 0;
+    boolean overflowCompacted = false;
     // Edits that failed this turn, by tool and exact arguments, so an identical retry is refused, not re-run.
     Map<String, String> failedEdits = new HashMap<>();
+    // Every call this turn by tool and arguments, so a third identical one is refused.
+    Map<String, Integer> seenCalls = new HashMap<>();
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system.shared()));
@@ -517,11 +543,27 @@ public class ChatSession {
       progress.checkCancelled();
       progress.step(round == 0 ? "Waiting for the model…" : "Waiting for the model (step " + (round + 1) + ")…");
       long started = System.nanoTime();
-      ReportedCost.take();
-      if (model instanceof StreamingChat streamed) {
-        streamed.progress(progress);
+      ChatResponse response;
+      try {
+        response = call(model, request.build(), progress);
+      } catch (RuntimeException e) {
+        // Too large for the model: summarise the earlier turns from their text-only form, which is far smaller,
+        // and send this turn again on top of the summary.
+        if (overflowCompacted || !Errors.contextOverflow(e) || history.isEmpty()) {
+          throw e;
+        }
+        overflowCompacted = true;
+        progress.step("The chat is too large for the model's context window");
+        if (!compact(model, system, List.of(), false, calls, progress)) {
+          throw e;
+        }
+        past = history.messages(withTools);
+        attached = attached(blocks, dropped, withTools);
+        text = lead + attached.text() + prompt;
+        turn.set(0, current(system, text, images));
+        round--;
+        continue;
       }
-      ChatResponse response = model.chat(request.build());
       CallUsage usage = CallUsage.from(response, model.defaultRequestParameters().modelName(), ReportedCost.take());
       calls.add(usage);
       progress.answered(usage, (System.nanoTime() - started) / 1_000_000_000);
@@ -587,7 +629,6 @@ public class ChatSession {
           continue;
         }
         toolCalls++;
-        toolCounts.merge(call.name(), 1, Integer::sum);
         boolean debugCall = DebugTools.handles(call.name());
         boolean dataWeaveCall = DataWeaveTools.handles(call.name());
         boolean httpCall = HttpTools.handles(call.name());
@@ -599,23 +640,29 @@ public class ChatSession {
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         boolean editCall = ProjectTools.isEdit(call.name());
-        String signature = call.name() + "\n" + call.arguments();
+        String signature = signature(call);
         String repeated = editCall ? failedEdits.get(signature) : null;
+        int seen = seenCalls.merge(signature, 1, Integer::sum);
         String result = repeated != null ? "ERROR: not run. You already sent this exact call this turn and it"
                 + " failed: " + repeated + "\nChange the call or the approach instead of repeating it."
+            : seen >= MAX_IDENTICAL_CALLS ? String.format(Locale.ROOT, REPEATED_CALL, seen, call.name())
             : debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
             : munitCall && munitTools != null ? munitTools.execute(call)
-            : (launchCall || munitCall) && !mode.canChangeApp ? "ERROR: " + mode.label + " mode cannot run or stop"
-                + " the app or run tests. Answer without it; the user can switch to Agent or Diagnose mode for that."
+            : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot run or"
+                + " stop the app or run tests. Agent or Diagnose mode can.")
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         if (editCall && repeated == null && result.startsWith("ERROR")) {
           failedEdits.put(signature, result);
         }
+        // A refused call did nothing, so it counts as what stopped it rather than as a call that failed.
+        String countedAs = result.startsWith(ChatMode.REFUSED) ? MODE_REFUSED
+            : result.startsWith(REPEATED_START) ? REPEATED : call.name();
+        toolCounts.merge(countedAs, 1, Integer::sum);
         int hidden = secrets.total() - before;
         if (hidden > 0) {
           progress.step("Hid " + hidden + (hidden == 1 ? " secret value" : " secret values") + " before sending");
@@ -638,8 +685,10 @@ public class ChatSession {
       }
     }
     if (answer == null) {
-      answer = "Stopped after " + MAX_TOOL_ROUNDS + " steps before the model finished."
-          + (changes.isEmpty() ? "" : " What it proposed so far is ready to review; ask it to continue if needed.");
+      toolCounts.put(STEP_LIMIT, 1);
+      answer = "Paused after " + MAX_TOOL_ROUNDS + " steps before the model finished."
+          + (changes.isEmpty() ? "" : " What it proposed so far is ready to review.")
+          + " Continue to let it carry on from where it stopped.";
     }
     if (pastedAnswer != null) {
       answer = changes.isEmpty() ? pastedAnswer : pastedAnswer + "\n\n" + answer;
@@ -656,7 +705,7 @@ public class ChatSession {
     }
     remembered += "\n\n[What you did this turn: "
         + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, 0).activity() + "]";
-    history.add(new History.Exchange(asSent(turn, answer), savedText, remembered), sentInFull);
+    history.add(new History.Exchange(asSent(turn, answer), savedText, remembered), attached.inFull());
     lastMode = mode;
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
@@ -670,6 +719,33 @@ public class ChatSession {
     List<Content> parts = new ArrayList<>(images);
     parts.add(TextContent.from(full));
     return UserMessage.from(parts);
+  }
+
+  private record Block(String label, String text, boolean image) {}
+
+  // inFull: the attachments sent in full, by label, which the history then holds.
+  private record Attached(String text, Map<String, String> inFull) {}
+
+  // An attachment already in the history unchanged is named, not sent again; that history has attachments only
+  // when it goes with tools.
+  private Attached attached(List<Block> blocks, List<String> dropped, boolean withTools) {
+    StringBuilder context = new StringBuilder();
+    Map<String, String> inFull = new HashMap<>();
+    for (Block block : blocks) {
+      if (!block.image() && withTools && history.hasAttached(block.label(), block.text())) {
+        context.append(Prompts.unchangedAttachment(block.label()));
+      } else {
+        context.append(block.text());
+        if (!block.image()) {
+          inFull.put(block.label(), block.text());
+        }
+      }
+    }
+    if (!dropped.isEmpty()) {
+      context.append("NOT ATTACHED (too large to send together; read them with tools if needed): ")
+          .append(String.join(", ", dropped)).append("\n\n");
+    }
+    return new Attached(context.toString(), inFull);
   }
 
   private static Prompts.SystemParts withNotes(Prompts.SystemParts parts, String notes) {
@@ -696,12 +772,12 @@ public class ChatSession {
   }
 
   // Asks the chat's own model for a summary at the end of the history it already has cached, as Codex does, then
-  // keeps that summary and the most recent turns. A failed summary leaves the history as it was.
-  private void compact(ChatModel model, Prompts.SystemParts system, List<ToolSpecification> specifications,
+  // keeps that summary and the most recent turns. A failed summary leaves the history as it was. True when compacted.
+  private boolean compact(ChatModel model, Prompts.SystemParts system, List<ToolSpecification> specifications,
       boolean withTools, List<CallUsage> calls, Progress progress) {
     int summarised = history.toSummarise();
     if (summarised == 0) {
-      return;
+      return false;
     }
     long before = Math.max(contextTokens, history.tokens());
     progress.step("Compacting the chat: summarising " + (summarised == 1 ? "the earliest turn" : "the earliest "
@@ -717,11 +793,7 @@ public class ChatSession {
     String summary;
     try {
       long started = System.nanoTime();
-      ReportedCost.take();
-      if (model instanceof StreamingChat streamed) {
-        streamed.progress(progress);
-      }
-      ChatResponse response = model.chat(request.build());
+      ChatResponse response = call(model, request.build(), progress);
       CallUsage usage = CallUsage.from(response, model.defaultRequestParameters().modelName(), ReportedCost.take());
       calls.add(usage);
       progress.answered(usage, (System.nanoTime() - started) / 1_000_000_000);
@@ -729,17 +801,90 @@ public class ChatSession {
     } catch (RuntimeException e) {
       progress.checkCancelled();
       progress.step("Could not compact the chat (" + Errors.describe(e) + "); sending it as it is");
-      return;
+      return false;
     }
     progress.checkCancelled();
     if (summary == null || summary.isBlank()) {
       progress.step("The model wrote no summary, so the chat was not compacted");
-      return;
+      return false;
     }
     history.compact(summarised, summary);
     contextTokens = history.tokens();
     progress.step("Compacted the chat from about " + ContextWindow.tokens(before) + " to about "
         + ContextWindow.tokens(contextTokens) + " tokens");
+    return true;
+  }
+
+  // One model call, sent again after a busy or failed provider (408, 429, 5xx, a dropped connection) with growing
+  // waits, as Cline (3 tries, 1 to 15 s) and gemini-cli (5 to 30 s, honouring the provider's delay) do. Nothing
+  // of a failed call was used, so sending it again is safe even when part of it had streamed. Not retried: a
+  // model that went silent, which already waited out the idle limit, and a wait the provider asks for that is
+  // longer than MAX_RETRY_AFTER, which the user is told about instead.
+  private static ChatResponse call(ChatModel model, ChatRequest request, Progress progress) {
+    for (int attempt = 0; ; attempt++) {
+      ReportedCost.take();
+      if (model instanceof StreamingChat streamed) {
+        streamed.progress(progress);
+      }
+      try {
+        return model.chat(request);
+      } catch (RuntimeException e) {
+        Duration wait = attempt < MAX_RETRIES && !progress.isCancelled() ? retryWait(e, attempt) : null;
+        if (wait == null) {
+          throw e;
+        }
+        progress.step(AutoRouter.shortReason(e) + "; trying again in " + Math.max(1, wait.toSeconds()) + " s"
+            + " (" + (attempt + 2) + " of " + (MAX_RETRIES + 1) + ")…");
+        pause(wait, progress);
+      }
+    }
+  }
+
+  // null when the error is not worth another try.
+  static Duration retryWait(Throwable error, int attempt) {
+    if (!AutoRouter.retryable(error) || Errors.find(error, HttpTimeoutException.class) != null) {
+      return null;
+    }
+    Duration backoff = firstRetryWait.multipliedBy(1L << attempt);
+    if (backoff.compareTo(maxRetryWait) > 0) {
+      backoff = maxRetryWait;
+    }
+    Duration asked = Errors.classify(error, null).retryAfter();
+    if (asked == null) {
+      return backoff;
+    }
+    return asked.compareTo(MAX_RETRY_AFTER) > 0 ? null : asked.compareTo(backoff) > 0 ? asked : backoff;
+  }
+
+  private static void pause(Duration wait, Progress progress) {
+    long until = System.nanoTime() + wait.toNanos();
+    while (System.nanoTime() < until) {
+      progress.checkCancelled();
+      try {
+        Thread.sleep(Math.min(250, Math.max(1, (until - System.nanoTime()) / 1_000_000)));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new CancellationException("Cancelled.");
+      }
+    }
+  }
+
+  // For the harness: shorter waits between retries.
+  public static void retryWaits(Duration first, Duration max) {
+    firstRetryWait = first;
+    maxRetryWait = max;
+  }
+
+  // Tool name and arguments with keys sorted, so the same call written in another key order still matches.
+  static String signature(ToolExecutionRequest call) {
+    String arguments = call.arguments() == null ? "" : call.arguments();
+    try {
+      // Read as Maps, not a JsonNode tree: only Maps are written with their keys sorted.
+      arguments = CANONICAL.writeValueAsString(CANONICAL.readValue(arguments, Object.class));
+    } catch (Exception e) {
+      // Not JSON: compared as written.
+    }
+    return call.name() + "\n" + arguments;
   }
 
   // The size of the context after the last model call, in tokens; 0 before the first.

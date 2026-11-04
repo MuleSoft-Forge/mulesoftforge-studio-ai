@@ -47,6 +47,7 @@ import com.mulesoftforge.studio.ai.debug.PersonalData;
 import com.mulesoftforge.studio.ai.debug.ProcessorSource;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectPaths;
+import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 
@@ -339,8 +340,8 @@ public final class HttpTools {
       return "ERROR: method must be one of " + String.join(", ", ALL_METHODS) + ".";
     }
     if (!canChange && !READ_METHODS.contains(method)) {
-      return "ERROR: this mode only sends " + String.join(", ", READ_METHODS) + ". Tell the user the " + method
-          + " request to send, or that Agent or Diagnose mode can send it.";
+      return ChatMode.refused("This mode only sends " + String.join(", ", READ_METHODS) + ". Tell the user the "
+          + method + " request to send; Agent or Diagnose mode can send it.");
     }
     String shownUrl = args.path("url").asText("").strip();
     URI uri;

@@ -253,7 +253,7 @@ final class HttpChecks {
 
       out = ask.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/api/employees",
           "body", "{}")));
-      failed += check("Ask mode does not send POST", out.startsWith("ERROR: this mode only sends GET")
+      failed += check("Ask mode does not send POST", out.startsWith(ChatMode.REFUSED + " This mode only sends GET")
           && seen.stream().noneMatch(s -> s.startsWith("POST")));
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/api/employees",
           "file", "src/test/resources/new.json", "expected_status", "201")));

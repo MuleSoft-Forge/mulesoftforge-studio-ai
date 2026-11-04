@@ -13,6 +13,7 @@ import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.dataweave.ScriptChecks;
+import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -196,7 +197,7 @@ public final class ProjectTools {
   // Never throws: failures go back to the model as text so it can correct itself.
   public String execute(ToolExecutionRequest request) {
     if (!canEdit && isEdit(request.name())) {
-      return "ERROR: this mode cannot change files. Describe the change instead; the user can switch to Agent mode.";
+      return ChatMode.refused("This mode cannot change files; describe the change instead. Agent mode can make it.");
     }
     try {
       JsonNode args = JSON.readTree(request.arguments() == null || request.arguments().isBlank()

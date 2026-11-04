@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLHandshakeException;
 
@@ -21,6 +22,9 @@ import dev.langchain4j.exception.HttpException;
 
 public final class Errors {
   private static final String CERTIFICATE_HINT = "The server's HTTPS certificate is not trusted.";
+  private static final Pattern OVERFLOW = Pattern.compile("(?i)context[_ ]length|context window|maximum context"
+      + "|prompt is too long|input is too long|too many (input )?tokens|exceeds? the (maximum|max)[a-z ]* tokens"
+      + "|request too large|reduce the length");
 
   public record UserError(String message, String details, Duration retryAfter) {
     public String transcript() {
@@ -92,7 +96,7 @@ public final class Errors {
       return new UserError(label + " had a server error (HTTP " + status + ").", details, retryAfter);
     }
     if (find(error, HttpTimeoutException.class) != null || find(error, SocketTimeoutException.class) != null) {
-      return new UserError("No answer within 180 s.", details, null);
+      return new UserError("The model stopped answering before it finished.", details, null);
     }
     if (find(error, UnknownHostException.class) != null || find(error, ConnectException.class) != null
         || find(error, SocketException.class) != null || find(error, TransportException.class) != null) {
@@ -124,6 +128,17 @@ public final class Errors {
     }
     String message = error.getMessage();
     return message == null || message.isBlank() ? error.getClass().getSimpleName() : message.trim();
+  }
+
+  // A 400 or 413 saying the request is larger than the model's context window, in the words OpenAI, Anthropic,
+  // Gemini, Bedrock and OpenRouter use for it.
+  public static boolean contextOverflow(Throwable error) {
+    HttpException http = find(error, HttpException.class);
+    if (http == null || http.statusCode() != 400 && http.statusCode() != 413) {
+      return false;
+    }
+    String body = http.getMessage() == null ? "" : http.getMessage();
+    return OVERFLOW.matcher(body).find();
   }
 
   public static boolean isExpectedFailure(Throwable error) {
@@ -179,7 +194,7 @@ public final class Errors {
     return false;
   }
 
-  private static <T extends Throwable> T find(Throwable error, Class<T> type) {
+  static <T extends Throwable> T find(Throwable error, Class<T> type) {
     for (Throwable t = error; t != null; t = t.getCause()) {
       if (type.isInstance(t)) {
         return type.cast(t);

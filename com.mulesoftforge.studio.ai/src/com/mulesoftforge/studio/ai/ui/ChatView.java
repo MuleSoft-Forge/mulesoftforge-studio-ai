@@ -94,6 +94,7 @@ public class ChatView extends ViewPart {
   private static final String OPEN_RAW = "raw-log";
   private static final String DIAGNOSE_INSTEAD = "diagnose-instead";
   private static final String VERIFY_FIX = "verify-fix";
+  private static final String CONTINUE = "continue";
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
@@ -122,6 +123,8 @@ public class ChatView extends ViewPart {
   private String chatProject;
   // The model Auto used for this chat's last message.
   private String chatAuto;
+  // The mode of the turn that paused at the step limit, which Continue resumes in.
+  private ChatMode continueMode;
   // The model of the last call, whose window the context size is shown against.
   private String contextModel;
   private final List<ChatRecord.Entry> entries = new ArrayList<>();
@@ -488,6 +491,8 @@ public class ChatView extends ViewPart {
         sendInCurrentMode(ChatMode.SUGGEST_PROMPT);
       } else if (DIAGNOSE_INSTEAD.equals(id) && diagnosePrompt != null) {
         sendInMode(ChatMode.DIAGNOSE, diagnosePrompt);
+      } else if (CONTINUE.equals(id) && continueMode != null) {
+        sendInMode(continueMode, ChatMode.CONTINUE_PROMPT);
       } else if (VERIFY_FIX.equals(id)) {
         sendInMode(ChatMode.DIAGNOSE, ChatMode.VERIFY_PROMPT);
       } else if (id.startsWith(OFFER)) {
@@ -581,6 +586,7 @@ public class ChatView extends ViewPart {
     chatProject = null;
     chatAuto = null;
     contextModel = null;
+    continueMode = null;
     transcript.clear();
     refreshCost();
     refreshContext();
@@ -859,6 +865,10 @@ public class ChatView extends ViewPart {
               if (drafted > 0) {
                 appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
                     + ". Review the diffs below; nothing is written until you accept.");
+              }
+              if (result.stoppedAtLimit()) {
+                continueMode = mode;
+                transcript.action("Continue: let the AI carry on from where it paused", CONTINUE);
               }
               if (checkFixAfter && drafted > 0) {
                 transcript.action("After you accept and Studio redeploys, check the fix in Diagnose mode",

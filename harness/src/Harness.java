@@ -10,6 +10,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -213,6 +214,7 @@ public class Harness {
       case "check-munit" -> MunitOfflineChecks.run();
       case "check-stream" -> StreamChecks.run();
       case "check-context" -> ContextChecks.run();
+      case "check-loop" -> LoopChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -414,7 +416,7 @@ public class Harness {
     failed += check("Ask/Plan offer the same tools as Agent, so the prompt cache survives a mode switch",
         readOnly.specifications().equals(tools.specifications()));
     failed += expect(readOnly, "write_file", "{\"path\":\"src/x.xml\",\"content\":\"x\"}",
-        "ERROR: this mode cannot change files");
+        ChatMode.REFUSED + " This mode cannot change files");
     failed += expect(readOnly, "offer_changes", "{\"items\":[]}", "ERROR: items must be");
     failed += expect(readOnly, "offer_changes", "{\"items\":[{\"files\":[\"pom.xml\"]}]}", "ERROR: every item");
     failed += expect(readOnly, "offer_changes", "{\"items\":[{\"title\":\"Fix the classifier\",\"files\":[\"pom.xml\"]},"
@@ -1590,6 +1592,7 @@ public class Harness {
           writeErrors.add(e);
         }
       });
+      ChatSession.retryWaits(Duration.ofMillis(10), Duration.ofMillis(10));
       try {
         session.send(ChatModels.create(connection, second), ChatMode.ASK, "again", List.of(), null, Progress.NONE);
       } catch (Exception expected) {
@@ -1601,8 +1604,8 @@ public class Harness {
           && failedCall.error() != null && failedCall.heading().contains("HTTP 500 ") );
 
       List<RawCapture.Call> loaded = raw.load(id);
-      failed += check("jsonl round trip", loaded.size() == 2 && loaded.get(0).equals(call)
-          && loaded.get(1).turn() == 2);
+      failed += check("jsonl round trip, with each retry of the failed call", loaded.size() == 2 + 3
+          && loaded.get(0).equals(call) && loaded.subList(1, loaded.size()).stream().allMatch(c -> c.turn() == 2));
       String readable = Files.readString(raw.writeReadable(id));
       failed += check("readable view", readable.contains("===== Turn 1 · Step 1 · POST ")
           && readable.contains("===== Turn 2 · Step 1 · POST ") && readable.contains("\"content\" : \"pong from stub\""));

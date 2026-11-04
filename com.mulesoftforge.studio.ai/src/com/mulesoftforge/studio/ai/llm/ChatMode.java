@@ -3,9 +3,10 @@ package com.mulesoftforge.studio.ai.llm;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-// How the AI works on a message. Ask, Plan and Diagnose only get read tools (and offer_changes), so they cannot
-// propose changes. canChangeApp lets call_endpoint send requests that change data to the app running on this
-// machine. Each mode's prompt is prompts/<name>.md.
+// How the AI works on a message. Every mode is offered the same tools, so a mode switch keeps the prompt cache;
+// the tools refuse what the mode does not allow (see refused). canEdit lets edit_file and write_file propose
+// changes; canChangeApp lets the AI start and stop the app, run MUnit tests and send requests that change data to
+// the app running on this machine. Each mode's prompt is prompts/<name>.md.
 public enum ChatMode {
   ASK("Ask", "Answers and explains. Never changes files; can suggest fixes for Agent mode to make.", false, false),
   AGENT("Agent", "Reads the project and proposes changes for you to review.", true, true),
@@ -14,6 +15,12 @@ public enum ChatMode {
       + " Never changes files, but can send any request to the app running in Studio. Fix it in Agent mode"
       + " afterwards.", false, true);
 
+  // Starts every result of a call the mode does not allow. It is not a failure of the call, so the model should
+  // not retry or rework it (Cline's TOOL_REJECTION_SUFFIX), and it is not counted as one.
+  public static final String REFUSED = "NOT RUN IN THIS MODE (not a failure of your call; do not retry it):";
+  // Used when a turn stopped at the step limit and the user chose to continue.
+  public static final String CONTINUE_PROMPT = "Continue from where you stopped. Do not redo the steps you already"
+      + " finished.";
   // Used when a plan came back without offer_changes.
   public static final String BUILD_PLAN_PROMPT = "Build the plan above. Propose all the changes it lists.";
   // Used when an answer suggested project code but did not call offer_changes.
@@ -42,6 +49,12 @@ public enum ChatMode {
     this.description = description;
     this.canEdit = canEdit;
     this.canChangeApp = canChangeApp;
+  }
+
+  // what: the action and the mode that can do it, e.g. "Ask mode cannot change files; Agent mode can.".
+  public static String refused(String what) {
+    return REFUSED + " " + what + " Answer within this mode, and tell the user which mode to switch to if they want"
+        + " it done.";
   }
 
   public static ChatMode fromName(String name) {
