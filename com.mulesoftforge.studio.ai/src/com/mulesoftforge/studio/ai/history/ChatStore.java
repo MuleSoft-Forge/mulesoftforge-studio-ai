@@ -90,7 +90,7 @@ public final class ChatStore {
   public synchronized void rename(String id, String title) throws IOException {
     ChatRecord r = load(id);
     save(new ChatRecord(r.schema(), r.id(), title.strip(), r.project(), r.created(), r.updated(), r.entries(),
-        r.history(), r.cost(), r.pending()));
+        r.history(), r.cost(), r.pending(), r.auto()));
   }
 
   public synchronized void delete(String id) throws IOException {

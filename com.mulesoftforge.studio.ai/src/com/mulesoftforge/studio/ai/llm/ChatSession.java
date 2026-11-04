@@ -198,6 +198,7 @@ public class ChatSession {
   private volatile MunitRunner munitRunner;
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
+  private volatile String switchedFrom;
   private volatile List<String> docsHosts = List.of();
   // Only one send at a time per session; serialises turn starts without holding the monitor across I/O.
   private final Object sendGate = new Object();
@@ -256,6 +257,11 @@ public class ChatSession {
         listener.accept(late);
       }
     };
+  }
+
+  // Auto moved this chat from that model to another; the next message says so, once.
+  public void modelChanged(String from) {
+    switchedFrom = from;
   }
 
   // The user's own instructions from Preferences, sent with every message.
@@ -407,9 +413,13 @@ public class ChatSession {
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
-    Prompts.SystemParts system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
+    Prompts.SystemParts built = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
         fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
         fromHttp.text());
+    String from = switchedFrom;
+    switchedFrom = null;
+    Prompts.SystemParts system = from == null ? built
+        : new Prompts.SystemParts(built.shared(), built.perRequest().strip() + "\n\n" + Prompts.modelSwitch(from));
     UserMessage message = current(system, text, images);
 
     List<ChatMessage> past;

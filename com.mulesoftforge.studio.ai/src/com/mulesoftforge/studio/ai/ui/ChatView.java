@@ -119,6 +119,8 @@ public class ChatView extends ViewPart {
   private String chatTitle;
   private String chatCreated;
   private String chatProject;
+  // The model Auto used for this chat's last message.
+  private String chatAuto;
   private final List<ChatRecord.Entry> entries = new ArrayList<>();
   private boolean replaying;
   // Messages sent in this chat; raw log calls carry the number of the turn they belong to.
@@ -574,6 +576,7 @@ public class ChatView extends ViewPart {
     chatTitle = null;
     chatCreated = null;
     chatProject = null;
+    chatAuto = null;
     transcript.clear();
     refreshCost();
   }
@@ -599,7 +602,7 @@ public class ChatView extends ViewPart {
     }
     ChatRecord record = new ChatRecord(ChatRecord.SCHEMA, chatId, chatTitle, chatProject, chatCreated,
         Instant.now().toString(), new ArrayList<>(entries), session.savedHistory(), chatCost.snapshot(),
-        changes.size());
+        changes.size(), chatAuto);
     if (pendingSave != null) {
       pendingSave.cancel();
     }
@@ -647,6 +650,7 @@ public class ChatView extends ViewPart {
     chatTitle = record.title();
     chatCreated = record.created();
     chatProject = record.project();
+    chatAuto = record.auto();
     replaying = true;
     try {
       for (ChatRecord.Entry entry : record.entries()) {
@@ -728,7 +732,11 @@ public class ChatView extends ViewPart {
         attachments.addAll(diagnoseContext(project, attachments));
       }
       if (AutoRouter.isAuto(model)) {
-        auto = AutoRouter.choose(mode, prompt, attachments, fix != null, AiSettings.autoModels(provider));
+        auto = AutoRouter.choose(mode, prompt, attachments, fix != null, AiSettings.autoModels(provider), chatAuto);
+        if (chatAuto != null && !chatAuto.equals(auto.model())) {
+          session.modelChanged(chatAuto);
+        }
+        chatAuto = auto.model();
       }
       showModel = auto != null || model.endsWith("/auto");
     } catch (Exception e) {

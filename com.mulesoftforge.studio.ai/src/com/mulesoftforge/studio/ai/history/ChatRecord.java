@@ -6,10 +6,11 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 
 // One saved chat. entries is what the transcript showed; history is the compact model memory used to
-// resume. Open-file contents and proposal bodies are deliberately not stored.
+// resume. Open-file contents and proposal bodies are deliberately not stored. auto is the model Auto last used
+// in this chat, null when it never did.
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ChatRecord(int schema, String id, String title, String project, String created, String updated,
-    List<Entry> entries, List<Message> history, CostMeter.Snapshot cost, int pending) {
+    List<Entry> entries, List<Message> history, CostMeter.Snapshot cost, int pending, String auto) {
 
   public static final int SCHEMA = 1;
 

@@ -90,7 +90,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  *   java Harness test-connection [provider...]
  *   java Harness list-models [provider...]
- *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
+ *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] "prompt"
  *   java Harness check-tools
  *   java Harness check-mule
  *   java Harness check-project /path/to/mule-app [studio-workspace]
@@ -102,6 +102,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 public class Harness {
   private static final Path ENV = Path.of("..").resolve(".env").toAbsolutePath().normalize();
   private static String modelOverride;
+  private static AutoRouter.Models autoPair;
   private static final String IMAGE_SPEC = "image:";
   private static ChatMode mode = ChatMode.AGENT;
   private static final Path DEFAULT_WORKSPACE = Path.of(System.getProperty("user.home"),
@@ -160,6 +161,10 @@ public class Harness {
             case "--workspace" -> workspace = Path.of(args[++i]);
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
             case "--then" -> then.add(args[++i]);
+            case "--auto" -> {
+              String[] pair = args[++i].split(",", 2);
+              autoPair = new AutoRouter.Models(pair[0], pair[1]);
+            }
             default -> throw new IllegalArgumentException("Unknown flag: " + args[i]);
           }
           i++;
@@ -334,16 +339,18 @@ public class Harness {
       }
     };
     ChatSession session = new ChatSession();
-    ChatSession.Turn turn = session.send(ChatModels.create(connection), mode, prompt, attachments, project,
-        progress);
+    String[] autoModel = {null};
+    ChatSession.Turn turn = session.send(modelFor(connection, session, mode, prompt, attachments, autoModel), mode,
+        prompt, attachments, project, progress);
     System.out.println(turn.text());
     // --then mode:prompt runs another turn in the same chat, attaching the same files again as Studio does.
     for (String next : then) {
       int colon = next.indexOf(':');
       ChatMode nextMode = ChatMode.valueOf(next.substring(0, colon).toUpperCase(Locale.ROOT));
-      System.out.println("\nTHEN  " + nextMode + "  " + next.substring(colon + 1));
-      turn = session.send(ChatModels.create(connection), nextMode, next.substring(colon + 1), attachments, project,
-          progress);
+      String nextPrompt = next.substring(colon + 1);
+      System.out.println("\nTHEN  " + nextMode + "  " + nextPrompt);
+      turn = session.send(modelFor(connection, session, nextMode, nextPrompt, attachments, autoModel), nextMode,
+          nextPrompt, attachments, project, progress);
       System.out.println(turn.text());
     }
     System.out.println("\nCOST  " + meter.summary());
@@ -1353,6 +1360,21 @@ public class Harness {
     return new ObjectMapper().writeValueAsString(value);
   }
 
+  // With --auto fast,strong, each turn's model is chosen as ChatView does; previous[0] carries it between turns.
+  private static ChatModel modelFor(Connection connection, ChatSession session, ChatMode mode, String prompt,
+      List<Attachment> attachments, String[] previous) {
+    if (autoPair == null) {
+      return ChatModels.create(connection);
+    }
+    AutoRouter.Choice choice = AutoRouter.choose(mode, prompt, attachments, false, autoPair, previous[0]);
+    if (previous[0] != null && !previous[0].equals(choice.model())) {
+      session.modelChanged(previous[0]);
+    }
+    previous[0] = choice.model();
+    System.out.println("  · Auto picked " + choice.model() + ": " + choice.reason());
+    return ChatModels.create(connection.withModel(choice.model()));
+  }
+
   private static int maxCompletionTokens(String body) {
     try {
       return new ObjectMapper().readTree(body).path("max_completion_tokens").asInt(-1);
@@ -1438,7 +1460,7 @@ public class Harness {
         "employees-app", now, now,
         List.of(new ChatRecord.Entry("You", "hello"), new ChatRecord.Entry("AI", "```xml\n<flow/>\n```"),
             new ChatRecord.Entry("Step", "Done in 3 s")),
-        session.savedHistory(), meter.snapshot(), 1);
+        session.savedHistory(), meter.snapshot(), 1, "strong-model");
     store.save(record);
     ledger.append(id, "employees-app", "OPENAI", cost);
 
@@ -1455,6 +1477,8 @@ public class Harness {
         && store.list().size() == 1);
     store.rename(id, "Renamed");
     failed += check("rename", store.list().get(0).title().equals("Renamed") && store.load(id).title().equals("Renamed"));
+    failed += check("Auto's model is kept with the chat, also after a rename",
+        loaded.auto().equals("strong-model") && store.load(id).auto().equals("strong-model"));
     String md = ChatStore.toMarkdown(store.load(id));
     failed += check("markdown export", md.startsWith("# Renamed") && md.contains("## AI") && md.contains("<flow/>"));
     failed += check("rejects path-like ids", rejects(() -> store.load("../secret")));
@@ -1725,6 +1749,21 @@ public class Harness {
         new AutoRouter.Models("m", "m")).fallback() == null);
     failed += check("unset models are explained", rejectsState(() -> AutoRouter.choose(ChatMode.ASK, "hi", none, false,
         new AutoRouter.Models("", "strong-model"))));
+    failed += check("a fast chat stays fast for a plain follow-up", AutoRouter.choose(ChatMode.ASK, "what is a flow",
+        none, false, pair, "fast-model").model().equals("fast-model"));
+    failed += check("a fast chat moves to strong in Agent mode", AutoRouter.choose(ChatMode.AGENT, "hi", none, false,
+        pair, "fast-model").model().equals("strong-model"));
+    failed += check("a fast chat moves to strong when an image is attached", AutoRouter.choose(ChatMode.ASK,
+        "what is this", List.of(Attachment.image("shot.png", 10, 10, "image/png", new byte[] {1, 2, 3})), false, pair,
+        "fast-model")
+        .model().equals("strong-model"));
+    AutoRouter.Choice kept = AutoRouter.choose(ChatMode.ASK, "what is a flow", none, false, pair, "strong-model");
+    failed += check("a strong chat never goes back to fast", kept.model().equals("strong-model")
+        && "fast-model".equals(kept.fallback()) && kept.reason().startsWith("kept for this chat"));
+    failed += check("a strong chat stays strong for a run request", AutoRouter.choose(ChatMode.AGENT, "run tests",
+        none, false, pair, "strong-model").model().equals("strong-model"));
+    failed += check("a model no longer in Preferences is chosen afresh", AutoRouter.choose(ChatMode.ASK,
+        "what is a flow", none, false, pair, "old-model").model().equals("fast-model"));
     failed += check("Auto is first-class in the picker", ModelLists.suggestionsOnly(Provider.ANTHROPIC, "claude-sonnet-4-6")
         .contains(AutoRouter.AUTO));
     failed += check("defaults for every provider", Arrays.stream(Provider.values())
@@ -1741,12 +1780,14 @@ public class Harness {
     failed += check("cancel is not retryable", !AutoRouter.retryable(new CancellationException("c")));
 
     List<String> asked = new ArrayList<>();
+    List<String> sentBodies = new ArrayList<>();
     int[] badRequest = {0};
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/v1/chat/completions", exchange -> {
       String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
       String model = body.contains("\"fast-model\"") ? "fast-model" : "strong-model";
       asked.add(model);
+      sentBodies.add(body);
       int status = badRequest[0] == 1 ? 400 : model.equals("fast-model") ? 503 : 200;
       byte[] reply = (status != 200 ? "{\"error\":{\"message\":\"nope\"}}"
           : "{\"id\":\"x\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"strong-model\","
@@ -1795,6 +1836,20 @@ public class Harness {
       }
       failed += check("400 does not move to the other model", threw && !asked.isEmpty()
           && asked.stream().allMatch("fast-model"::equals));
+
+      badRequest[0] = 0;
+      sentBodies.clear();
+      ChatSession switched = new ChatSession();
+      List<AutoRouter.Option> strongOnly = List.of(options.get(1));
+      AutoRouter.send(switched, strongOnly, ChatMode.ASK, "first", List.of(), null, progress);
+      switched.modelChanged("fast-model");
+      AutoRouter.send(switched, strongOnly, ChatMode.AGENT, "second", List.of(), null, progress);
+      AutoRouter.send(switched, strongOnly, ChatMode.AGENT, "third", List.of(), null, progress);
+      failed += check("the model change is told once, with the message after it", sentBodies.size() == 3
+          && !sentBodies.get(0).contains("Model change:")
+          && sentBodies.get(1).contains("Model change: the earlier answers in this chat came from another model"
+              + " (fast-model)")
+          && !sentBodies.get(2).contains("Model change:"));
     } finally {
       server.stop(0);
     }
@@ -2481,7 +2536,7 @@ public class Harness {
         Usage:
           java Harness test-connection [provider...]
           java Harness list-models [provider...]
-          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--project dir [--apply]] "prompt"
+          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
           java Harness check-munit

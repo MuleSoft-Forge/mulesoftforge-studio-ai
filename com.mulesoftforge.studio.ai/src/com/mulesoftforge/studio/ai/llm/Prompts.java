@@ -60,6 +60,11 @@ public final class Prompts {
     return FOR_REQUEST + " (from MuleSoftForge Studio AI):\n" + perRequest.strip() + "\nEND OF INSTRUCTIONS\n\n";
   }
 
+  public static String modelSwitch(String from) {
+    return "Model change: the earlier answers in this chat came from another model (" + from + "). You answer"
+        + " from now on. Treat what it said as context, and check a claim before you build on it.";
+  }
+
   public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
       String userInstructions, boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata,
       String httpInstructions) {
