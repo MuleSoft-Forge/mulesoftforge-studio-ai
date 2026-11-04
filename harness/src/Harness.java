@@ -215,6 +215,7 @@ public class Harness {
       case "check-stream" -> StreamChecks.run();
       case "check-context" -> ContextChecks.run();
       case "check-loop" -> LoopChecks.run();
+      case "check-cache" -> CacheChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =

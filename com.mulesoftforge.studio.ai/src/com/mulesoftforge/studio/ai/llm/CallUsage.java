@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.llm;
 
 import dev.langchain4j.model.anthropic.AnthropicTokenUsage;
+import dev.langchain4j.model.bedrock.BedrockTokenUsage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.openai.OpenAiTokenUsage;
 import dev.langchain4j.model.output.TokenUsage;
@@ -27,6 +28,11 @@ public record CallUsage(String model, long uncachedInput, long cacheRead, long c
     if (usage instanceof AnthropicTokenUsage anthropic) {
       return new CallUsage(model, input, n(anthropic.cacheReadInputTokens()),
           n(anthropic.cacheCreationInputTokens()), output, 0, reportedCost);
+    }
+    // So does Bedrock's Converse API.
+    if (usage instanceof BedrockTokenUsage bedrock) {
+      return new CallUsage(model, input, n(bedrock.cacheReadInputTokens()), n(bedrock.cacheWriteInputTokens()),
+          output, 0, reportedCost);
     }
     // OpenAI-compatible APIs count cached tokens inside prompt_tokens.
     if (usage instanceof OpenAiTokenUsage openAi) {

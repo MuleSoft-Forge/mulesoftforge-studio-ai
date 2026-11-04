@@ -3,8 +3,6 @@ package com.mulesoftforge.studio.ai.llm;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.TreeSet;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,13 +17,8 @@ public final class ChatCompletions {
 
   private ChatCompletions() {}
 
-  // Claude caches a request prefix only up to a block marked cache_control, and OpenAI-format gateways in front of
-  // Claude pass the marker through. Marked (Claude allows four): the first system message; the history up to the
-  // latest user message, which the next turn sends unchanged (each turn goes into history as it was sent, so the
-  // previous turn's attachments and tool traffic are read from the cache too); the latest user message, which every
-  // tool round of this turn sends
-  // again; and the latest tool result, so the next round reads this round's calls and results from the cache too.
-  // Anything else is returned as it came.
+  // OpenAI-format gateways in front of Claude pass cache_control through; the marks are CacheMarks'. Anything else is
+  // returned as it came.
   public static String withCacheBreakpoints(String body) {
     if (body == null || !body.contains("\"messages\"") || body.contains("cache_control")) {
       return body;
@@ -36,33 +29,15 @@ public final class ChatCompletions {
           || !(request.get("messages") instanceof ArrayNode messages) || messages.isEmpty()) {
         return body;
       }
-      List<Integer> users = new ArrayList<>();
-      for (int i = 0; i < messages.size(); i++) {
-        JsonNode message = messages.get(i);
-        if ("user".equals(message.path("role").asText()) && message.path("content").isTextual()) {
-          users.add(i);
-        }
-      }
-      Set<Integer> marks = new TreeSet<>();
-      if ("system".equals(messages.get(0).path("role").asText())) {
-        marks.add(0);
-      }
-      if (!users.isEmpty()) {
-        int settled = users.get(users.size() - 1) - 1;
-        if (settled > 0 && !"system".equals(messages.get(settled).path("role").asText())) {
-          marks.add(settled);
-        }
-      }
-      if (!users.isEmpty()) {
-        marks.add(users.get(users.size() - 1));
-      }
-      int last = messages.size() - 1;
-      if ("tool".equals(messages.get(last).path("role").asText())
-          && (users.isEmpty() || last > users.get(users.size() - 1))) {
-        marks.add(last);
+      List<CacheMarks.Kind> kinds = new ArrayList<>();
+      for (JsonNode message : messages) {
+        String role = message.path("role").asText();
+        kinds.add("system".equals(role) ? CacheMarks.Kind.SYSTEM
+            : "user".equals(role) && message.path("content").isTextual() ? CacheMarks.Kind.USER
+            : "tool".equals(role) ? CacheMarks.Kind.TOOL : CacheMarks.Kind.OTHER);
       }
       int marked = 0;
-      for (int i : marks) {
+      for (int i : CacheMarks.chosen(kinds)) {
         if (messages.get(i) instanceof ObjectNode message && message.path("content").isTextual()
             && !message.path("content").asText().isEmpty()) {
           ArrayNode parts = JSON.createArrayNode();

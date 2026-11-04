@@ -6,6 +6,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.function.UnaryOperator;
 
 import dev.langchain4j.model.ModelProvider;
 import dev.langchain4j.model.chat.Capability;
@@ -23,10 +24,17 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 // so tools only ever run from finished calls, and what arrives meanwhile is reported to the turn's Progress.
 final class StreamingChat implements ChatModel {
   private final StreamingChatModel streaming;
+  // Applied to each request before it is sent, e.g. to add cache marks.
+  private final UnaryOperator<ChatRequest> prepare;
   private volatile Progress progress = Progress.NONE;
 
   StreamingChat(StreamingChatModel streaming) {
+    this(streaming, UnaryOperator.identity());
+  }
+
+  StreamingChat(StreamingChatModel streaming, UnaryOperator<ChatRequest> prepare) {
     this.streaming = streaming;
+    this.prepare = prepare;
   }
 
   void progress(Progress progress) {
@@ -37,7 +45,7 @@ final class StreamingChat implements ChatModel {
   public ChatResponse chat(ChatRequest request) {
     CompletableFuture<ChatResponse> done = new CompletableFuture<>();
     Progress shown = progress;
-    streaming.chat(request, new StreamingChatResponseHandler() {
+    streaming.chat(prepare.apply(request), new StreamingChatResponseHandler() {
       private String state;
       private int toolIndex = -1;
 

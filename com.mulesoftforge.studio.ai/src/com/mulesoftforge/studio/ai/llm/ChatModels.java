@@ -30,6 +30,7 @@ import software.amazon.awssdk.auth.token.credentials.StaticTokenProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClientBuilder;
+import software.amazon.awssdk.services.bedrockruntime.auth.scheme.BedrockRuntimeAuthSchemeProvider;
 
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
@@ -37,6 +38,8 @@ public final class ChatModels {
   private static final String AZURE_API_VERSION = "2024-10-21";
 
   private record BedrockKey(String region, String apiKey) {}
+
+  private static final String BEARER_AUTH = "smithy.api#httpBearerAuth";
 
   private static final ConcurrentHashMap<BedrockKey, BedrockRuntimeClient> BEDROCK = new ConcurrentHashMap<>();
 
@@ -88,11 +91,12 @@ public final class ChatModels {
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxTokens(MAX_OUTPUT_TOKENS)
+          // Tools come before the system prompt, so its mark caches them too; a separate tools mark would be a
+          // fifth, and Anthropic rejects more than four.
           .cacheSystemMessages(true)
-          .cacheTools(true)
           .timeout(TIMEOUT)
           .listeners(listeners)
-          .build());
+          .build(), CacheMarks::anthropic);
       case GOOGLE_AI_GEMINI -> new StreamingChat(GoogleAiGeminiStreamingChatModel.builder()
           .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
@@ -142,16 +146,24 @@ public final class ChatModels {
 
   private static BedrockRuntimeClient bedrockClient(String regionId, String apiKey) {
     BedrockKey key = new BedrockKey(regionId, apiKey);
-    return BEDROCK.computeIfAbsent(key, k -> {
-      BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(Region.of(k.region()));
-      if (!k.apiKey().isEmpty()) {
-        SdkToken token = () -> k.apiKey();
-        client.tokenProvider(StaticTokenProvider.create(token));
-      } else {
-        client.credentialsProvider(DefaultCredentialsProvider.create());
-      }
-      return client.build();
-    });
+    return BEDROCK.computeIfAbsent(key, k -> bedrockClientBuilder(k.region(), k.apiKey()).build());
+  }
+
+  // Public for the harness, which points it at a local endpoint.
+  public static BedrockRuntimeClientBuilder bedrockClientBuilder(String regionId, String apiKey) {
+    BedrockRuntimeClientBuilder client = BedrockRuntimeClient.builder().region(Region.of(regionId))
+        .overrideConfiguration(c -> c.addExecutionInterceptor(CacheMarks.bedrock()));
+    if (!apiKey.isEmpty()) {
+      SdkToken token = () -> apiKey;
+      client.tokenProvider(StaticTokenProvider.create(token));
+      // Otherwise the SDK offers SigV4 first and signs with any AWS credentials it finds (~/.aws) instead.
+      BedrockRuntimeAuthSchemeProvider schemes = BedrockRuntimeAuthSchemeProvider.defaultProvider();
+      client.authSchemeProvider(params -> schemes.resolveAuthScheme(params).stream()
+          .filter(option -> BEARER_AUTH.equals(option.schemeId())).toList());
+    } else {
+      client.credentialsProvider(DefaultCredentialsProvider.create());
+    }
+    return client;
   }
 
   // Closes cached Bedrock clients. Called when network settings change and on plugin stop.
