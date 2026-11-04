@@ -388,13 +388,6 @@ public class ChatSession {
     boolean metadata = wantsMetadata(prompt, attachments) && project != null;
     text = Prompts.extras(munit, metadata) + notes + text;
     savedText = notes + savedText;
-    UserMessage textOnly = UserMessage.from(text);
-    UserMessage message = textOnly;
-    if (!images.isEmpty()) {
-      List<Content> parts = new ArrayList<>(images);
-      parts.add(TextContent.from(text));
-      message = UserMessage.from(parts);
-    }
     int maskedInMessage = secrets.total() - maskedBefore;
     if (maskedInMessage > 0) {
       progress.step("Hid " + maskedInMessage + (maskedInMessage == 1 ? " secret value" : " secret values")
@@ -418,6 +411,7 @@ public class ChatSession {
     Prompts.SystemParts system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
         fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
         fromHttp.text());
+    UserMessage message = current(system, text, images);
 
     List<ChatMessage> past;
     boolean firstTurn;
@@ -479,7 +473,6 @@ public class ChatSession {
     for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system.shared()));
-      messages.add(SystemMessage.from(system.perRequest()));
       messages.addAll(past);
       messages.addAll(turn);
       ChatRequest.Builder request = ChatRequest.builder().messages(messages);
@@ -598,6 +591,7 @@ public class ChatSession {
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(), fromUser.text(),
             true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text());
+        turn.set(0, current(system, text, images));
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }
       if (truncated != null && cutOffs >= MAX_CUT_OFFS) {
@@ -624,14 +618,10 @@ public class ChatSession {
     remembered += "\n\n[What you did this turn: "
         + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, 0).activity() + "]";
     // Every request resends the whole history, and attachments (the open file, console) come again with each new
-    // turn. The last turn keeps its attached text for follow-ups; older turns keep only what was attached.
-    // Images are dropped from history at once.
+    // turn, so history keeps only what was attached; the tools can read a file again. Unchanged history is what
+    // lets the next turn read all of it from Claude's prompt cache.
     synchronized (this) {
-      int previous = history.size() - 2;
-      if (previous >= 0 && history.get(previous) instanceof UserMessage) {
-        history.set(previous, UserMessage.from(saved.get(previous).text()));
-      }
-      history.add(textOnly);
+      history.add(UserMessage.from(savedText));
       history.add(AiMessage.from(remembered));
       saved.add(new ChatRecord.Message("user", savedText));
       saved.add(new ChatRecord.Message("ai", remembered));
@@ -639,6 +629,16 @@ public class ChatSession {
     }
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+  }
+
+  private static UserMessage current(Prompts.SystemParts system, String text, List<ImageContent> images) {
+    String full = Prompts.forRequest(system.perRequest()) + text;
+    if (images.isEmpty()) {
+      return UserMessage.from(full);
+    }
+    List<Content> parts = new ArrayList<>(images);
+    parts.add(TextContent.from(full));
+    return UserMessage.from(parts);
   }
 
   static String cutOffStop(boolean proposed) {

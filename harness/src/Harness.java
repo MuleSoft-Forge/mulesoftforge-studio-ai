@@ -78,6 +78,7 @@ import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -144,6 +145,7 @@ public class Harness {
         Path project = null;
         boolean apply = false;
         List<String> attach = new ArrayList<>();
+        List<String> then = new ArrayList<>();
         int i = 1;
         while (i < args.length && args[i].startsWith("--")) {
           switch (args[i]) {
@@ -157,6 +159,7 @@ public class Harness {
             case "--model" -> modelOverride = args[++i];
             case "--workspace" -> workspace = Path.of(args[++i]);
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
+            case "--then" -> then.add(args[++i]);
             default -> throw new IllegalArgumentException("Unknown flag: " + args[i]);
           }
           i++;
@@ -166,7 +169,7 @@ public class Harness {
           System.exit(2);
         }
         String prompt = String.join(" ", Arrays.copyOfRange(args, i, args.length));
-        chat(env, provider, file, project, attach, apply, prompt);
+        chat(env, provider, file, project, attach, apply, prompt, then);
       }
       case "check-tools" -> checkTools();
       case "check-mule" -> checkMule();
@@ -272,7 +275,7 @@ public class Harness {
   }
 
   private static void chat(Map<String, String> env, String name, Path file, Path projectDir, List<String> attach,
-      boolean apply, String prompt) throws Exception {
+      boolean apply, String prompt, List<String> then) throws Exception {
     Provider provider = parseProvider(name);
     Connection connection = connectionFor(env, provider);
     if (modelOverride != null) {
@@ -321,7 +324,8 @@ public class Harness {
         Pricing.CallCost cost = Pricing.cost(provider, usage);
         meter.add(cost);
         System.out.println("  · Model answered in " + seconds + " s · " + usage.model() + " · "
-            + CostMeter.describe(cost) + " [" + cost.basis().label + "]");
+            + CostMeter.describe(cost) + " [" + cost.basis().label + "] · input " + usage.uncachedInput()
+            + " uncached, " + usage.cacheRead() + " cache read, " + usage.cacheWrite() + " cache write");
       }
 
       @Override
@@ -329,9 +333,19 @@ public class Harness {
         return false;
       }
     };
-    ChatSession.Turn turn = new ChatSession().send(ChatModels.create(connection), mode, prompt, attachments, project,
+    ChatSession session = new ChatSession();
+    ChatSession.Turn turn = session.send(ChatModels.create(connection), mode, prompt, attachments, project,
         progress);
     System.out.println(turn.text());
+    // --then mode:prompt runs another turn in the same chat, attaching the same files again as Studio does.
+    for (String next : then) {
+      int colon = next.indexOf(':');
+      ChatMode nextMode = ChatMode.valueOf(next.substring(0, colon).toUpperCase(Locale.ROOT));
+      System.out.println("\nTHEN  " + nextMode + "  " + next.substring(colon + 1));
+      turn = session.send(ChatModels.create(connection), nextMode, next.substring(colon + 1), attachments, project,
+          progress);
+      System.out.println(turn.text());
+    }
     System.out.println("\nCOST  " + meter.summary());
     if (project == null) {
       return;
@@ -992,8 +1006,15 @@ public class Harness {
     failed += check("older turns keep the attachment label, not its text", third.size() == 3
         && third.get(0).startsWith("[Attached at the time: open file a.xml") && !third.get(0).contains(openXml)
         && third.get(0).endsWith("one"));
-    failed += check("the previous and current turns keep the attached text", third.get(1).contains(openXml)
-        && third.get(2).contains(openXml));
+    failed += check("the previous turn also keeps only the label, so the next turn's history is unchanged",
+        third.get(1).startsWith("[Attached at the time: open file a.xml") && !third.get(1).contains(openXml)
+            && third.get(2).contains(openXml));
+    failed += check("only the current message carries the request instructions",
+        third.get(2).startsWith("INSTRUCTIONS FOR THIS REQUEST") && !third.get(0).contains("INSTRUCTIONS FOR THIS")
+            && !third.get(1).contains("INSTRUCTIONS FOR THIS")
+            && requests.get(2).messages().stream().filter(SystemMessage.class::isInstance).count() == 1);
+    failed += check("the next turn resends this turn's history unchanged, so it is read from the cache",
+        requests.get(2).messages().subList(0, 3).equals(requests.get(1).messages().subList(0, 3)));
 
     String completion = """
         {"model":"claude-opus-5-5","messages":[{"role":"system","content":"rules"},
@@ -1008,9 +1029,9 @@ public class Harness {
         breakpoints.add(i);
       }
     }
-    failed += check("cache breakpoints: system, settled history, latest user message, latest tool result "
-        + breakpoints, breakpoints.equals(List.of(0, 2, 5, 7))
-            && marked.get(2).path("content").path(0).path("text").asText().equals("a1")
+    failed += check("cache breakpoints: system, history before the latest user message, that message, latest tool"
+        + " result " + breakpoints, breakpoints.equals(List.of(0, 4, 5, 7))
+            && marked.get(4).path("content").path(0).path("text").asText().equals("a2")
             && marked.get(7).path("content").path(0).path("text").asText().equals("result")
             && marked.get(7).path("tool_call_id").asText().equals("t"));
     JsonNode firstRound = new ObjectMapper().readTree(ChatCompletions.withCacheBreakpoints(
@@ -2146,7 +2167,9 @@ public class Harness {
       bodies.clear();
       steps.clear();
       new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Hi", List.of(), null, progress);
-      failed += check("no project, no instructions: built-in prompt only", !bodies.get(0).contains("INSTRUCTIONS")
+      failed += check("no project, no instructions: built-in prompt only",
+          !bodies.get(0).contains("PROJECT INSTRUCTIONS") && !bodies.get(0).contains("THE USER'S INSTRUCTIONS")
+          && !bodies.get(0).contains("The instructions below come from the user")
           && bodies.get(0).contains("copy the placeholder exactly")
           && steps.stream().noneMatch(s -> s.startsWith("Following")));
     } finally {
