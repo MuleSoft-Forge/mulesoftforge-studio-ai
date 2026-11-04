@@ -211,6 +211,7 @@ public class Harness {
       case "check-workspace" -> WorkspaceChecks.run();
       case "check-feedback" -> FeedbackChecks.run();
       case "check-munit" -> MunitOfflineChecks.run();
+      case "check-stream" -> StreamChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -320,9 +321,17 @@ public class Harness {
     }
     CostMeter meter = new CostMeter();
     Progress progress = new Progress() {
+      private long since = System.nanoTime();
+
       @Override
       public void step(String message) {
+        since = System.nanoTime();
         System.out.println("  · " + message);
+      }
+
+      @Override
+      public void receiving(String what) {
+        System.out.printf(Locale.ROOT, "  … %s (%.1f s)%n", what, (System.nanoTime() - since) / 1e9);
       }
 
       @Override
@@ -1366,7 +1375,7 @@ public class Harness {
   private static ChatModel modelFor(Connection connection, ChatSession session, ChatMode mode, String prompt,
       List<Attachment> attachments, String[] previous) {
     if (autoPair == null) {
-      return ChatModels.create(connection);
+      return ChatModels.create(connection, wire(connection));
     }
     AutoRouter.Choice choice = AutoRouter.choose(mode, prompt, attachments, false, autoPair, previous[0]);
     if (previous[0] != null && !previous[0].equals(choice.model())) {
@@ -1374,7 +1383,16 @@ public class Harness {
     }
     previous[0] = choice.model();
     System.out.println("  · Auto picked " + choice.model() + ": " + choice.reason());
-    return ChatModels.create(connection.withModel(choice.model()));
+    return ChatModels.create(connection.withModel(choice.model()), wire(connection));
+  }
+
+  // Prints the status and output cap of the request that finally went out, so a lowered cap shows in live runs.
+  private static RawCapture wire(Connection connection) {
+    return new RawCapture(0, connection.provider().name(), call -> {
+      if (call.http() != null) {
+        System.out.println("  · HTTP " + call.http().status() + ", output cap " + maxCompletionTokens(call.http().request()));
+      }
+    });
   }
 
   private static int maxCompletionTokens(String body) {
@@ -2016,7 +2034,7 @@ public class Harness {
       if (body.contains("Small output model")) {
         boolean tooBig = maxCompletionTokens(body) > 8192;
         status = tooBig ? 400 : 200;
-        reply = tooBig ? "{\"error\":{\"message\":\"max_completion_tokens is too large: 16384. This model supports at"
+        reply = tooBig ? "{\"error\":{\"message\":\"max_completion_tokens is too large. This model supports at"
             + " most 8192 completion tokens.\"}}" : textReply("Fits.");
       } else if (body.contains("Rewrite the flow")) {
         reply = body.contains("Proposed change to") ? textReply("Proposed the edit.")
@@ -2047,10 +2065,10 @@ public class Harness {
           null, Progress.NONE);
       smallChat.send(ChatModels.create(small), ChatMode.ASK, "Small output model again", List.of(), null,
           Progress.NONE);
-      failed += check("output cap: 16,384 asked first, 8,192 after the model refuses it, and from then on",
-          bodies.size() == 3 && maxCompletionTokens(bodies.get(0)) == 16384
-              && maxCompletionTokens(bodies.get(1)) == 8192 && maxCompletionTokens(bodies.get(2)) == 8192
-              && fits.text().equals("Fits."));
+      failed += check("output cap: 32,000 asked first, then 16,384 and 8,192 as the model refuses, and 8,192 from then on",
+          bodies.size() == 4 && maxCompletionTokens(bodies.get(0)) == 32000
+              && maxCompletionTokens(bodies.get(1)) == 16384 && maxCompletionTokens(bodies.get(2)) == 8192
+              && maxCompletionTokens(bodies.get(3)) == 8192 && fits.text().equals("Fits."));
       bodies.clear();
 
       Path root = Files.createTempDirectory("studio-ai-cut-off");

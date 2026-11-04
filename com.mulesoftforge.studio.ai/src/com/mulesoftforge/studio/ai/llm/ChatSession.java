@@ -493,6 +493,9 @@ public class ChatSession {
       progress.step(round == 0 ? "Waiting for the model…" : "Waiting for the model (step " + (round + 1) + ")…");
       long started = System.nanoTime();
       ReportedCost.take();
+      if (model instanceof StreamingChat streamed) {
+        streamed.progress(progress);
+      }
       ChatResponse response = model.chat(request.build());
       CallUsage usage = CallUsage.from(response, model.defaultRequestParameters().modelName(), ReportedCost.take());
       calls.add(usage);

@@ -15,15 +15,15 @@ import com.mulesoftforge.studio.ai.settings.Provider;
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.http.client.jdk.JdkHttpClient;
 import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
-import dev.langchain4j.model.anthropic.AnthropicChatModel;
+import dev.langchain4j.model.anthropic.AnthropicStreamingChatModel;
 import dev.langchain4j.model.azure.AzureOpenAiChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatRequestParameters;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
-import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
-import dev.langchain4j.model.ollama.OllamaChatModel;
-import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
+import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.token.credentials.SdkToken;
 import software.amazon.awssdk.auth.token.credentials.StaticTokenProvider;
@@ -33,7 +33,7 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClientBuilde
 
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
-  static final int MAX_OUTPUT_TOKENS = 16384;
+  static final int MAX_OUTPUT_TOKENS = 32000;
   private static final String AZURE_API_VERSION = "2024-10-21";
 
   private record BedrockKey(String region, String apiKey) {}
@@ -44,6 +44,12 @@ public final class ChatModels {
 
   public static ChatModel create(Connection connection) {
     return create(connection, null, null);
+  }
+
+  // How long a streamed reply may be silent before and after its response headers; for the harness.
+  public static void streamTimeouts(Duration start, Duration idle) {
+    DiagnosingHttpClient.STREAM_START = start;
+    DiagnosingHttpClient.STREAM_IDLE = idle;
   }
 
   public static ChatModel create(Connection connection, RawCapture capture) {
@@ -62,22 +68,21 @@ public final class ChatModels {
         : connection.apiKey();
     return switch (connection.provider().api) {
       case OPENAI_COMPATIBLE -> {
-        OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
+        OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder = OpenAiStreamingChatModel.builder()
             .httpClientBuilder(http(capture, inFlight))
             .baseUrl(connection.baseUrl())
             .apiKey(apiKey)
             .modelName(connection.model())
             .maxCompletionTokens(MAX_OUTPUT_TOKENS)
             .timeout(TIMEOUT)
-            .maxRetries(0)
             .listeners(listeners);
         Map<String, String> headers = gatewayHeaders(connection);
         if (!headers.isEmpty()) {
           builder.customHeaders(headers);
         }
-        yield builder.build();
+        yield new StreamingChat(builder.build());
       }
-      case ANTHROPIC -> AnthropicChatModel.builder()
+      case ANTHROPIC -> new StreamingChat(AnthropicStreamingChatModel.builder()
           .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
@@ -86,19 +91,17 @@ public final class ChatModels {
           .cacheSystemMessages(true)
           .cacheTools(true)
           .timeout(TIMEOUT)
-          .maxRetries(0)
           .listeners(listeners)
-          .build();
-      case GOOGLE_AI_GEMINI -> GoogleAiGeminiChatModel.builder()
+          .build());
+      case GOOGLE_AI_GEMINI -> new StreamingChat(GoogleAiGeminiStreamingChatModel.builder()
           .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .apiKey(apiKey)
           .modelName(connection.model())
           .maxOutputTokens(MAX_OUTPUT_TOKENS)
           .timeout(TIMEOUT)
-          .maxRetries(0)
           .listeners(listeners)
-          .build();
+          .build());
       case AZURE_OPENAI -> AzureOpenAiChatModel.builder()
           .endpoint(trimSlash(connection.baseUrl()))
           .apiKey(apiKey)
@@ -111,14 +114,13 @@ public final class ChatModels {
           .listeners(listeners)
           .build();
       case BEDROCK -> bedrock(connection, listeners);
-      case OLLAMA -> OllamaChatModel.builder()
+      case OLLAMA -> new StreamingChat(OllamaStreamingChatModel.builder()
           .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .modelName(connection.model())
           .timeout(TIMEOUT)
-          .maxRetries(0)
           .listeners(listeners)
-          .build();
+          .build());
     };
   }
 

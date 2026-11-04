@@ -20,6 +20,9 @@ public interface Progress {
     step("Model answered in " + seconds + " s");
   }
 
+  // What a streamed reply is doing now ("Thinking…", "Writing the answer…"); called when it changes.
+  default void receiving(String what) {}
+
   boolean isCancelled();
 
   default void checkCancelled() {

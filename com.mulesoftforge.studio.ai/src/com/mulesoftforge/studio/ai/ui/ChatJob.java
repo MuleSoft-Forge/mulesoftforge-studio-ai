@@ -193,6 +193,11 @@ public final class ChatJob extends Job {
       }
 
       @Override
+      public void receiving(String what) {
+        sub.subTask(what);
+      }
+
+      @Override
       public boolean isCancelled() {
         return sub.isCanceled() || Thread.currentThread().isInterrupted();
       }
