@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -427,6 +428,7 @@ public class Harness {
     failed += diskUntouched ? 0 : 1;
     System.out.println(changes.all().size() == 2 ? "PASS  2 proposed files" : "FAIL  expected 2 proposed files");
     failed += changes.all().size() == 2 ? 0 : 1;
+    failed += checkEdits();
 
     String openRouterKey = "sk-or-v1-" + "0123456789abcdef".repeat(4);
     String anthropicKey = "sk-ant-api03-" + "x".repeat(95);
@@ -2395,6 +2397,121 @@ public class Harness {
       out.append(text.charAt(i));
     }
     return out.append("\u001b[0m").toString();
+  }
+
+  // edit_file with a list of edits: partial failure, tolerant matching with re-indenting, renames, placeholders.
+  private static int checkEdits() throws Exception {
+    int failed = 0;
+    String flow = """
+        <mule xmlns="http://www.mulesoft.org/schema/mule/core">
+            <flow name="get-employee">
+                <http:listener config-ref="HTTP_Listener_config" path="/employees/{id}"/>
+                <db:select config-ref="Database_Config_SQ_Server" doc:name=“Select employee”>
+                    <db:sql>SELECT * FROM employees WHERE id = :id</db:sql>
+                </db:select>
+                <logger level="INFO" message="#[payload]"/>
+            </flow>
+            <flow name="delete-employee">
+                <db:delete config-ref="Database_Config_SQ_Server"/>
+            </flow>
+            <db:config name="Database_Config_SQ_Server"/>
+        </mule>
+        """;
+    String path = "src/main/mule/payroll.xml";
+    Path root = Files.createTempDirectory("studio-ai-edits");
+    Files.createDirectories(root.resolve("src/main/mule"));
+    Files.writeString(root.resolve(path), flow);
+    ObjectMapper json = new ObjectMapper();
+
+    ProjectTools tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    String both = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path, "edits", List.of(
+        Map.of("old_text", "<flow name=\"get-employee\">", "new_text", "<flow name=\"get-employee-by-id\">"),
+        Map.of("old_text", "level=\"INFO\"", "new_text", "level=\"DEBUG\"")))));
+    String after = run(tools, "read_file", "{\"path\":\"" + path + "\"}");
+    failed += check("two edits in one call are both applied", both.contains("2 of 2 edits applied.")
+        && both.contains("Proposed change to") && after.contains("get-employee-by-id")
+        && after.contains("level=\"DEBUG\""));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    String partial = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path, "edits", List.of(
+        Map.of("old_text", "level=\"INFO\"", "new_text", "level=\"WARN\""),
+        Map.of("old_text", "<flow name=\"no-such-flow\">", "new_text", "<flow name=\"x\">")))));
+    failed += check("a failed edit keeps the ones that applied, and says not to resend them",
+        partial.contains("Edit 1: applied") && partial.contains("Edit 2: ERROR: old_text not found")
+            && partial.contains("1 of 2 edits applied; do not resend the applied ones")
+            && run(tools, "read_file", "{\"path\":\"" + path + "\"}").contains("level=\"WARN\""));
+
+    String none = run(new ProjectTools(new DiskProject(root), new ChangeSet()), "edit_file",
+        json.writeValueAsString(Map.of("path", path, "edits", List.of(
+            Map.of("old_text", "nope one", "new_text", "x"), Map.of("old_text", "nope two", "new_text", "y")))));
+    failed += check("when no edit applies the result is an error", none.startsWith("ERROR: none of the 2 edits"));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    String unindented = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+        "old_text", "<logger level=\"INFO\" message=\"#[payload]\"/>   \n</flow>",
+        "new_text", "<logger level=\"INFO\" message=\"#[payload]\"/>\n<set-variable variableName=\"done\" value=\"true\"/>\n</flow>")));
+    String reindented = run(tools, "read_file", "{\"path\":\"" + path + "\"}");
+    failed += check("old_text with other indentation still matches, and new_text gets the file's indent",
+        unindented.contains("Proposed change") && reindented.contains("        <logger level=\"INFO\" message="
+            + "\"#[payload]\"/>\n        <set-variable variableName=\"done\" value=\"true\"/>\n    </flow>\n"
+            + "    <flow name=\"delete"));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    String quotes = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+        "old_text", "<db:select config-ref=\"Database_Config_SQ_Server\" doc:name=\"Select employee\">",
+        "new_text", "<db:select config-ref=\"Database_Config_SQ_Server\" doc:name=\"Select one employee\">")));
+    failed += check("typographic quotes in the file match plain ones in old_text", quotes.contains("Proposed change")
+        && run(tools, "read_file", "{\"path\":\"" + path + "\"}").contains("doc:name=\"Select one employee\""));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    Map<String, Object> rename = Map.of("old_text", "Database_Config_SQ_Server", "new_text",
+        "Database_Config_PostgreSQL");
+    String ambiguous = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path, "edits", List.of(rename))));
+    failed += check("text found several times names the count and expected_replacements",
+        ambiguous.contains("occurs 3 times") && ambiguous.contains("set expected_replacements to 3"));
+    Map<String, Object> renameAll = new HashMap<>(rename);
+    renameAll.put("expected_replacements", 3);
+    String renamed = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path, "edits",
+        List.of(renameAll))));
+    failed += check("expected_replacements renames across the file in one edit", renamed.contains("Proposed change")
+        && !run(tools, "read_file", "{\"path\":\"" + path + "\"}").contains("SQ_Server"));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    for (String placeholder : List.of("<!-- ... -->", "<!-- rest unchanged ... -->", "// ... rest of flows ...")) {
+      String refused = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+          "old_text", "<flow name=\"delete-employee\">\n        <db:delete config-ref=\"Database_Config_SQ_Server\"/>",
+          "new_text", "<flow name=\"delete-employee\">\n        " + placeholder)));
+      failed += check("the placeholder " + placeholder + " is refused", refused.startsWith("ERROR: new_text contains"
+          + " the placeholder"));
+    }
+    String comment = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+        "old_text", "<flow name=\"delete-employee\">",
+        "new_text", "<!-- Deletes one employee -->\n    <flow name=\"delete-employee\">")));
+    failed += check("an ordinary comment is not a placeholder", comment.contains("Proposed change"));
+
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    String typo = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+        "old_text", "<http:listener config-ref=\"HTTP_Listener_Config\" path=\"/employee/{id}\"/>",
+        "new_text", "<http:listener config-ref=\"HTTP_Listener_config\" path=\"/staff/{id}\"/>")));
+    failed += check("a near miss shows the most similar lines with their numbers",
+        typo.contains("The most similar lines are:\n3: ") && typo.contains("path=\"/employees/{id}\""));
+    String done = run(tools, "edit_file", json.writeValueAsString(Map.of("path", path,
+        "old_text", "<flow name=\"get-employees\">", "new_text", "<flow name=\"get-employee\">")));
+    failed += check("an edit already made is named as such", done.contains("new_text is already in the file"));
+
+    Path crlf = root.resolve("src/main/mule/windows.xml");
+    Files.writeString(crlf, "<mule>\r\n    <flow name=\"a\">\r\n        <logger/>\r\n    </flow>\r\n</mule>\r\n");
+    tools = new ProjectTools(new DiskProject(root), new ChangeSet());
+    run(tools, "edit_file", json.writeValueAsString(Map.of("path", "src/main/mule/windows.xml",
+        "old_text", "<logger/>\n</flow>", "new_text", "<logger/>\n<logger level=\"WARN\"/>\n</flow>")));
+    failed += check("a Windows file keeps its line ends", run(tools, "read_file",
+        "{\"path\":\"src/main/mule/windows.xml\"}").equals("<mule>\r\n    <flow name=\"a\">\r\n        <logger/>\r\n"
+            + "        <logger level=\"WARN\"/>\r\n    </flow>\r\n</mule>\r\n"));
+    return failed;
+  }
+
+  private static String run(ProjectTools tools, String name, String arguments) {
+    return tools.execute(ToolExecutionRequest.builder().id("t").name(name).arguments(arguments).build());
   }
 
   private static int expect(ProjectTools tools, String name, String arguments, String expected) {

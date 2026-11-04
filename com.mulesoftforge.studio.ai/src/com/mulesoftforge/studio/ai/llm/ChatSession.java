@@ -60,11 +60,11 @@ public class ChatSession {
   // and the model is told why instead of getting "missing argument", which it answers by resending the same call.
   static final String CUT_OFF_CALL = "ERROR: not run. Your response reached the output limit and was cut off, so"
       + " the arguments of this call are incomplete. Do not send it again. Change existing files with edit_file,"
-      + " one small old_text and new_text per change, several calls in one response; keep write_file for new"
+      + " one call per file with a list of small edits; keep write_file for new"
       + " files short enough to fit.";
   static final String CUT_OFF_EMPTY = "Your last response reached the output limit before you wrote anything the"
-      + " user can see. Answer now, briefly. Make file changes with several small edit_file calls rather than one"
-      + " large write_file.";
+      + " user can see. Answer now, briefly. Make file changes with edit_file and a list of small edits rather than"
+      + " one large write_file.";
   // After this many cut-off replies in one turn the turn stops: each one is a full output budget spent for nothing.
   static final int MAX_CUT_OFFS = 2;
   // Counted in toolCounts so the activity line can say the model hit the limit.

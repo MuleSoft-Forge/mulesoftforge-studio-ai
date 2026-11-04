@@ -67,15 +67,24 @@ public final class ProjectTools {
           .build(),
       ToolSpecification.builder()
           .name("edit_file")
-          .description("Propose replacing one exact snippet in an existing file. old_text must occur exactly"
-              + " once; include enough surrounding lines to make it unique. Use this for every change to an"
-              + " existing file: for several changes, call it once per change in the same response; each call"
-              + " sees the ones before it. Agent mode only.")
+          .description("Propose changes to an existing file: put every change to one file in one call, as a"
+              + " list of edits applied in order, each seeing the ones before it. Each old_text is copied from"
+              + " the file with a few surrounding lines so it occurs once; indentation differences are"
+              + " tolerated. Never write placeholders such as <!-- ... --> or \"rest unchanged\" in new_text:"
+              + " the edit replaces exactly old_text. Agent mode only.")
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path")
-              .addStringProperty("old_text", "Exact current text to replace, including whitespace")
-              .addStringProperty("new_text", "Replacement text")
-              .required("path", "old_text", "new_text")
+              .addProperty("edits", JsonArraySchema.builder()
+                  .description("The changes to this file, in order")
+                  .items(JsonObjectSchema.builder()
+                      .addStringProperty("old_text", "Current text to replace, copied from the file")
+                      .addStringProperty("new_text", "Replacement text")
+                      .addIntegerProperty("expected_replacements", "How many times old_text occurs, all"
+                          + " replaced; default 1. Use it for a rename across the file")
+                      .required("old_text", "new_text")
+                      .build())
+                  .build())
+              .required("path", "edits")
               .build())
           .build(),
       ToolSpecification.builder()
@@ -241,26 +250,88 @@ public final class ProjectTools {
     return shown;
   }
 
+  // edits is a list of {old_text, new_text, expected_replacements}; a single old_text and new_text at the top
+  // level is one edit. The edits that apply are kept even when others fail.
   private String edit(JsonNode args) throws Exception {
     String path = ProjectPaths.requireWritable(text(args, "path", true));
-    String oldText = restored(text(args, "old_text", true));
-    String newText = restored(text(args, "new_text", true));
     String content = current(path);
     if (content == null) {
       return "ERROR: file not found: " + path + ". Use write_file to create it.";
     }
+    List<JsonNode> edits = new ArrayList<>();
+    JsonNode list = args.get("edits");
+    if (list != null && list.isArray()) {
+      list.forEach(edits::add);
+    } else if (args.has("old_text")) {
+      edits.add(args);
+    }
+    if (edits.isEmpty()) {
+      return "ERROR: edits must be a non-empty list of {old_text, new_text}.";
+    }
+    String updated = content;
+    List<String> results = new ArrayList<>();
+    int applied = 0;
+    for (int i = 0; i < edits.size(); i++) {
+      String label = edits.size() == 1 ? "" : "Edit " + (i + 1) + ": ";
+      try {
+        String outcome = applyEdit(path, updated, edits.get(i));
+        if (outcome.startsWith("ERROR: ")) {
+          results.add(label + outcome);
+          continue;
+        }
+        updated = outcome.substring(outcome.indexOf('\n') + 1);
+        results.add(label + outcome.substring(0, outcome.indexOf('\n')));
+        applied++;
+      } catch (IllegalArgumentException e) {
+        results.add(label + "ERROR: " + e.getMessage());
+      }
+    }
+    if (applied == 0) {
+      return (edits.size() == 1 ? "" : "ERROR: none of the " + edits.size() + " edits applied.\n")
+          + String.join("\n", results);
+    }
+    String staged = stage(path, updated);
+    if (edits.size() == 1) {
+      return staged;
+    }
+    return String.join("\n", results) + "\n" + applied + " of " + edits.size() + " edits applied"
+        + (applied < edits.size() ? "; do not resend the applied ones, send only corrected versions of the failed"
+            + " ones." : ".") + "\n" + staged;
+  }
+
+  // "applied …" then a newline and the updated file, or an ERROR line.
+  private String applyEdit(String path, String content, JsonNode edit) {
+    String oldText = restored(text(edit, "old_text", true));
+    String newText = restored(text(edit, "new_text", true));
+    int expected = edit.path("expected_replacements").asInt(1);
     if (oldText.isEmpty()) {
-      return "ERROR: old_text is empty.";
+      return "ERROR: old_text is empty. To add text, include the lines it goes next to in old_text and new_text.";
     }
-    int first = content.indexOf(oldText);
-    if (first < 0) {
-      return "ERROR: old_text not found in " + path + ". Read the file and copy the text exactly.";
+    if (expected < 1) {
+      return "ERROR: expected_replacements must be 1 or more.";
     }
-    if (content.indexOf(oldText, first + 1) >= 0) {
-      return "ERROR: old_text occurs more than once in " + path + ". Include more surrounding lines.";
+    String placeholder = TextMatch.placeholder(oldText, newText);
+    if (placeholder != null) {
+      return "ERROR: new_text contains the placeholder \"" + placeholder + "\". The edit replaces exactly"
+          + " old_text, so the code it stands for would be deleted. Write the real lines, or make old_text"
+          + " smaller.";
     }
-    String updated = content.substring(0, first) + newText + content.substring(first + oldText.length());
-    return stage(path, updated);
+    TextMatch.Result match = TextMatch.replace(content, oldText, newText, expected);
+    if (match.error() != null) {
+      return "ERROR: " + match.error();
+    }
+    if (match.updated() == null) {
+      StringBuilder error = new StringBuilder("ERROR: old_text not found in " + path + ".");
+      if (!newText.isEmpty() && TextMatch.count(content, newText) > 0) {
+        error.append(" new_text is already in the file, so this edit may already be made.");
+      }
+      String closest = TextMatch.closest(content, oldText);
+      error.append(closest == null ? " Read the file and copy the text."
+          : " The most similar lines are:\n" + closest + "Copy old_text from these lines.");
+      return error.toString();
+    }
+    String how = match.pass().note == null ? "" : " (" + match.pass().note + ")";
+    return "applied" + (match.count() > 1 ? " " + match.count() + " times" : "") + how + "\n" + match.updated();
   }
 
   private String write(JsonNode args) throws Exception {
