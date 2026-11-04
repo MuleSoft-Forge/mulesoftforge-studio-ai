@@ -59,6 +59,12 @@ public final class SecretMask {
       "(?m)^([ \\t]*(?:export[ \\t]+|-[ \\t]+)?)([\\w.\\-\\[\\]]+)([ \\t]*[=:][ \\t]*)(?![\"'])(\\S.*?)[ \\t]*$");
   // key=value inside free text, such as a log line or the user's message. Not key: value, which prose uses.
   private static final Pattern INLINE = Pattern.compile("\\b([\\w.\\-]+)\\s*=\\s*([^\\s\"',;&}<>]{4,})");
+  // "call with token abc123…", "the password is …": the user's message names the secret in words. Needs a digit
+  // and a letter and 16 characters, so "token validation" or "the token is expired" is left alone.
+  private static final Pattern NAMED_IN_PROSE = Pattern.compile("(?i)\\b(?:access |refresh |bearer |api |auth )?"
+      + "(?:token|password|passwd|passphrase|secret|api[ _-]?key|access[ _-]?key|client[ _-]?secret)s?"
+      + "(?:\\s+(?:is|was|of|value))?\\s*[:=]?\\s*[\"'`]?"
+      + "((?=[A-Za-z0-9+/=._~-]*[0-9])(?=[A-Za-z0-9+/=._~-]*[A-Za-z])[A-Za-z0-9+/=._~-]{16,})");
   private static final Pattern SCHEME_ONLY = Pattern.compile("(?i)(?:bearer|basic)\\s*");
 
   private static final Set<String> CONFIG_EXTENSIONS = Set.of("properties", "yaml", "yml", "env", "conf", "cfg",
@@ -139,6 +145,7 @@ public final class SecretMask {
     out = replace(out, COLON_SINGLE, 1, 2);
     if (path == null) {
       out = replace(out, INLINE, 1, 2);
+      out = replace(out, NAMED_IN_PROSE, 0, 1);
     } else if (CONFIG_EXTENSIONS.contains(extension(path))) {
       out = replace(out, LINE, 2, 4);
     }

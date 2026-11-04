@@ -35,6 +35,8 @@ public final class AutoRouter {
       + "errors?|exceptions?|debug\\w*|refactor\\w*|improve\\w*|optimi[sz]\\w*|migrat\\w*|secur\\w*|vulnerab\\w*|"
       + "write|generate|create|implement\\w*|design\\w*|convert\\w*|rewrite|test(s|ing)?|munit)\\b");
   private static final int SHORT_RUN_CHARS = 60;
+  // A pasted token or id counts as one word, so "call with token <80 characters>" is still a short request.
+  private static final Pattern LONG_VALUE = Pattern.compile("[a-z0-9+/=._~-]{16,}");
   private static final Pattern RUN_ONLY = Pattern.compile("\\W*(?:(?:lets?|let's|please|now|can you)\\s+)*"
       + "(?:re-?\\s?)?(?:run|test|call|start|stop|deploy|send)\\b[\\w\\s/:.-]*?(?:again)?\\W*");
   private static final Pattern ASKS_MORE = Pattern.compile("\\b(fix\\w*|change\\w*|edit\\w*|update\\w*|add\\w*|"
@@ -83,8 +85,8 @@ public final class AutoRouter {
 
   // "run munit test", "test again", "call post flow": the tools do the work, in any mode that has them.
   static boolean onlyRuns(ChatMode mode, String prompt, List<Attachment> attachments, boolean fix) {
-    String lower = prompt.toLowerCase(Locale.ROOT);
-    return mode != ChatMode.PLAN && !fix && prompt.length() <= SHORT_RUN_CHARS && RUN_ONLY.matcher(lower).matches()
+    String lower = LONG_VALUE.matcher(prompt.toLowerCase(Locale.ROOT)).replaceAll("value");
+    return mode != ChatMode.PLAN && !fix && lower.length() <= SHORT_RUN_CHARS && RUN_ONLY.matcher(lower).matches()
         && !ASKS_MORE.matcher(lower).find() && attachments.stream().noneMatch(Attachment::reportsFailure);
   }
 

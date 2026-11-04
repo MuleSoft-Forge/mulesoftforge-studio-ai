@@ -1087,6 +1087,17 @@ public class Harness {
         && !keys.contains("AKIAIOSFODNN7EXAMPLE") && !keys.contains("GuestP4ss") && !keys.contains("MIIEow"));
     String prose = "Why does the token: refresh fail, and Basic authentication break?";
     failed += check("ordinary prose left alone", mask.mask(null, prose).text().equals(prose));
+    String pasted = "Fake9Token8Pasted7Value6Abc-def5Ghi_jkl4Mno";
+    String call = mask.mask(null, "call with token " + pasted).text();
+    failed += check("a token pasted after the word token is hidden: " + call, !call.contains(pasted)
+        && call.startsWith("call with token «masked-") && mask.unmask(call).endsWith(pasted));
+    String named = mask.mask(null, "the api key is AbCdEf1234567890xyz, password: Hunter2Hunter2Hunter2").text();
+    failed += check("api key is … and password: … in a message are hidden: " + named,
+        !named.contains("AbCdEf1234567890xyz") && !named.contains("Hunter2Hunter2Hunter2"));
+    for (String plain : List.of("the token validation failed", "the token is expired since 2026-11-03",
+        "refresh the access token every 3600 seconds", "token 5444c035 is short")) {
+      failed += check("prose about tokens left alone: " + plain, mask.mask(null, plain).text().equals(plain));
+    }
 
     failed += check("secret-only files are blocked", SecretMask.isBlocked(".env") && SecretMask.isBlocked("src/main/resources/server.pem")
         && SecretMask.isBlocked("src/main/resources/keystore.jks") && SecretMask.isBlocked("credentials.json")
@@ -1625,7 +1636,8 @@ public class Harness {
     failed += check("diagnose mode goes strong", AutoRouter.choose(ChatMode.DIAGNOSE, "hi", none, false, pair)
         .model().equals("strong-model"));
     for (String run : List.of("run munit test", "re test munit", "test again", "Call post flow", "lets test post",
-        "START DEBUGGER", "run tests")) {
+        "START DEBUGGER", "run tests", "lets start debugger",
+        "call with token Fake0Token1Harness2Value3Abcdef4Ghijkl5Mnopqr6Stuvwx7Yz_890abcdefgh")) {
       AutoRouter.Choice choice = AutoRouter.choose(ChatMode.AGENT, run, none, false, pair);
       failed += check("Agent '" + run + "' only runs something, so goes fast", choice.model().equals("fast-model")
           && "strong-model".equals(choice.fallback()) && choice.reason().equals("it only runs or calls something"));
