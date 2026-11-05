@@ -91,6 +91,7 @@ public final class Composer {
   private final IWorkbenchPage page;
   private final Listener listener;
   private final List<Attachment> attached = new ArrayList<>();
+  private final List<String> queue = new ArrayList<>();
   private final ComposerUi ui;
   private List<String> pickerModels = List.of();
   private Map<String, String> shortPrices = Map.of();
@@ -106,7 +107,13 @@ public final class Composer {
       @Override
       public void sendPressed() {
         if (busy) {
-          listener.cancel();
+          String pending = ui.text().trim();
+          if (!pending.isEmpty()) {
+            enqueue(pending);
+            ui.setText("");
+          } else {
+            listener.cancel();
+          }
         } else {
           listener.send();
         }
@@ -114,7 +121,13 @@ public final class Composer {
 
       @Override
       public void enterPressed() {
-        if (!busy) {
+        if (busy) {
+          String pending = ui.text().trim();
+          if (!pending.isEmpty()) {
+            enqueue(pending);
+            ui.setText("");
+          }
+        } else {
           listener.send();
         }
       }
@@ -194,6 +207,30 @@ public final class Composer {
 
   String prompt() {
     return ui.text().trim();
+  }
+
+  // Queues a message typed while the model is answering. Flushed by ChatView after finished.
+  void enqueue(String text) {
+    String value = text == null ? "" : text.trim();
+    if (value.isEmpty()) {
+      return;
+    }
+    queue.add(value);
+    listener.note("Note", "Queued (" + queue.size() + "): " + (value.length() > 80 ? value.substring(0, 77) + "…" : value)
+        + ". Sent after this answer. Send again with an empty box to cancel instead.");
+  }
+
+  boolean hasQueued() {
+    return !queue.isEmpty();
+  }
+
+  // Takes the oldest queued message, or null.
+  String pollQueued() {
+    return queue.isEmpty() ? null : queue.remove(0);
+  }
+
+  void clearQueue() {
+    queue.clear();
   }
 
   void setPrompt(String text) {

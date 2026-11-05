@@ -156,9 +156,17 @@ final class StatusPanel {
 
   // tokens: the size of the chat's context after the last call; window: the model's limit, 0 before a model is known.
   void showContext(long tokens, int window, boolean canCompact) {
-    context.setText(tokens == 0 || window == 0 ? "Nothing sent yet" : ContextWindow.describe(tokens, window));
-    context.setToolTipText("Tokens the model read and wrote in its last call: the system prompt, tools, this chat's"
-        + " history and the latest message. The window is the model's published limit; 128k when it is not known.");
+    if (tokens == 0 || window == 0) {
+      context.setText("Nothing sent yet");
+    } else {
+      long percent = Math.round(100.0 * tokens / window);
+      context.setText(ContextWindow.tokens(tokens) + " / " + ContextWindow.tokens(window) + " (" + percent + "%)");
+    }
+    context.setToolTipText(tokens == 0 || window == 0
+        ? "Tokens the model read and wrote in its last call. The window is the model's published limit; 128k when unknown."
+        : ContextWindow.describe(tokens, window) + ". Used includes the system prompt, tools, history and the"
+            + " latest message. Reserved is room kept for the model's reply (~"
+            + ContextWindow.tokens(ContextWindow.RESERVED_OUTPUT) + ").");
     compact.setEnabled(canCompact);
     relayout();
   }

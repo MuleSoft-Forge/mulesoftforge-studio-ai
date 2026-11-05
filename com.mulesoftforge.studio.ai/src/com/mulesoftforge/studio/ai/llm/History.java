@@ -105,6 +105,19 @@ final class History {
     attached.clear();
   }
 
+  // Removes the newest exchange (user + answer). Returns that user text, or null when empty.
+  synchronized String dropLast() {
+    if (exchanges.isEmpty()) {
+      return null;
+    }
+    Exchange removed = exchanges.remove(exchanges.size() - 1);
+    return removed.user();
+  }
+
+  synchronized String lastUser() {
+    return exchanges.isEmpty() ? null : exchanges.get(exchanges.size() - 1).user();
+  }
+
   // How many of the oldest turns compaction summarises: those before the recent ones that fit KEEP_RECENT_TOKENS,
   // and at least one. 0 when there is nothing to compact.
   synchronized int toSummarise() {

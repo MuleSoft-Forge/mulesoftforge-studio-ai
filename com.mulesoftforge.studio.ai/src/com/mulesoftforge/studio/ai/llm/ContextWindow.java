@@ -27,10 +27,24 @@ public final class ContextWindow {
     return DEFAULT;
   }
 
+  // Matches ChatModels.MAX_OUTPUT_TOKENS; reserved so the bar shows room left for the reply.
+  public static final int RESERVED_OUTPUT = 32_000;
+
   // "34k of 200k (17%)".
   public static String describe(long tokens, int window) {
+    return describe(tokens, window, RESERVED_OUTPUT);
+  }
+
+  // "34k of 200k (17%) · ~32k reserved · 134k free".
+  public static String describe(long tokens, int window, int reserved) {
     long percent = window <= 0 ? 0 : Math.round(100.0 * tokens / window);
-    return tokens(tokens) + " of " + tokens(window) + " (" + percent + "%)";
+    String base = tokens(tokens) + " of " + tokens(window) + " (" + percent + "%)";
+    if (window <= 0) {
+      return base;
+    }
+    long keep = Math.min(Math.max(0, reserved), Math.max(0, window - tokens));
+    long free = Math.max(0, window - tokens - keep);
+    return base + " · ~" + tokens(keep) + " reserved · " + tokens(free) + " free";
   }
 
   // "34k", "1.2M".

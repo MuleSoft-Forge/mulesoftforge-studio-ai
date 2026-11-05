@@ -64,13 +64,26 @@ public final class HtmlPage {
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 999px; }
         ::-webkit-scrollbar-track { background: transparent; }
+        #sticky { position: sticky; top: 0; z-index: 5; display: none; padding: 6px 12px; margin: 0;
+          background: var(--card); border-bottom: 1px solid var(--card-border); color: var(--muted);
+          font-size: 0.82em; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #sticky.show { display: block; }
+        #quote-btn { position: absolute; display: none; z-index: 6; padding: 4px 10px; border-radius: 999px;
+          border: 1px solid var(--card-border); background: var(--card); color: var(--link); font-size: 0.78em;
+          box-shadow: 0 2px 8px var(--shadow); cursor: pointer; }
+        #quote-btn:hover { border-color: var(--focus); }
+        #starters { display: none; max-width: 640px; margin: 18vh auto 0; padding: 12px; text-align: center; }
+        #starters.show { display: block; }
+        #starters .hint { color: var(--muted); margin-bottom: 14px; font-size: 1.05em; }
+        #starters .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        #starters .card { text-align: left; padding: 10px 12px; border: 1px solid var(--card-border);
+          border-radius: 12px; background: var(--card); cursor: pointer; color: var(--fg); }
+        #starters .card:hover { border-color: var(--focus); background: var(--pill); }
+        #starters .card b { display: block; margin-bottom: 2px; }
+        #starters .card span { color: var(--muted); font-size: 0.85em; }
         #log { padding: 12px 12px 18px; max-width: 900px; margin: 0 auto; }
-        #log:empty { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
-        #log:empty::before { content: "Ask about this Mule project, or ask for a change."; color: var(--muted);
-          font-size: 1.05em; padding: 18px 22px; border: 1px dashed var(--card-border); border-radius: 14px;
-          background: linear-gradient(var(--card), var(--card)), var(--bg); }
         @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-        .msg, .offer, .actions, .raw { animation: rise .18s ease-out; }
+        .msg, .offer, .ask, .actions, .raw, .todos { animation: rise .18s ease-out; }
         .msg { margin: 14px 0 6px; display: flex; flex-direction: column; }
         .who { font-weight: 600; font-size: 0.8em; margin: 0 0 4px 2px; display: flex; align-items: center; gap: 6px;
           letter-spacing: 0.01em; }
@@ -144,6 +157,29 @@ public final class HtmlPage {
         .offer input { accent-color: var(--focus); margin-top: 0.3em; flex: none; }
         .offer .button { margin-top: 8px; color: #fff; border: 0; background: linear-gradient(135deg, #00a3e0, #6d5dfc); }
         .offer .button:hover { filter: brightness(1.08); }
+        .ask { margin: 8px 0; padding: 10px 14px; background: var(--card); border: 1px solid var(--card-border);
+          border-left: 3px solid var(--focus); border-radius: 12px; box-shadow: 0 1px 3px var(--shadow); }
+        .ask .title { font-weight: 600; font-size: 0.95em; margin-bottom: 8px; }
+        .ask .choice { display: block; width: 100%%; text-align: left; margin: 4px 0; padding: 8px 12px;
+          border: 1px solid var(--card-border); border-radius: 10px; background: var(--pill); color: var(--fg);
+          cursor: pointer; font: inherit; }
+        .ask .choice:hover:not(:disabled) { border-color: var(--focus); background: var(--pill-hover); }
+        .ask .choice:disabled { opacity: 0.55; cursor: default; }
+        .ask .choice.picked { border-color: var(--focus); background: var(--bubble); }
+        .ask .hint { color: var(--muted); font-size: 0.78em; margin-top: 6px; }
+        .todos { margin: 6px 0; padding: 6px 10px; background: var(--card); border: 1px solid var(--card-border);
+          border-radius: 10px; font-size: 0.88em; }
+        .todos summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: center; }
+        .todos summary::-webkit-details-marker { display: none; }
+        .todos .count { color: var(--muted); margin-left: auto; font-size: 0.85em; }
+        .todos ul { margin: 6px 0 0; padding: 0 0 0 4px; list-style: none; max-height: 12em; overflow: auto; }
+        .todos li { display: flex; gap: 6px; padding: 2px 0; }
+        .todos li.in_progress { color: var(--focus); font-weight: 600; }
+        .todos li.completed { color: var(--muted); text-decoration: line-through; }
+        .msg-actions { display: flex; gap: 8px; margin: 2px 0 8px 4px; opacity: 0.55; }
+        .msg-actions:hover { opacity: 1; }
+        .msg-actions a { font-size: 0.78em; color: var(--muted); }
+        .msg-actions a:hover { color: var(--link); }
         .raw { margin: 4px 0 8px; font-size: 0.82em; color: var(--muted); }
         .raw.hidden { display: none; }
         .raw summary { cursor: pointer; }
@@ -159,10 +195,29 @@ public final class HtmlPage {
         <meta http-equiv="Content-Security-Policy"
           content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
         <style>%s</style></head>
-        <body><div id="log"></div>
+        <body>
+        <div id="sticky"></div>
+        <div id="starters">
+          <div class="hint">Ask about this Mule project, or pick a start:</div>
+          <div class="grid">
+            <div class="card" data-starter="Explain how the main flow in this project works."><b>Explain this flow</b><span>Summarise the message processors</span></div>
+            <div class="card" data-starter="Review this project and suggest improvements."><b>Review the project</b><span>Checklist of possible fixes</span></div>
+            <div class="card" data-starter="Create MUnit tests for the main flow."><b>Add MUnit tests</b><span>Cover the happy path and errors</span></div>
+            <div class="card" data-starter="Find the cause of the last run failure."><b>Diagnose last run</b><span>Use console and problems</span></div>
+          </div>
+        </div>
+        <div id="log"></div>
+        <button id="quote-btn" type="button">Quote</button>
         <script>
         var log = document.getElementById('log');
+        var sticky = document.getElementById('sticky');
+        var starters = document.getElementById('starters');
+        var quoteBtn = document.getElementById('quote-btn');
         var steps = null;
+        var lastYou = null;
+        var lastYouText = '';
+        var quoteText = '';
+        starters.classList.add('show');
         function nearBottom() {
           return window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
         }
@@ -171,6 +226,40 @@ public final class HtmlPage {
           var live = document.getElementById('live');
           if (live) { live.remove(); }
         }
+        function hideStarters() { starters.classList.remove('show'); }
+        function updateSticky() {
+          if (!lastYou || !lastYouText) { sticky.classList.remove('show'); return; }
+          var rect = lastYou.getBoundingClientRect();
+          if (rect.bottom < 8) {
+            sticky.textContent = 'You: ' + lastYouText;
+            sticky.classList.add('show');
+          } else {
+            sticky.classList.remove('show');
+          }
+        }
+        window.addEventListener('scroll', updateSticky, { passive: true });
+        sticky.addEventListener('click', function () {
+          if (lastYou) { lastYou.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+        });
+        document.addEventListener('mouseup', function () {
+          var sel = window.getSelection();
+          var text = sel && !sel.isCollapsed ? String(sel).trim() : '';
+          if (!text || text.length < 2 || text.length > 4000) {
+            quoteBtn.style.display = 'none';
+            return;
+          }
+          var range = sel.getRangeAt(0);
+          var rect = range.getBoundingClientRect();
+          quoteText = text;
+          quoteBtn.style.display = 'block';
+          quoteBtn.style.top = (window.scrollY + rect.top - 28) + 'px';
+          quoteBtn.style.left = Math.min(window.scrollX + rect.left, window.scrollX + window.innerWidth - 80) + 'px';
+        });
+        quoteBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          quoteBtn.style.display = 'none';
+          if (quoteText) { msfClick('quote:' + quoteText); }
+        });
         function msfLive(status, preview) {
           if (status === null) { dropLive(); return; }
           var was = nearBottom();
@@ -209,6 +298,7 @@ public final class HtmlPage {
         function msfMessage(kind, who, html, ctx) {
           var was = nearBottom();
           closeSteps();
+          hideStarters();
           var div = document.createElement('div');
           div.className = 'msg ' + kind;
           div.innerHTML = '<div class="who"></div><div class="body"></div>'
@@ -217,6 +307,24 @@ public final class HtmlPage {
           div.querySelector('.body').innerHTML = html;
           if (ctx) { div.querySelector('.ctx').textContent = ctx; }
           log.appendChild(div);
+          if (kind === 'you') {
+            lastYou = div;
+            var plain = div.querySelector('.body').textContent || '';
+            lastYouText = plain.length > 120 ? plain.substring(0, 117) + '…' : plain;
+            updateSticky();
+          }
+          if (kind === 'ai') {
+            var actions = document.createElement('div');
+            actions.className = 'msg-actions';
+            [['Retry', 'cmd:retry'], ['Edit last message', 'cmd:edit-last'],
+             ['👍', 'cmd:feedback:up'], ['👎', 'cmd:feedback:down']].forEach(function (item) {
+              var a = document.createElement('a');
+              a.setAttribute('data-a', item[1]);
+              a.textContent = item[0];
+              actions.appendChild(a);
+            });
+            log.appendChild(actions);
+          }
           scrollIfNeeded(was);
         }
         function msfStep(text) {
@@ -275,6 +383,74 @@ public final class HtmlPage {
           log.appendChild(div);
           scrollIfNeeded(was);
         }
+        function msfAsk(id, question, choices) {
+          var was = nearBottom();
+          closeSteps();
+          hideStarters();
+          var div = document.createElement('div');
+          div.className = 'ask';
+          div.setAttribute('data-ask', id);
+          var title = document.createElement('div');
+          title.className = 'title';
+          title.textContent = question;
+          div.appendChild(title);
+          choices.forEach(function (text, i) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'choice';
+            btn.setAttribute('data-ask-choice', id + ':' + i);
+            btn.textContent = text;
+            div.appendChild(btn);
+          });
+          var hint = document.createElement('div');
+          hint.className = 'hint';
+          hint.textContent = 'Click an answer to send it. Shift-click to edit it first.';
+          div.appendChild(hint);
+          log.appendChild(div);
+          scrollIfNeeded(was);
+        }
+        function msfTodos(items) {
+          var was = nearBottom();
+          var existing = document.getElementById('todos');
+          if (!items || !items.length) {
+            if (existing) { existing.remove(); }
+            return;
+          }
+          var done = 0;
+          var current = '';
+          items.forEach(function (t) {
+            if (t.status === 'completed') { done++; }
+            else if (!current && t.status === 'in_progress') { current = t.content; }
+            else if (!current && t.status === 'pending') { current = t.content; }
+          });
+          var details = existing || document.createElement('details');
+          details.id = 'todos';
+          details.className = 'todos';
+          details.innerHTML = '';
+          var summary = document.createElement('summary');
+          var label = document.createElement('span');
+          label.textContent = current || (done === items.length ? 'All tasks done' : 'Tasks');
+          var count = document.createElement('span');
+          count.className = 'count';
+          count.textContent = done + '/' + items.length;
+          summary.appendChild(label);
+          summary.appendChild(count);
+          details.appendChild(summary);
+          var ul = document.createElement('ul');
+          items.forEach(function (t) {
+            var li = document.createElement('li');
+            li.className = t.status;
+            var mark = t.status === 'completed' ? '✓' : (t.status === 'in_progress' ? '→' : '○');
+            li.textContent = mark + ' ' + t.content;
+            ul.appendChild(li);
+          });
+          details.appendChild(ul);
+          if (!existing) {
+            if (steps && steps.parentNode) { log.insertBefore(details, steps); }
+            else { log.appendChild(details); }
+          }
+          scrollIfNeeded(was);
+        }
         var showRaw = true;
         function details(title) {
           var d = document.createElement('details');
@@ -313,7 +489,16 @@ public final class HtmlPage {
           showRaw = on;
           document.querySelectorAll('.raw').forEach(function (b) { b.classList.toggle('hidden', !on); });
         }
-        function msfClear() { log.innerHTML = ''; steps = null; }
+        function msfClear() {
+          log.innerHTML = '';
+          steps = null;
+          lastYou = null;
+          lastYouText = '';
+          sticky.classList.remove('show');
+          starters.classList.add('show');
+          var todos = document.getElementById('todos');
+          if (todos) { todos.remove(); }
+        }
         function msfTheme(cssText) {
           var root = document.documentElement;
           cssText.split(';').forEach(function (part) {
@@ -325,6 +510,29 @@ public final class HtmlPage {
           }
         }
         document.addEventListener('click', function (e) {
+          var starter = e.target.closest('[data-starter]');
+          if (starter) {
+            e.preventDefault();
+            msfClick('fill:' + starter.getAttribute('data-starter'));
+            return;
+          }
+          var choice = e.target.closest('[data-ask-choice]');
+          if (choice) {
+            e.preventDefault();
+            if (choice.disabled) { return; }
+            var value = choice.getAttribute('data-ask-choice');
+            var ask = choice.closest('.ask');
+            if (ask) {
+              ask.querySelectorAll('.choice').forEach(function (b) { b.disabled = true; });
+              choice.classList.add('picked');
+            }
+            if (e.shiftKey) {
+              msfClick('fill:' + choice.textContent);
+            } else {
+              msfClick('cmd:ask:' + value);
+            }
+            return;
+          }
           var offer = e.target.closest('[data-offer]');
           if (offer) {
             e.preventDefault();

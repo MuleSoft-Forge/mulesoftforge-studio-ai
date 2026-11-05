@@ -103,7 +103,11 @@ public final class ModelLists {
         || lower.contains("chatgpt-image") || lower.contains("text-embedding")) {
       return true;
     }
-    if (provider == Provider.OPENAI) {
+    if (provider == Provider.OPENAI || provider == Provider.AZURE_OPENAI) {
+      // Azure dated snapshot ids (gpt-5.4-mini-2026-03-17) are catalog versions, not deployments.
+      if (provider == Provider.AZURE_OPENAI && lower.matches(".*-\\d{4}-\\d{2}-\\d{2}$")) {
+        return true;
+      }
       return !(lower.startsWith("gpt-") || lower.startsWith("o1") || lower.startsWith("o3")
           || lower.startsWith("o4") || lower.startsWith("chatgpt-4o"));
     }
@@ -218,15 +222,29 @@ public final class ModelLists {
   }
 
   private static List<String> azureOpenAi(Connection connection) throws Exception {
-    String url = trimSlash(connection.baseUrl()) + "/openai/deployments?api-version="
+    // Data-plane GET /openai/deployments returns 404 Resource not found on current Azure OpenAI
+    // accounts (every api-version we probed). Listing belongs on ARM; inference clients cannot call
+    // that with only an API key. Continue builds openai/deployments/{deployment}/models (not a
+    // deployment list); Aider uses a static catalog. Live probe: GET /openai/models?api-version=…
+    // returns catalog ids with capabilities.chat_completion — often the same string as a deployment
+    // name when the deployment was created with the model id.
+    String url = trimSlash(connection.baseUrl()) + "/openai/models?api-version="
         + ChatModels.azureApiVersion();
     JsonNode root = getJson(url, HttpRequest.newBuilder()
         .header("Accept", "application/json")
         .header("api-key", connection.apiKey().trim()));
+    return parseAzureModels(root);
+  }
+
+  // Public for offline harness checks (same pattern as Bedrock parsers).
+  public static List<String> parseAzureModels(JsonNode root) {
     List<String> ids = new ArrayList<>();
     JsonNode data = root.get("data");
     if (data != null && data.isArray()) {
       for (JsonNode item : data) {
+        if (!azureChatCapable(item)) {
+          continue;
+        }
         JsonNode id = item.get("id");
         if (id != null && id.isTextual() && !id.asText().isBlank()) {
           ids.add(id.asText());
@@ -237,6 +255,18 @@ public final class ModelLists {
       ids.addAll(fallbackIds(root.toString()));
     }
     return uniqueSorted(ids);
+  }
+
+  private static boolean azureChatCapable(JsonNode item) {
+    JsonNode caps = item.get("capabilities");
+    if (caps == null || !caps.isObject()) {
+      return true;
+    }
+    JsonNode chat = caps.get("chat_completion");
+    if (chat != null && chat.isBoolean()) {
+      return chat.asBoolean();
+    }
+    return true;
   }
 
   // Control-plane listing verified with a Bedrock API key (Bearer). Inference-profile ids are preferred

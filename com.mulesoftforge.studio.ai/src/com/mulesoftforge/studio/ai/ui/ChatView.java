@@ -50,7 +50,9 @@ import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.debug.DebugStop;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
+import com.mulesoftforge.studio.ai.edit.FollowUpAsk;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
+import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.UsageLog;
@@ -89,17 +91,25 @@ public class ChatView extends ViewPart {
   private static final String MAKE_CHANGES = "make-changes";
   private static final String SUGGEST = "suggest";
   private static final String OFFER = "offer:";
+  private static final String ASK = "ask:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
   private static final String OPEN_RAW = "raw-log";
   private static final String DIAGNOSE_INSTEAD = "diagnose-instead";
   private static final String VERIFY_FIX = "verify-fix";
   private static final String CONTINUE = "continue";
+  private static final String RETRY = "retry";
+  private static final String EDIT_LAST = "edit-last";
+  private static final String FEEDBACK_UP = "feedback:up";
+  private static final String FEEDBACK_DOWN = "feedback:down";
+  private static final String APPROVE_PLAN = "approve-plan";
 
   // Fixes offered under answers in this chat, by the index in their Review diff / Apply buttons.
   private final List<DataWeaveProposal> dataWeaveFixes = new ArrayList<>();
   // Checklists of changes the AI offered to make, by the index in their Draft selected changes button.
   private final List<List<ChangeOffer>> offers = new ArrayList<>();
+  // Follow-up questions from ask_followup_question this chat, by ask id.
+  private final List<FollowUpAsk> asks = new ArrayList<>();
   // Checklists that came from Diagnose mode; drafting one offers to check the fix afterwards.
   private final Set<Integer> diagnosedOffers = new HashSet<>();
   // The next message builds a fix from a diagnosis.
@@ -487,8 +497,27 @@ public class ChatView extends ViewPart {
     }
 
     @Override
+    public void fillComposer(String text) {
+      if (text != null && !text.isBlank()) {
+        composer.setPrompt(text);
+        composer.focus();
+      }
+    }
+
+    @Override
+    public void quote(String text) {
+      if (text == null || text.isBlank()) {
+        return;
+      }
+      String quoted = text.lines().map(line -> "> " + line).reduce((a, b) -> a + "\n" + b).orElse("> " + text);
+      String current = composer.prompt();
+      composer.setPrompt(current.isEmpty() ? quoted + "\n\n" : quoted + "\n\n" + current);
+      composer.focus();
+    }
+
+    @Override
     public void command(String id) {
-      if (BUILD_PLAN.equals(id)) {
+      if (BUILD_PLAN.equals(id) || APPROVE_PLAN.equals(id)) {
         sendInAgentMode(ChatMode.BUILD_PLAN_PROMPT);
       } else if (MAKE_CHANGES.equals(id)) {
         sendInAgentMode(ChatMode.MAKE_CHANGES_PROMPT);
@@ -500,6 +529,15 @@ public class ChatView extends ViewPart {
         sendInMode(continueMode, ChatMode.CONTINUE_PROMPT);
       } else if (VERIFY_FIX.equals(id)) {
         sendInMode(ChatMode.DIAGNOSE, ChatMode.VERIFY_PROMPT);
+      } else if (RETRY.equals(id)) {
+        retryLast();
+      } else if (EDIT_LAST.equals(id)) {
+        editLast();
+      } else if (FEEDBACK_UP.equals(id) || FEEDBACK_DOWN.equals(id)) {
+        appendStep(FEEDBACK_UP.equals(id) ? "Thanks — opening feedback." : "Sorry it missed — opening feedback.");
+        new FeedbackDialog(getSite().getShell()).open();
+      } else if (id.startsWith(ASK)) {
+        answerAsk(id.substring(ASK.length()));
       } else if (id.startsWith(OFFER)) {
         String value = id.substring(OFFER.length());
         List<ChangeOffer> picked = pickedOffers(value);
@@ -576,6 +614,8 @@ public class ChatView extends ViewPart {
     changes.clear();
     dataWeaveFixes.clear();
     offers.clear();
+    asks.clear();
+    composer.clearQueue();
     diagnosedOffers.clear();
     buildingDiagnosis = false;
     diagnosePrompt = null;
@@ -888,9 +928,17 @@ public class ChatView extends ViewPart {
                 appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
                     + ". Review the diffs below; nothing is written until you accept.");
               }
+              if (!result.todos().isEmpty()) {
+                transcript.todos(result.todos());
+              }
+              if (result.ask() != null) {
+                transcript.ask(String.valueOf(asks.size()), result.ask().question(), result.ask().choices());
+                asks.add(result.ask());
+              }
               if (result.stoppedAtLimit()) {
                 continueMode = mode;
-                transcript.action("Continue: let the AI carry on from where it paused", CONTINUE);
+                transcript.action("Continue after " + ChatSession.MAX_TOOL_ROUNDS
+                    + " steps — let the AI carry on from where it paused", CONTINUE);
               }
               if (checkFixAfter && drafted > 0) {
                 transcript.action("After you accept and Studio redeploys, check the fix in Diagnose mode",
@@ -903,6 +951,9 @@ public class ChatView extends ViewPart {
                 transcript.offer(String.valueOf(offers.size()),
                     result.offers().stream().map(ChangeOffer::label).toList(), mode == ChatMode.ASK);
                 offers.add(result.offers());
+                if (mode == ChatMode.PLAN) {
+                  transcript.action("Approve plan and draft in Agent mode", APPROVE_PLAN);
+                }
               } else if (mode == ChatMode.PLAN && project != null) {
                 transcript.action("Draft this plan for review in Agent mode", BUILD_PLAN);
               } else if (project != null && fixTarget == null && result.changes().isEmpty()) {
@@ -931,10 +982,107 @@ public class ChatView extends ViewPart {
             running = null;
             composer.setBusy(false);
             saveChat();
+            flushQueue();
+          }
+
+          @Override
+          public void todos(List<TodoItem> items) {
+            if (!transcript.control().isDisposed()) {
+              transcript.todos(items);
+            }
           }
         });
     running = job;
     job.schedule();
+  }
+
+  private void flushQueue() {
+    if (running != null || !composer.hasQueued()) {
+      return;
+    }
+    String next = composer.pollQueued();
+    if (next != null && !next.isBlank()) {
+      composer.setPrompt(next);
+      send();
+    }
+  }
+
+  private void answerAsk(String value) {
+    int colon = value.indexOf(':');
+    if (colon < 0 || running != null) {
+      return;
+    }
+    try {
+      FollowUpAsk ask = asks.get(Integer.parseInt(value.substring(0, colon)));
+      int index = Integer.parseInt(value.substring(colon + 1));
+      if (index < 0 || index >= ask.choices().size()) {
+        return;
+      }
+      sendInCurrentMode(ask.choices().get(index));
+    } catch (RuntimeException e) {
+      append("Note", "That question was from an earlier chat. Ask again if you still need to choose.");
+    }
+  }
+
+  private void retryLast() {
+    if (running != null) {
+      append("Note", "Wait for the current answer, or cancel it, then retry.");
+      return;
+    }
+    String prompt = lastYouPrompt();
+    if (prompt == null || session.dropLastExchange() == null) {
+      append("Note", "Nothing to retry yet.");
+      return;
+    }
+    trimLastYouEntries();
+    appendStep("Retrying the last message (model history rolled back one turn).");
+    composer.setPrompt(prompt);
+    send();
+  }
+
+  private void editLast() {
+    if (running != null) {
+      append("Note", "Wait for the current answer, or cancel it, then edit.");
+      return;
+    }
+    String prompt = lastYouPrompt();
+    if (prompt == null || session.dropLastExchange() == null) {
+      append("Note", "Nothing to edit yet.");
+      return;
+    }
+    trimLastYouEntries();
+    appendStep("Last turn removed from the model history. Edit and send again."
+        + " Accepted files are not rolled back automatically — use Local History if needed.");
+    composer.setPrompt(prompt);
+    composer.focus();
+  }
+
+  // Prompt text of the newest You entry, without the trailing [context] ChatView appends.
+  private String lastYouPrompt() {
+    for (int i = entries.size() - 1; i >= 0; i--) {
+      ChatRecord.Entry entry = entries.get(i);
+      if (!"You".equals(entry.speaker())) {
+        continue;
+      }
+      String text = entry.text();
+      int marker = text.lastIndexOf("\n[");
+      return marker > 0 ? text.substring(0, marker) : text;
+    }
+    return null;
+  }
+
+  // Drops transcript entries from the last You through the end so a retry does not leave a ghost turn.
+  private void trimLastYouEntries() {
+    int start = -1;
+    for (int i = entries.size() - 1; i >= 0; i--) {
+      if ("You".equals(entries.get(i).speaker())) {
+        start = i;
+        break;
+      }
+    }
+    if (start >= 0) {
+      entries.subList(start, entries.size()).clear();
+    }
   }
 
   // What Diagnose mode reads with every message without being asked: Studio's problems in the project, and the

@@ -4,7 +4,8 @@ import java.util.List;
 
 import com.mulesoftforge.studio.ai.render.MarkdownRenderer;
 
-// Turns a clicked element's data ("copy:2", "insert:0", "url:https://…", "cmd:build-plan") into an action.
+// Turns a clicked element's data ("copy:2", "insert:0", "url:https://…", "cmd:build-plan",
+// "fill:…", "quote:…") into an action.
 final class Clicks {
   private Clicks() {}
 
@@ -38,6 +39,8 @@ final class Clicks {
         }
       }
       case "cmd" -> actions.command(value);
+      case "fill" -> actions.fillComposer(value);
+      case "quote" -> actions.quote(value);
       default -> {
         // Unknown clicks are ignored; the page only produces the kinds above.
       }

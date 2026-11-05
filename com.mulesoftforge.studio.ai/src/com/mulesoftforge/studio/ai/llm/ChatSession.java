@@ -25,8 +25,10 @@ import com.mulesoftforge.studio.ai.debug.DebugTools;
 import com.mulesoftforge.studio.ai.debug.PersonalData;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
+import com.mulesoftforge.studio.ai.edit.FollowUpAsk;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
+import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
@@ -51,7 +53,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 
 public class ChatSession {
-  private static final int MAX_TOOL_ROUNDS = 12;
+  public static final int MAX_TOOL_ROUNDS = 12;
   // Share of the model's context window at which the chat is compacted before the next message (Cline and Codex
   // use 90%; a little earlier leaves room for that message's attachments and tool output).
   public static final double COMPACT_AT = 0.85;
@@ -118,9 +120,12 @@ public class ChatSession {
 
   // problems: what the static checks still find in the proposals when the model stopped.
   // offers: changes the model recommended but did not make, for the user to pick from.
+  // ask: clarifying question with clickable answers, or null.
+  // todos: latest task list from update_todo_list this turn (may be empty).
   // masked: secret values hidden from the model this turn.
   public record Turn(String text, ChangeSet changes, int toolCalls, List<CallUsage> calls,
-      Map<String, Integer> toolCounts, List<Problem> problems, List<ChangeOffer> offers, int masked) {
+      Map<String, Integer> toolCounts, List<Problem> problems, List<ChangeOffer> offers, FollowUpAsk ask,
+      List<TodoItem> todos, int masked) {
 
     // Plain-language summary for the transcript, e.g. "read 2 files, proposed changes to 1 file".
     public String activity() {
@@ -192,6 +197,13 @@ public class ChatSession {
       }
       if (!offers.isEmpty()) {
         parts.add("offered " + plural(offers.size(), "change"));
+      }
+      if (ask != null) {
+        parts.add("asked a follow-up");
+      }
+      if (!todos.isEmpty()) {
+        long done = todos.stream().filter(t -> t.status() == TodoItem.Status.COMPLETED).count();
+        parts.add("tracked " + todos.size() + " tasks (" + done + " done)");
       }
       int refused = toolCounts.getOrDefault(MODE_REFUSED, 0);
       if (refused > 0) {
@@ -478,6 +490,7 @@ public class ChatSession {
     ProjectTools tools = project == null ? null : new ProjectTools(project, changes, mode.canEdit, secrets);
     if (tools != null) {
       tools.useDataWeave(cli);
+      tools.onTodosChanged(() -> progress.todos(tools.todos()));
     }
     MunitRunner tester = munitRunner;
     MunitTools munitTools = project == null || tester == null || !mode.canChangeApp ? null
@@ -705,11 +718,15 @@ public class ChatSession {
       remembered += "\n\n" + ChangeOffer.remembered(offers);
     }
     remembered += "\n\n[What you did this turn: "
-        + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, 0).activity() + "]";
+        + new Turn(answer, changes, toolCalls, calls, toolCounts, List.of(), offers, null, List.of(), 0)
+            .activity() + "]";
     history.add(new History.Exchange(asSent(turn, answer), savedText, remembered), attached.inFull());
     lastMode = mode;
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
-    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, secrets.total() - maskedBefore);
+    FollowUpAsk ask = tools == null ? null : tools.ask();
+    List<TodoItem> todos = tools == null ? List.of() : tools.todos();
+    return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, ask, todos,
+        secrets.total() - maskedBefore);
   }
 
   private static UserMessage current(Prompts.SystemParts system, String text, List<ImageContent> images) {
@@ -994,6 +1011,17 @@ public class ChatSession {
       history.restore(messages);
       contextTokens = history.tokens();
     }
+  }
+
+  // Drops the newest exchange. Returns the user text of that exchange, or null when there is none.
+  public synchronized String dropLastExchange() {
+    String user = history.dropLast();
+    contextTokens = history.tokens();
+    return user;
+  }
+
+  public synchronized String lastUserPrompt() {
+    return history.lastUser();
   }
 
   // Told to the model with the next prompt, so it knows which proposals actually landed.

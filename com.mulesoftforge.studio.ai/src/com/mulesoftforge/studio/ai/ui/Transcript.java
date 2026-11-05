@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.eclipse.swt.widgets.Control;
 
+import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.render.Palette;
 
 // The conversation area. Two implementations: a rich HTML one in Eclipse's browser, and a plain
@@ -18,6 +19,12 @@ interface Transcript {
     void open(String url);
 
     void command(String id);
+
+    // Put text in the composer without sending (shift-click on a follow-up choice, quote, starter).
+    default void fillComposer(String text) {}
+
+    // Prepend a quoted block to the composer.
+    default void quote(String text) {}
   }
 
   Control control();
@@ -42,6 +49,12 @@ interface Transcript {
   // "offer:<id>:<ticked indices, comma-separated>" as a command. suggested (Ask mode): collapsed and nothing
   // ticked, since the user asked a question rather than for changes; otherwise all ticked.
   void offer(String id, List<String> items, boolean suggested);
+
+  // Clarifying question with clickable answers. Click sends ask:<id>:<index>; shift-click fills the composer.
+  void ask(String id, String question, List<String> choices);
+
+  // Live task list from update_todo_list. Empty clears it.
+  void todos(List<TodoItem> items);
 
   // One model call of a turn, as shown in a raw block.
   record RawCall(String heading, String request, String response) {}

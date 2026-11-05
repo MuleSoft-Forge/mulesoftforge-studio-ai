@@ -198,6 +198,34 @@ final class PlainTranscript implements Transcript {
     button(HtmlPage.OFFER_BUTTON, SUBMIT + index);
   }
 
+  @Override
+  public void ask(String id, String question, List<String> choices) {
+    dropLive();
+    muted("\n\n" + question);
+    for (int i = 0; i < choices.size(); i++) {
+      button(choices.get(i), "cmd:ask:" + id + ":" + i);
+    }
+  }
+
+  @Override
+  public void todos(List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {
+    dropLive();
+    if (items == null || items.isEmpty()) {
+      return;
+    }
+    long done = items.stream().filter(t -> t.status() == com.mulesoftforge.studio.ai.edit.TodoItem.Status.COMPLETED)
+        .count();
+    muted("\n\nTasks (" + done + "/" + items.size() + "):");
+    for (com.mulesoftforge.studio.ai.edit.TodoItem item : items) {
+      String mark = switch (item.status()) {
+        case COMPLETED -> "[x]";
+        case IN_PROGRESS -> "[>]";
+        case PENDING -> "[ ]";
+      };
+      muted("\n  " + mark + " " + item.content());
+    }
+  }
+
   // No collapsible sections here: one line per turn, and the full exchange opens in an editor.
   @Override
   public void raw(String title, List<RawCall> calls, String open) {

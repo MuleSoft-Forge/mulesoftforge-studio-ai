@@ -30,7 +30,9 @@ public enum Provider {
           + " New keys no longer get gemini-2.5-*; prefer gemini-3-flash-preview.",
       List.of("gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest")),
   AZURE_OPENAI("Azure OpenAI", Api.AZURE_OPENAI, "https://YOUR_RESOURCE.openai.azure.com/", "gpt-5.4-mini",
-      "Endpoint is https://{resource}.openai.azure.com/. Model is the deployment name in Azure."
+      "Endpoint is https://{resource}.openai.azure.com/. Model is the deployment name in Azure"
+          + " (often the same as the model id). Refresh models lists chat catalog ids from"
+          + " /openai/models — Azure no longer lists deployments on the data plane."
           + " GPT-5.x deployments need max_completion_tokens (the plugin sends that).",
       List.of("gpt-5.4-mini", "gpt-5.5", "gpt-4o", "gpt-4o-mini", "o4-mini")),
   BEDROCK("Amazon Bedrock", Api.BEDROCK, "us-east-1", "global.anthropic.claude-sonnet-5-5",

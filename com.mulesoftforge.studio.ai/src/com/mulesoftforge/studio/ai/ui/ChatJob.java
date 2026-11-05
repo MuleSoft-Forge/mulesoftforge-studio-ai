@@ -47,6 +47,8 @@ public final class ChatJob extends Job {
     // state is null when no call is running.
     void live(String state, String preview, long since);
 
+    default void todos(List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {}
+
     void finished(ChatSession.Turn turn, Errors.UserError failure, boolean cancelled, long seconds,
         CostMeter answerCost, List<RawCapture.Call> rawCalls);
   }
@@ -206,6 +208,14 @@ public final class ChatJob extends Job {
         Pricing.CallCost cost = Pricing.costCached(provider, usage);
         answerCost.add(cost);
         Ui.async(display, null, () -> listener.answered(usage, cost, seconds, showModel));
+      }
+
+      @Override
+      public void todos(List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {
+        if (!isCancelled()) {
+          List<com.mulesoftforge.studio.ai.edit.TodoItem> copy = List.copyOf(items);
+          Ui.async(display, null, () -> listener.todos(copy));
+        }
       }
 
       @Override

@@ -27,6 +27,9 @@ public interface Progress {
   // Answer text as it streams in, piece by piece. A preview only: the finished answer replaces it.
   default void partial(String text) {}
 
+  // Latest task list from update_todo_list; empty clears it. Called on the worker thread.
+  default void todos(java.util.List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {}
+
   boolean isCancelled();
 
   default void checkCancelled() {

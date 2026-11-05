@@ -121,6 +121,38 @@ public final class ProjectTools {
                   .build())
               .required("items")
               .build())
+          .build(),
+      ToolSpecification.builder()
+          .name("ask_followup_question")
+          .description("Ask the user one clarifying question when you cannot proceed without their choice."
+              + " Provide 2 to 4 complete, actionable answers they can click. Call it once, at the end of your"
+              + " turn, instead of asking the same question in prose. Do not use it for ordinary explanations.")
+          .parameters(JsonObjectSchema.builder()
+              .addStringProperty("question", "Clear, specific question")
+              .addProperty("choices", JsonArraySchema.builder()
+                  .description("2 to 4 complete answers the user can pick")
+                  .items(new JsonStringSchema())
+                  .build())
+              .required("question", "choices")
+              .build())
+          .build(),
+      ToolSpecification.builder()
+          .name("update_todo_list")
+          .description("Replace the on-screen task list for a multi-step job. Call it when the plan changes:"
+              + " after you decide the steps, when you start one, and when you finish one. Keep ids stable"
+              + " across calls. Status is pending, in_progress or completed.")
+          .parameters(JsonObjectSchema.builder()
+              .addProperty("todos", JsonArraySchema.builder()
+                  .description("The full list in order")
+                  .items(JsonObjectSchema.builder()
+                      .addStringProperty("id", "Stable short id, e.g. read-flow")
+                      .addStringProperty("content", "What to do, one line")
+                      .addStringProperty("status", "pending, in_progress or completed")
+                      .required("id", "content", "status")
+                      .build())
+                  .build())
+              .required("todos")
+              .build())
           .build());
 
   private final ProjectFiles files;
@@ -129,6 +161,9 @@ public final class ProjectTools {
   private final SecretMask secrets;
   private final ConnectorCatalog connectors;
   private final List<ChangeOffer> offers = new ArrayList<>();
+  private FollowUpAsk ask;
+  private final List<TodoItem> todos = new ArrayList<>();
+  private Runnable onTodosChanged = () -> {};
   private final Map<String, List<Problem>> dataWeaveChecked = new HashMap<>();
   private List<Problem> baseline;
   private DataWeaveCli dataWeave;
@@ -170,6 +205,21 @@ public final class ProjectTools {
     return List.copyOf(offers);
   }
 
+  // What ask_followup_question recorded this turn; a later call replaces an earlier one.
+  public FollowUpAsk ask() {
+    return ask;
+  }
+
+  // Latest update_todo_list for this turn.
+  public List<TodoItem> todos() {
+    return List.copyOf(todos);
+  }
+
+  // Called on the worker thread after each update_todo_list so the UI can refresh mid-turn.
+  public void onTodosChanged(Runnable listener) {
+    onTodosChanged = listener == null ? () -> {} : listener;
+  }
+
   // One-line description of a call for the progress display.
   public static String describe(ToolExecutionRequest request) {
     String target;
@@ -190,6 +240,8 @@ public final class ProjectTools {
       case "edit_file" -> "Drafting an edit to " + target;
       case "write_file" -> "Drafting " + target;
       case "offer_changes" -> "Listing the changes it can make";
+      case "ask_followup_question" -> "Asking a follow-up question";
+      case "update_todo_list" -> "Updating the task list";
       default -> request.name() + " " + target;
     };
   }
@@ -210,6 +262,8 @@ public final class ProjectTools {
         case "edit_file" -> edit(args);
         case "write_file" -> write(args);
         case "offer_changes" -> offer(args);
+        case "ask_followup_question" -> ask(args);
+        case "update_todo_list" -> updateTodos(args);
         default -> "ERROR: unknown tool " + request.name();
       };
     } catch (Exception e) {
@@ -375,6 +429,52 @@ public final class ProjectTools {
     offers.addAll(parsed);
     return "Offered " + parsed.size() + (parsed.size() == 1 ? " change" : " changes") + ". The user sees them as"
         + " a checklist below your answer. Finish now; do not list them again or ask whether to make them.";
+  }
+
+  private String ask(JsonNode args) {
+    String question = text(args, "question", true);
+    JsonNode choices = args.get("choices");
+    if (choices == null || !choices.isArray()) {
+      return "ERROR: choices must be a list of 2 to 4 complete answers.";
+    }
+    List<String> parsed = new ArrayList<>();
+    for (JsonNode choice : choices) {
+      if (choice != null && choice.isTextual() && !choice.asText().isBlank()) {
+        parsed.add(choice.asText().trim());
+      }
+    }
+    try {
+      ask = new FollowUpAsk(question, parsed);
+    } catch (IllegalArgumentException e) {
+      return "ERROR: " + e.getMessage();
+    }
+    return "Asked the user. They see the question and " + parsed.size()
+        + " clickable answers below your reply. Finish now; wait for their choice before continuing.";
+  }
+
+  private String updateTodos(JsonNode args) {
+    JsonNode list = args.get("todos");
+    if (list == null || !list.isArray() || list.isEmpty()) {
+      return "ERROR: todos must be a non-empty list of {id, content, status}.";
+    }
+    List<TodoItem> parsed = new ArrayList<>();
+    for (JsonNode item : list) {
+      try {
+        parsed.add(TodoItem.of(text(item, "id", true), text(item, "content", true),
+            text(item, "status", false)));
+      } catch (IllegalArgumentException e) {
+        return "ERROR: " + e.getMessage();
+      }
+    }
+    todos.clear();
+    todos.addAll(parsed);
+    try {
+      onTodosChanged.run();
+    } catch (RuntimeException e) {
+      // UI refresh must not fail the tool.
+    }
+    long done = parsed.stream().filter(t -> t.status() == TodoItem.Status.COMPLETED).count();
+    return "Task list updated: " + done + "/" + parsed.size() + " completed. Keep working.";
   }
 
   private String stage(String path, String content) throws Exception {

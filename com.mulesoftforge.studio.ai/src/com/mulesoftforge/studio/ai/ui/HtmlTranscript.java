@@ -140,6 +140,23 @@ final class HtmlTranscript implements Transcript {
   }
 
   @Override
+  public void ask(String id, String question, List<String> choices) {
+    run("msfAsk(" + js(id) + "," + js(question) + "," + jsValue(choices) + ")");
+  }
+
+  @Override
+  public void todos(List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {
+    List<java.util.Map<String, String>> payload = new ArrayList<>();
+    for (com.mulesoftforge.studio.ai.edit.TodoItem item : items) {
+      payload.add(java.util.Map.of(
+          "id", item.id(),
+          "content", item.content(),
+          "status", item.status().wire()));
+    }
+    run("msfTodos(" + jsValue(payload) + ")");
+  }
+
+  @Override
   public void raw(String title, List<RawCall> calls, String open) {
     run("msfRaw(" + js(title) + "," + jsValue(calls) + "," + js(open) + ")");
   }

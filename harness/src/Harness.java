@@ -50,6 +50,7 @@ import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
+import com.mulesoftforge.studio.ai.llm.ContextWindow;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.Errors;
@@ -430,6 +431,19 @@ public class Harness {
         .contains("name=\"a\""));
     failed += expect(readOnly, "offer_changes", "{\"items\":[\"Use secure properties\"]}", "Offered 1 change");
     failed += check("a later offer replaces the earlier one", readOnly.offers().size() == 1);
+    failed += expect(readOnly, "ask_followup_question", "{\"question\":\"Which flow?\",\"choices\":[\"orders\"]}",
+        "ERROR: choices must have");
+    failed += expect(readOnly, "ask_followup_question",
+        "{\"question\":\"Which flow?\",\"choices\":[\"orders\",\"customers\",\"inventory\"]}", "Asked the user");
+    failed += check("ask records the question and choices", readOnly.ask() != null
+        && readOnly.ask().question().equals("Which flow?") && readOnly.ask().choices().size() == 3);
+    failed += expect(readOnly, "update_todo_list", "{\"todos\":[]}", "ERROR: todos must be");
+    failed += expect(readOnly, "update_todo_list",
+        "{\"todos\":[{\"id\":\"a\",\"content\":\"Read the flow\",\"status\":\"completed\"},"
+            + "{\"id\":\"b\",\"content\":\"Fix the logger\",\"status\":\"in_progress\"}]}",
+        "Task list updated: 1/2 completed");
+    failed += check("todo list keeps status", readOnly.todos().size() == 2
+        && readOnly.todos().get(1).status() == com.mulesoftforge.studio.ai.edit.TodoItem.Status.IN_PROGRESS);
     String picked = ChangeOffer.prompt(offered.subList(1, 2));
     failed += check("the request names only the ticked changes", picked.contains("1. Remove the unused sockets")
         && !picked.contains("classifier"));
@@ -543,6 +557,20 @@ public class Harness {
     failed += check("azure api version is one the shipped SDK recognises",
         ChatModels.azureApiVersion() != null && !ChatModels.azureApiVersion().isBlank()
             && !"2024-10-21".equals(ChatModels.azureApiVersion()));
+    // Data-plane GET /openai/deployments 404s; Refresh uses /openai/models and chat_completion.
+    List<String> azureModels = ModelLists.parseAzureModels(json.readTree("""
+        {"data":[
+          {"id":"gpt-5.4-mini","capabilities":{"chat_completion":true,"embeddings":false}},
+          {"id":"text-embedding-3-small","capabilities":{"chat_completion":false,"embeddings":true}},
+          {"id":"whisper-001","capabilities":{"chat_completion":false}}
+        ]}
+        """));
+    failed += check("azure models keep chat ids only",
+        azureModels.equals(List.of("gpt-5.4-mini")));
+    failed += check("azure picker drops dated snapshot ids",
+        ModelLists.filterForChat(Provider.AZURE_OPENAI,
+            List.of("gpt-5.4-mini", "gpt-5.4-mini-2026-03-17", "text-embedding-3-small"))
+            .equals(List.of("gpt-5.4-mini")));
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -1352,6 +1380,17 @@ public class Harness {
         && page.contains("possible fixes"));
     failed += check("Ask mode says it can suggest fixes", ChatMode.ASK.description.contains("Never changes files")
         && ChatMode.ASK.description.contains("suggest fixes"));
+    failed += check("follow-up ask renders choices", page.contains("function msfAsk(")
+        && page.contains("data-ask-choice") && page.contains("'cmd:ask:'"));
+    failed += check("todo tray and starters are in the page", page.contains("function msfTodos(")
+        && page.contains("id=\"starters\"") && page.contains("data-starter="));
+    failed += check("sticky header and quote button are in the page", page.contains("id=\"sticky\"")
+        && page.contains("id=\"quote-btn\"") && page.contains("'quote:'"));
+    failed += check("AI message actions include retry and feedback", page.contains("'cmd:retry'")
+        && page.contains("'cmd:edit-last'") && page.contains("'cmd:feedback:up'"));
+    failed += check("context bar describes reserved output",
+        ContextWindow.describe(34_000, 200_000).contains("reserved")
+            && ContextWindow.describe(34_000, 200_000).contains("free"));
     failed += check("raw blocks are text, collapsed and hideable", page.contains("function msfRaw(")
         && page.contains("pre.textContent = part[1]") && page.contains("function msfShowRaw(")
         && page.contains(".raw.hidden { display: none; }"));

@@ -6,4 +6,5 @@ connector_reference for the connector operations the plan relies on), then reply
 ## Risks and open questions
 ## How to test (MUnit tests or manual requests)
 Keep it short enough to review in a minute. Then call offer_changes with one item per numbered
-change, so the user can pick which ones Agent mode builds.
+change, so the user can pick which ones Agent mode builds. If a decision blocks the plan, call
+ask_followup_question instead of leaving an open question in prose.
