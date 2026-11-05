@@ -20,8 +20,9 @@ import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 /**
- * Lists models from each provider ({@code GET /models} or Ollama {@code /api/tags}).
- * Preference UI uses {@link #forPicker} so curated suggestions stay on top and noisy ids are filtered.
+ * Lists models from each provider ({@code GET /models}, Bedrock inference profiles / foundation models,
+ * or Ollama {@code /api/tags}). Preference UI uses {@link #forPicker} so curated suggestions stay on top
+ * and noisy ids are filtered.
  */
 public final class ModelLists {
   private static final ObjectMapper JSON = new ObjectMapper();
@@ -37,7 +38,7 @@ public final class ModelLists {
       case ANTHROPIC -> anthropic(connection);
       case GOOGLE_AI_GEMINI -> gemini(connection);
       case AZURE_OPENAI -> azureOpenAi(connection);
-      case BEDROCK -> List.of(); // Bedrock has no simple OpenAI-style /models; use the curated list.
+      case BEDROCK -> bedrock(connection);
       case OLLAMA -> ollama(connection);
     };
   }
@@ -113,6 +114,13 @@ public final class ModelLists {
     }
     if (provider == Provider.GEMINI) {
       return !(lower.startsWith("gemini-") || lower.startsWith("models/gemini-"));
+    }
+    if (provider == Provider.BEDROCK) {
+      // Converse/chat only: drop embeddings, rerank, image, speech and video ids.
+      return lower.contains("embed") || lower.contains("rerank") || lower.contains("titan-embed")
+          || lower.contains("stability.") || lower.contains("image") || lower.contains("upscale")
+          || lower.contains("outpaint") || lower.contains("inpaint") || lower.contains("sonic")
+          || lower.contains("marengo") || lower.contains("pegasus") || lower.contains("voxtral");
     }
     return false;
   }
@@ -210,7 +218,8 @@ public final class ModelLists {
   }
 
   private static List<String> azureOpenAi(Connection connection) throws Exception {
-    String url = trimSlash(connection.baseUrl()) + "/openai/deployments?api-version=2024-10-21";
+    String url = trimSlash(connection.baseUrl()) + "/openai/deployments?api-version="
+        + ChatModels.azureApiVersion();
     JsonNode root = getJson(url, HttpRequest.newBuilder()
         .header("Accept", "application/json")
         .header("api-key", connection.apiKey().trim()));
@@ -228,6 +237,114 @@ public final class ModelLists {
       ids.addAll(fallbackIds(root.toString()));
     }
     return uniqueSorted(ids);
+  }
+
+  // Control-plane listing verified with a Bedrock API key (Bearer). Inference-profile ids are preferred
+  // for converse; bare foundation-model ids are kept only when no profile covers them.
+  private static List<String> bedrock(Connection connection) throws Exception {
+    String key = connection.apiKey() == null ? "" : connection.apiKey().trim();
+    if (key.isEmpty()) {
+      throw new IllegalStateException(
+          "Paste a Bedrock API key to refresh models. Without a key the plugin uses the host AWS"
+              + " credential chain for chat, but model listing needs the API key.");
+    }
+    String region = ChatModels.bedrockRegion(connection.baseUrl());
+    String control = "https://bedrock." + region + ".amazonaws.com";
+    List<String> profiles = bedrockInferenceProfiles(control, key);
+    List<String> foundation = bedrockFoundationModels(control, key);
+    LinkedHashSet<String> ids = new LinkedHashSet<>(profiles);
+    for (String modelId : foundation) {
+      if (!bedrockProfileCovers(profiles, modelId)) {
+        ids.add(modelId);
+      }
+    }
+    return uniqueSorted(new ArrayList<>(ids));
+  }
+
+  private static List<String> bedrockInferenceProfiles(String control, String apiKey) throws Exception {
+    List<String> ids = new ArrayList<>();
+    String next = null;
+    do {
+      String url = control + "/inference-profiles?maxResults=1000";
+      if (next != null) {
+        url += "&nextToken=" + java.net.URLEncoder.encode(next, java.nio.charset.StandardCharsets.UTF_8);
+      }
+      JsonNode root = getJson(url, bedrockAuth(apiKey));
+      ids.addAll(parseBedrockInferenceProfiles(root));
+      JsonNode token = root.get("nextToken");
+      next = token != null && token.isTextual() && !token.asText().isBlank() ? token.asText() : null;
+    } while (next != null);
+    return ids;
+  }
+
+  private static List<String> bedrockFoundationModels(String control, String apiKey) throws Exception {
+    String url = control + "/foundation-models?byOutputModality=TEXT&byInferenceType=ON_DEMAND";
+    return parseBedrockFoundationModels(getJson(url, bedrockAuth(apiKey)));
+  }
+
+  private static HttpRequest.Builder bedrockAuth(String apiKey) {
+    return HttpRequest.newBuilder()
+        .header("Accept", "application/json")
+        .header("Authorization", "Bearer " + apiKey);
+  }
+
+  // Public for offline harness checks with fixture JSON.
+  public static List<String> parseBedrockInferenceProfiles(JsonNode root) {
+    List<String> ids = new ArrayList<>();
+    JsonNode summaries = root.get("inferenceProfileSummaries");
+    if (summaries == null || !summaries.isArray()) {
+      return ids;
+    }
+    for (JsonNode item : summaries) {
+      JsonNode status = item.get("status");
+      if (status != null && status.isTextual() && !"ACTIVE".equalsIgnoreCase(status.asText())) {
+        continue;
+      }
+      JsonNode id = item.get("inferenceProfileId");
+      if (id != null && id.isTextual() && !id.asText().isBlank()) {
+        ids.add(id.asText().trim());
+      }
+    }
+    return ids;
+  }
+
+  public static List<String> parseBedrockFoundationModels(JsonNode root) {
+    List<String> ids = new ArrayList<>();
+    JsonNode summaries = root.get("modelSummaries");
+    if (summaries == null || !summaries.isArray()) {
+      return ids;
+    }
+    for (JsonNode item : summaries) {
+      JsonNode lifecycle = item.get("modelLifecycle");
+      if (lifecycle != null) {
+        JsonNode status = lifecycle.get("status");
+        if (status != null && status.isTextual() && "LEGACY".equalsIgnoreCase(status.asText())) {
+          continue;
+        }
+      }
+      JsonNode id = item.get("modelId");
+      if (id != null && id.isTextual() && !id.asText().isBlank()) {
+        ids.add(id.asText().trim());
+      }
+    }
+    return ids;
+  }
+
+  public static boolean bedrockProfileCovers(List<String> profileIds, String modelId) {
+    if (modelId == null || modelId.isBlank()) {
+      return false;
+    }
+    String bare = modelId.trim();
+    for (String profile : profileIds) {
+      if (profile == null || profile.isBlank()) {
+        continue;
+      }
+      String id = profile.trim();
+      if (id.equals(bare) || id.endsWith("." + bare)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<String> ollama(Connection connection) throws Exception {
@@ -289,7 +406,7 @@ public final class ModelLists {
   private static void validate(Connection connection) {
     Provider provider = connection.provider();
     if (connection.baseUrl().isBlank()) {
-      throw new IllegalStateException("Set the base URL for " + provider.label
+      throw new IllegalStateException("Set the " + provider.baseUrlLabel() + " for " + provider.label
           + " in Preferences > MuleSoftForge Studio AI.");
     }
     String credentials = provider.credentialsProblem(connection.apiKey(), connection.clientId(),
@@ -308,10 +425,6 @@ public final class ModelLists {
   }
 
   public static String summarize(Provider provider, int rawCount, List<String> picker) {
-    if (provider == Provider.BEDROCK) {
-      return "Amazon Bedrock has no Refresh models catalog here; showing " + picker.size()
-          + " curated model ids. Type any Bedrock model id or inference profile to override.";
-    }
     return "Loaded " + rawCount + " from " + provider.label
         + "; showing " + picker.size() + " in the list (curated + chat-oriented). Type any id to override.";
   }

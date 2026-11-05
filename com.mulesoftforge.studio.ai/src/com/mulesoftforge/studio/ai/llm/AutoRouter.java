@@ -58,9 +58,9 @@ public final class AutoRouter {
       case OPENROUTER, MULESOFT_AI_GATEWAY -> new Models("openai/gpt-5-mini", "anthropic/claude-sonnet-4.6");
       case OPENAI -> new Models("gpt-5-mini", "gpt-5");
       case ANTHROPIC -> new Models("claude-haiku-4-5", "claude-sonnet-4-6");
-      case GEMINI -> new Models("gemini-2.5-flash", "gemini-2.5-pro");
-      case AZURE_OPENAI -> new Models("gpt-4o-mini", "gpt-4o");
-      case BEDROCK -> new Models("anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-sonnet-4-20250514-v1:0");
+      case GEMINI -> new Models("gemini-3-flash-preview", "gemini-3.1-pro-preview");
+      case AZURE_OPENAI -> new Models("gpt-5.4-mini", "gpt-5.4-mini");
+      case BEDROCK -> new Models("global.anthropic.claude-haiku-5-5", "global.anthropic.claude-sonnet-5-5");
       case OLLAMA -> new Models("qwen2.5-coder", "qwen2.5-coder");
       case CUSTOM -> new Models("", "");
     };

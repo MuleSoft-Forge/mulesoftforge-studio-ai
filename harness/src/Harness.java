@@ -483,6 +483,66 @@ public class Harness {
         "us-west-2".equals(ChatModels.bedrockRegion("us-west-2")));
     failed += check("bedrock region from runtime URL",
         "eu-west-1".equals(ChatModels.bedrockRegion("https://bedrock-runtime.eu-west-1.amazonaws.com")));
+    List<String> bedrockIds = new ArrayList<>(Provider.BEDROCK.suggestedModels);
+    bedrockIds.add(Provider.BEDROCK.defaultModel);
+    bedrockIds.add(AutoRouter.defaults(Provider.BEDROCK).fast());
+    bedrockIds.add(AutoRouter.defaults(Provider.BEDROCK).strong());
+    failed += check("bedrock Claude defaults are inference profiles (bare ids fail on demand)",
+        bedrockIds.stream().filter(id -> id.contains("anthropic.")).allMatch(id -> id.startsWith("global.")));
+    failed += check("bedrock labels the base URL field Region; others keep Base URL",
+        "Region".equals(Provider.BEDROCK.baseUrlLabel()) && "Base URL".equals(Provider.OPENAI.baseUrlLabel()));
+    ObjectMapper json = new ObjectMapper();
+    List<String> profiles = ModelLists.parseBedrockInferenceProfiles(json.readTree("""
+        {"inferenceProfileSummaries":[
+          {"inferenceProfileId":"global.anthropic.claude-sonnet-5-5","status":"ACTIVE"},
+          {"inferenceProfileId":"us.anthropic.claude-haiku-5-5","status":"ACTIVE"},
+          {"inferenceProfileId":"us.stability.stable-outpaint-v1:0","status":"ACTIVE"},
+          {"inferenceProfileId":"old.profile","status":"INACTIVE"}
+        ]}
+        """));
+    failed += check("bedrock refresh keeps active inference profiles",
+        profiles.equals(List.of("global.anthropic.claude-sonnet-5-5", "us.anthropic.claude-haiku-5-5",
+            "us.stability.stable-outpaint-v1:0")));
+    List<String> foundation = ModelLists.parseBedrockFoundationModels(json.readTree("""
+        {"modelSummaries":[
+          {"modelId":"anthropic.claude-sonnet-5-5","modelLifecycle":{"status":"ACTIVE"}},
+          {"modelId":"mistral.mistral-large-3-675b-instruct","modelLifecycle":{"status":"ACTIVE"}},
+          {"modelId":"anthropic.claude-sonnet-4-5-20250929-v1:0","modelLifecycle":{"status":"LEGACY"}},
+          {"modelId":"amazon.titan-embed-text-v2:0","modelLifecycle":{"status":"ACTIVE"}}
+        ]}
+        """));
+    failed += check("bedrock refresh drops LEGACY foundation models",
+        foundation.equals(List.of("anthropic.claude-sonnet-5-5", "mistral.mistral-large-3-675b-instruct",
+            "amazon.titan-embed-text-v2:0")));
+    failed += check("bedrock profile covers matching bare foundation id",
+        ModelLists.bedrockProfileCovers(profiles, "anthropic.claude-sonnet-5-5")
+            && !ModelLists.bedrockProfileCovers(profiles, "mistral.mistral-large-3-675b-instruct"));
+    List<String> chat = ModelLists.filterForChat(Provider.BEDROCK, List.of(
+        "global.anthropic.claude-sonnet-5-5", "us.stability.stable-outpaint-v1:0",
+        "amazon.titan-embed-text-v2:0", "mistral.mistral-large-3-675b-instruct"));
+    failed += check("bedrock chat filter drops embed and image ids",
+        chat.equals(List.of("global.anthropic.claude-sonnet-5-5", "mistral.mistral-large-3-675b-instruct")));
+    failed += check("bedrock summarize no longer claims refresh is unavailable",
+        !ModelLists.summarize(Provider.BEDROCK, 12, List.of("a", "b")).contains("no Refresh"));
+    // Roo-Code strips us./global. before pricing; we map the bare id onto OpenRouter's catalog.
+    failed += check("bedrock price candidates strip us. and map Anthropic",
+        Pricing.candidates(Provider.BEDROCK, "us.anthropic.claude-sonnet-5-5")
+            .contains("anthropic/claude-sonnet-5.5"));
+    failed += check("bedrock price candidates strip global. for Haiku",
+        Pricing.candidates(Provider.BEDROCK, "global.anthropic.claude-haiku-5-5")
+            .contains("anthropic/claude-haiku-5.5"));
+    failed += check("bedrock price candidates map OpenAI and Meta profiles",
+        Pricing.candidates(Provider.BEDROCK, "us.openai.gpt-5.5").contains("openai/gpt-5.5")
+            && Pricing.candidates(Provider.BEDROCK, "us.meta.llama4-maverick-17b-instruct-v1:0")
+                .contains("meta-llama/llama4-maverick-17b-instruct-v1"));
+    failed += check("bedrock price candidates map Nova without :0",
+        Pricing.candidates(Provider.BEDROCK, "amazon.nova-pro-v1:0").contains("amazon/nova-pro-v1"));
+    failed += check("bedrock list price is a guide, not the bill",
+        Pricing.listPriceIsGuide(Provider.BEDROCK) && !Pricing.listPriceIsGuide(Provider.ANTHROPIC));
+    // The Azure SDK rejects service versions that are not in OpenAIServiceVersion (e.g. 2024-10-21).
+    failed += check("azure api version is one the shipped SDK recognises",
+        ChatModels.azureApiVersion() != null && !ChatModels.azureApiVersion().isBlank()
+            && !"2024-10-21".equals(ChatModels.azureApiVersion()));
     System.exit(failed == 0 ? 0 : 1);
   }
 

@@ -10,20 +10,27 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 // Turns token counts into dollars. OpenRouter's reported cost wins; otherwise prices come from
-// OpenRouter's public model list, which also carries OpenAI and Anthropic list prices.
+// OpenRouter's public model list (same class of estimate as Roo-Code's curated $/MTok and Aider's
+// LiteLLM table). Bedrock ids are normalised to OpenRouter ids before lookup.
 public final class Pricing {
   public static final String PRICE_LIST_URL = "https://openrouter.ai/api/v1/models";
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final long RETRY_AFTER_FAILURE_MS = 10 * 60 * 1000;
+  // Longest first. Matches Roo-Code AWS_INFERENCE_PROFILE_MAPPING + global. (bedrock.ts parseBaseModelId).
+  private static final String[] BEDROCK_PROFILE_PREFIXES = {
+      "global.", "apac.", "us.", "eu.", "au.", "jp.", "ca.", "ug.", "sa."
+  };
 
   // USD per token.
   record Price(double input, double output, double cacheRead, double cacheWrite) {}
@@ -180,10 +187,10 @@ public final class Pricing {
   }
 
   // Provider model ids differ from OpenRouter's: dated snapshots, and Anthropic uses 4-6 for 4.6.
-  static List<String> candidates(Provider provider, String model) {
-    String undated = model.replaceFirst("-\\d{4}-\\d{2}-\\d{2}$", "").replaceFirst("-\\d{8}$", "")
-        .replaceFirst("-\\d{4}$", "");
-    List<String> ids = new ArrayList<>();
+  // Public for offline harness checks of Bedrock → OpenRouter id mapping.
+  public static List<String> candidates(Provider provider, String model) {
+    String undated = stripDateSuffix(model);
+    Set<String> ids = new LinkedHashSet<>();
     switch (provider) {
       case OPENAI -> {
         ids.add("openai/" + model);
@@ -191,7 +198,7 @@ public final class Pricing {
       }
       case ANTHROPIC -> {
         ids.add("anthropic/" + model);
-        ids.add("anthropic/" + undated.replaceAll("(\\d)-(\\d)", "$1.$2"));
+        ids.add("anthropic/" + anthropicOpenRouterName(undated));
       }
       case GEMINI -> {
         ids.add("google/" + model);
@@ -202,29 +209,104 @@ public final class Pricing {
         ids.add("openai/" + undated);
         ids.add(model);
       }
-      case BEDROCK -> {
-        ids.add(model);
-        ids.add(undated);
-        // OpenRouter-style ids when the Bedrock id embeds the vendor.
-        if (model.startsWith("anthropic.")) {
-          ids.add("anthropic/" + undated.replace("anthropic.", "").replaceAll("(\\d)-(\\d)", "$1.$2"));
-        }
-        if (model.startsWith("amazon.")) {
-          ids.add("amazon/" + undated.replace("amazon.", ""));
-        }
-      }
+      case BEDROCK -> addBedrockCandidates(ids, model);
       case OPENROUTER, MULESOFT_AI_GATEWAY, CUSTOM, OLLAMA -> {
         ids.add(model);
         ids.add(undated);
         if (!model.contains("/")) {
           ids.add("openai/" + undated);
-          ids.add("anthropic/" + undated.replaceAll("(\\d)-(\\d)", "$1.$2"));
+          ids.add("anthropic/" + anthropicOpenRouterName(undated));
           ids.add("google/" + undated);
         }
       }
       default -> throw new IllegalStateException("Unhandled provider " + provider);
     }
-    return ids;
+    return new ArrayList<>(ids);
+  }
+
+  private static void addBedrockCandidates(Set<String> ids, String model) {
+    ids.add(model);
+    ids.add(stripDateSuffix(model));
+    // us.anthropic.… / global.amazon.… → anthropic.… / amazon.… (Roo-Code parseBaseModelId).
+    String bare = stripBedrockProfilePrefix(model);
+    if (!bare.equals(model)) {
+      ids.add(bare);
+      ids.add(stripDateSuffix(bare));
+    }
+    String noVersion = stripBedrockVersionSuffix(bare);
+    if (!noVersion.equals(bare)) {
+      ids.add(noVersion);
+      ids.add(stripDateSuffix(noVersion));
+    }
+    for (String form : List.of(bare, noVersion, stripDateSuffix(bare), stripDateSuffix(noVersion))) {
+      addBedrockOpenRouterIds(ids, form);
+    }
+  }
+
+  // Inference-profile prefixes from Roo-Code AWS_INFERENCE_PROFILE_MAPPING, plus global.
+  static String stripBedrockProfilePrefix(String modelId) {
+    if (modelId == null || modelId.isBlank()) {
+      return modelId;
+    }
+    for (String prefix : BEDROCK_PROFILE_PREFIXES) {
+      if (modelId.startsWith(prefix)) {
+        return modelId.substring(prefix.length());
+      }
+    }
+    return modelId;
+  }
+
+  static String stripBedrockVersionSuffix(String modelId) {
+    if (modelId == null || modelId.isBlank()) {
+      return modelId;
+    }
+    return modelId.replaceFirst(":\\d+$", "");
+  }
+
+  private static void addBedrockOpenRouterIds(Set<String> ids, String bare) {
+    if (bare == null || bare.isBlank() || !bare.contains(".")) {
+      return;
+    }
+    int dot = bare.indexOf('.');
+    String vendor = bare.substring(0, dot);
+    String rest = bare.substring(dot + 1);
+    if (rest.isBlank()) {
+      return;
+    }
+    switch (vendor) {
+      case "anthropic" -> ids.add("anthropic/" + anthropicOpenRouterName(rest));
+      case "amazon" -> ids.add("amazon/" + rest);
+      case "openai" -> ids.add("openai/" + rest);
+      case "meta" -> ids.add("meta-llama/" + rest);
+      case "mistral" -> ids.add("mistralai/" + rest);
+      case "google" -> ids.add("google/" + rest);
+      case "cohere" -> ids.add("cohere/" + rest);
+      case "deepseek" -> ids.add("deepseek/" + rest);
+      case "xai" -> {
+        ids.add("x-ai/" + rest);
+        ids.add("xai/" + rest);
+      }
+      case "qwen" -> ids.add("qwen/" + rest);
+      case "moonshotai", "moonshot" -> {
+        ids.add("moonshotai/" + rest);
+        ids.add("moonshot/" + rest);
+      }
+      default -> {
+        // Unknown Bedrock vendor: still try vendor/rest in case OpenRouter uses the same slug.
+        ids.add(vendor + "/" + rest);
+      }
+    }
+  }
+
+  private static String stripDateSuffix(String model) {
+    return model.replaceFirst("-\\d{4}-\\d{2}-\\d{2}$", "").replaceFirst("-\\d{8}$", "")
+        .replaceFirst("-\\d{4}$", "");
+  }
+
+  // Anthropic OpenRouter ids use dots in the version (claude-sonnet-4.6), Bedrock often uses hyphens.
+  private static String anthropicOpenRouterName(String name) {
+    String value = name.startsWith("anthropic.") ? name.substring("anthropic.".length()) : name;
+    return value.replaceAll("(\\d)-(\\d)", "$1.$2");
   }
 
   private static synchronized Map<String, Price> prices() {

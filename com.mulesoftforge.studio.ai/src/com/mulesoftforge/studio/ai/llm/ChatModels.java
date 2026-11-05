@@ -16,6 +16,7 @@ import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.http.client.jdk.JdkHttpClient;
 import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.model.anthropic.AnthropicStreamingChatModel;
+import com.azure.ai.openai.OpenAIServiceVersion;
 import dev.langchain4j.model.azure.AzureOpenAiChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatModel;
 import dev.langchain4j.model.bedrock.BedrockChatRequestParameters;
@@ -35,7 +36,6 @@ import software.amazon.awssdk.services.bedrockruntime.auth.scheme.BedrockRuntime
 public final class ChatModels {
   private static final Duration TIMEOUT = Duration.ofSeconds(180);
   static final int MAX_OUTPUT_TOKENS = 32000;
-  private static final String AZURE_API_VERSION = "2024-10-21";
 
   private record BedrockKey(String region, String apiKey) {}
 
@@ -106,13 +106,15 @@ public final class ChatModels {
           .timeout(TIMEOUT)
           .listeners(listeners)
           .build());
+      // Omit serviceVersion so the Azure SDK uses OpenAIServiceVersion.getLatest(); a hard-coded
+      // string such as 2024-10-21 is rejected when it is not in that enum.
       case AZURE_OPENAI -> AzureOpenAiChatModel.builder()
           .endpoint(trimSlash(connection.baseUrl()))
           .apiKey(apiKey)
           .deploymentName(connection.model())
-          .serviceVersion(AZURE_API_VERSION)
           // Azure and Bedrock use their own SDK clients, not DiagnosingHttpClient, so no OutputCap fallback.
-          .maxTokens(OutputCap.FALLBACK_TOKENS)
+          // GPT-5.x deployments reject max_tokens; max_completion_tokens is required (and fine for older models).
+          .maxCompletionTokens(OutputCap.FALLBACK_TOKENS)
           .timeout(TIMEOUT)
           .maxRetries(0)
           .listeners(listeners)
@@ -178,7 +180,12 @@ public final class ChatModels {
     BEDROCK.clear();
   }
 
-  // Preferences "Base URL" holds the region for Bedrock (us-east-1), or a full bedrock-runtime URL.
+  // Same string the Azure SDK uses when serviceVersion is left unset. Used for Refresh models HTTP.
+  public static String azureApiVersion() {
+    return OpenAIServiceVersion.getLatest().getVersion();
+  }
+
+  // For Bedrock the base URL setting (labelled Region) holds the region (us-east-1) or a full bedrock-runtime URL.
   public static String bedrockRegion(String baseUrl) {
     String value = baseUrl == null ? "" : baseUrl.trim();
     if (value.isEmpty()) {
@@ -261,7 +268,8 @@ public final class ChatModels {
   private static void validate(Connection connection) {
     String name = connection.provider().label;
     if (connection.baseUrl().isBlank()) {
-      throw new IllegalStateException("Set the base URL for " + name + " in Preferences > MuleSoftForge Studio AI.");
+      throw new IllegalStateException("Set the " + connection.provider().baseUrlLabel() + " for " + name
+          + " in Preferences > MuleSoftForge Studio AI.");
     }
     if (connection.model().isBlank()) {
       throw new IllegalStateException("Set the model for " + name + " in Preferences > MuleSoftForge Studio AI.");

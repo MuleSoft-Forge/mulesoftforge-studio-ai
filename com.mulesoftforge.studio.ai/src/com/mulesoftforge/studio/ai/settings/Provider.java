@@ -25,18 +25,22 @@ public enum Provider {
       "Type any model id, or Refresh models to load what your key can access.",
       List.of("claude-sonnet-4-6", "claude-sonnet-4-5", "claude-opus-4-6", "claude-haiku-4-5")),
   GEMINI("Google Gemini", Api.GOOGLE_AI_GEMINI, "https://generativelanguage.googleapis.com/v1beta",
-      "gemini-2.5-flash",
-      "Google AI Studio key (ai.google.dev). Type any model id, or Refresh models for generateContent ids.",
-      List.of("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-2.0-flash")),
-  AZURE_OPENAI("Azure OpenAI", Api.AZURE_OPENAI, "https://YOUR_RESOURCE.openai.azure.com/", "gpt-4o",
-      "Endpoint is https://{resource}.openai.azure.com/. Model is the deployment name in Azure.",
-      List.of("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-5-mini", "o4-mini")),
-  BEDROCK("Amazon Bedrock", Api.BEDROCK, "us-east-1", "anthropic.claude-sonnet-4-20250514-v1:0",
-      "Base URL is the AWS region (for example us-east-1). Paste a Bedrock API key, or leave empty to use the"
-          + " default AWS credential chain. Model is a Bedrock model id or inference profile.",
+      "gemini-3-flash-preview",
+      "Google AI Studio key (ai.google.dev). Type any model id, or Refresh models for generateContent ids."
+          + " New keys no longer get gemini-2.5-*; prefer gemini-3-flash-preview.",
+      List.of("gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest")),
+  AZURE_OPENAI("Azure OpenAI", Api.AZURE_OPENAI, "https://YOUR_RESOURCE.openai.azure.com/", "gpt-5.4-mini",
+      "Endpoint is https://{resource}.openai.azure.com/. Model is the deployment name in Azure."
+          + " GPT-5.x deployments need max_completion_tokens (the plugin sends that).",
+      List.of("gpt-5.4-mini", "gpt-5.5", "gpt-4o", "gpt-4o-mini", "o4-mini")),
+  BEDROCK("Amazon Bedrock", Api.BEDROCK, "us-east-1", "global.anthropic.claude-sonnet-5-5",
+      "Region is the AWS region (for example us-east-1). Paste a Bedrock API key, or leave empty to use the"
+          + " default AWS credential chain. Refresh models loads inference profiles and text foundation"
+          + " models (needs an API key). Prefer profile ids such as global.anthropic.… or us.anthropic.…",
       List.of(
-          "anthropic.claude-sonnet-4-20250514-v1:0",
-          "anthropic.claude-haiku-4-5-20251001-v1:0",
+          "global.anthropic.claude-sonnet-5-5",
+          "global.anthropic.claude-opus-5-5",
+          "global.anthropic.claude-haiku-5-5",
           "amazon.nova-lite-v1:0",
           "amazon.nova-pro-v1:0")),
   OLLAMA("Ollama (local)", Api.OLLAMA, "http://localhost:11434", "qwen2.5-coder",
@@ -78,6 +82,14 @@ public enum Provider {
       case OPENROUTER, OPENAI, ANTHROPIC, GEMINI, AZURE_OPENAI -> true;
       // Bedrock can use a pasted API key or the host's AWS credential chain.
       case BEDROCK, MULESOFT_AI_GATEWAY, OLLAMA, CUSTOM -> false;
+    };
+  }
+
+  // Bedrock stores its AWS region in the base URL setting; the SDK builds the endpoint from it.
+  public String baseUrlLabel() {
+    return switch (this) {
+      case BEDROCK -> "Region";
+      case OPENROUTER, OPENAI, ANTHROPIC, GEMINI, AZURE_OPENAI, MULESOFT_AI_GATEWAY, OLLAMA, CUSTOM -> "Base URL";
     };
   }
 

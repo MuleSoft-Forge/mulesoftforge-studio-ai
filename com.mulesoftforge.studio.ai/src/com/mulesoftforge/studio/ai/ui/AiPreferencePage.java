@@ -59,6 +59,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Text clientSecret;
   private Label keyInfo;
   private Label testResult;
+  private Label baseUrlLabel;
   // Edits to providers other than the one on screen, kept until Apply so switching does not lose them.
   private final Map<Provider, Connection> drafts = new EnumMap<>(Provider.class);
   private final Map<Provider, AutoRouter.Models> autoDrafts = new EnumMap<>(Provider.class);
@@ -105,7 +106,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     hintData.widthHint = 420;
     hint.setLayoutData(hintData);
 
-    label(body, "Base URL:");
+    baseUrlLabel = label(body, "Base URL:");
     baseUrl = text(body, SWT.BORDER);
 
     label(body, "Model:");
@@ -501,6 +502,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     shown = p;
     Connection draft = drafts.get(p);
     hint.setText(p.hint);
+    baseUrlLabel.setText(p.baseUrlLabel() + ":");
     baseUrl.setText(draft != null ? draft.baseUrl() : AiSettings.baseUrl(p));
     // Do not keep the previous provider's model text (e.g. openrouter/auto on OpenAI).
     seedSuggestions(p, draft != null ? draft.model() : AiSettings.model(p), false);
