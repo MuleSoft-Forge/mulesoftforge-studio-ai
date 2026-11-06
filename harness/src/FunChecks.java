@@ -196,6 +196,8 @@ final class FunChecks {
     failed += check("new output is followed until the user scrolls up, and again after they send",
         page.contains("if (e.deltaY < 0) { following = false; }") && page.contains("if (nearBottom()) { following = true; }")
             && page.contains("if (kind === 'you') {\n    following = true;") && !page.contains("scrollIfNeeded"));
+    failed += check("a new or opened chat starts at the top, with the old scroll position gone",
+        page.contains("window.scrollTo(0, 0);\n  lastY = 0;"));
     failed += check("a long answer opens at its first line, not its end", page.contains(
         "div.offsetHeight > window.innerHeight * 0.6") && page.contains("div.getBoundingClientRect().top + window.scrollY"));
     failed += starterIcons(page);

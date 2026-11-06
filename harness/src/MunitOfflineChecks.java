@@ -1,5 +1,6 @@
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,6 +12,7 @@ import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
+import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.launch.MunitRunner;
 import com.mulesoftforge.studio.ai.launch.MunitTools;
 import com.mulesoftforge.studio.ai.llm.Attachment;
@@ -477,6 +479,32 @@ final class MunitOfflineChecks {
     out = tools(files, empty, new ChangeSet()).execute(call("{}"));
     failed += check("run_munit: a finished run with no tests is not reported as passing",
         out.startsWith("ENDED") && out.contains("employees-api-test-suite.xml"));
+
+    // As in a real run: eight HTTP:TIMEOUT errors with long stack traces, and the cause logged mid-console.
+    String frames = "\tat org.mule.munit.runner.flow.TestFlow.run(TestFlow.java:320)\n".repeat(30);
+    List<MunitRunner.Test> timeouts = new ArrayList<>();
+    for (int i = 1; i <= 8; i++) {
+      timeouts.add(new MunitRunner.Test("hello-test-suite.xml", "timeout-test-" + i, MunitRunner.Outcome.ERROR,
+          "org.mule.munit.runner.model.TestExecutionException: Error [HTTP:TIMEOUT] while running test 'timeout-test-"
+              + i + "': Timeout exceeded.\n" + frames));
+    }
+    FakeRunner hanging = new FakeRunner(new MunitRunner.Run(true, 8, timeouts, null));
+    hanging.console = "[INFO] Building jeeves-erp-app\n".repeat(300)
+        + "ERROR 2026-11-06 [main] org.mule.module.apikit: Could not load the API spec resource::eca25329:jeeves-erp-api\n"
+        + "Caused by: java.io.FileNotFoundException: jeeves-erp-api.yaml\n" + frames
+        + "[INFO] MUnit run finished\n".repeat(300);
+    out = tools(files, hanging, new ChangeSet()).execute(call("{}"));
+    failed += check("run_munit: every failing test keeps its message, without the stack frames",
+        out.contains("timeout-test-8': Timeout exceeded.") && out.contains("stack frames left out")
+            && !out.contains("\tat org.mule"));
+    failed += check("run_munit: failing tests come back with the run's console errors, even mid-console",
+        out.contains("CONSOLE of the MUnit run:") && out.contains("Could not load the API spec")
+            && out.contains("Caused by: java.io.FileNotFoundException") && out.contains("Do not guess a cause"));
+    failed += check("console digest: keeps WARN lines from the middle of a long console", AppConsole.digest(
+        "[INFO] ok\n".repeat(1_000) + "WARN  [main] mock-when matched no processor\n" + "[INFO] ok\n".repeat(1_000), 2_000)
+        .contains("mock-when matched no processor"));
+    failed += check("console digest: no error lines falls back to the end of the console",
+        AppConsole.digest("[INFO] ok\n".repeat(1_000), 500).startsWith("… (earlier lines cut)"));
 
     failed += check("run_munit: is offered under that name", MunitTools.SPECIFICATIONS.get(0).name().equals("run_munit"));
     return failed;

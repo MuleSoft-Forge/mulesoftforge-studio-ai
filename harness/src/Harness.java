@@ -45,6 +45,7 @@ import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.RawLog;
 import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.launch.AppLauncher;
+import com.mulesoftforge.studio.ai.launch.MunitRunner;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
@@ -114,6 +115,7 @@ public class Harness {
   private static ChatMode mode = ChatMode.AGENT;
   // --app-running run|debug: a fake Studio launcher that reports the project's app already running in that mode.
   private static String appRunning;
+  private static boolean munitFails;
   private static final List<String> launcherCalls = new CopyOnWriteArrayList<>();
   private static final Path DEFAULT_WORKSPACE = Path.of(System.getProperty("user.home"),
       "AnypointStudio", "studio-workspace-728");
@@ -172,6 +174,7 @@ public class Harness {
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
             case "--then" -> then.add(args[++i]);
             case "--app-running" -> appRunning = args[++i];
+            case "--munit-fails" -> munitFails = true;
             case "--auto" -> {
               String[] pair = args[++i].split(",", 2);
               autoPair = new AutoRouter.Models(pair[0], pair[1]);
@@ -371,6 +374,9 @@ public class Harness {
     ChatSession session = new ChatSession();
     if (appRunning != null) {
       session.appLauncher(runningLauncher(appRunning));
+    }
+    if (munitFails) {
+      session.munitRunner(failingMunit());
     }
     String[] autoModel = {null};
     ChatSession.Turn turn = session.send(modelFor(connection, session, mode, prompt, attachments, autoModel), mode,
@@ -1615,7 +1621,6 @@ public class Harness {
     return new ObjectMapper().writeValueAsString(value);
   }
 
-  // With --auto fast,strong, each turn's model is chosen as ChatView does; previous[0] carries it between turns.
   private static AppLauncher runningLauncher(String runningMode) {
     return new AppLauncher() {
       private String mode = runningMode;
@@ -1641,6 +1646,55 @@ public class Harness {
     };
   }
 
+  // Every test of /tmp/live-nostop's suite errors on the OAuth call; only a WARN line mid-console says why.
+  private static MunitRunner failingMunit() {
+    String frames = "\tat org.mule.munit.runner.flow.TestFlow.run(TestFlow.java:320)\n".repeat(40);
+    String message = "Could not connect to the OAuth provider at http://localhost:8082/token: Connection refused";
+    List<MunitRunner.Test> tests = new ArrayList<>();
+    for (String scope : List.of("admin-scope", "non-admin-scope", "lowercase-admin-scope", "not-admin-scope",
+        "missing-scope", "missing-header", "unauthorized-token", "forbidden-token", "provider-connectivity")) {
+      String name = "get-employees-" + scope + "-test";
+      tests.add(new MunitRunner.Test("employees-api-test-suite.xml", name, MunitRunner.Outcome.ERROR,
+          "org.mule.munit.runner.model.TestExecutionException: Error [MULE-SOFT-O-AUTH-PROVIDER-API:CONNECTIVITY]"
+              + " while running test '" + name + "': " + message + "\n" + frames));
+    }
+    String console = "[INFO] Scanning for projects...\n".repeat(200)
+        + "INFO  2026-11-06 [main] org.mule.runtime.module.deployment: Deploying artifact 'live-nostop'\n"
+        + "WARN  2026-11-06 [main] org.mule.munit.mock.MockingConfiguration: mock-when 'Mock token validation'"
+        + " matched no processor: no processor has doc:id '5444c035-fcb0-4388-a908-1e6c90fd6560'"
+        + " (the flow's validate operation has doc:id '5444c035-fcb0-4388-a908-1e6c90fd6561'); the real connector runs\n"
+        + "ERROR 2026-11-06 [[MuleRuntime].uber.03] org.mule.runtime.core.internal.exception.OnErrorPropagateHandler:\n"
+        + "Message               : " + message + "\n"
+        + "Element               : get:\\employees:employees-api-config/processors/1 @ live-nostop:employees-api.xml:134\n"
+        + "Error type            : MULE-SOFT-O-AUTH-PROVIDER-API:CONNECTIVITY\n" + frames
+        + "[INFO] Running employees-api-test-suite.xml\n".repeat(300);
+    MunitRunner.Run run = new MunitRunner.Run(true, tests.size(), tests, null);
+    return new MunitRunner() {
+      private boolean started;
+
+      @Override
+      public void start(String project, List<String> suites, List<String> names, String mode) {
+        started = true;
+      }
+
+      @Override
+      public Run run() {
+        return started ? run : null;
+      }
+
+      @Override
+      public boolean running() {
+        return false;
+      }
+
+      @Override
+      public String console() {
+        return started ? console : null;
+      }
+    };
+  }
+
+  // With --auto fast,strong, each turn's model is chosen as ChatView does; previous[0] carries it between turns.
   private static ChatModel modelFor(Connection connection, ChatSession session, ChatMode mode, String prompt,
       List<Attachment> attachments, String[] previous) {
     if (autoPair == null) {

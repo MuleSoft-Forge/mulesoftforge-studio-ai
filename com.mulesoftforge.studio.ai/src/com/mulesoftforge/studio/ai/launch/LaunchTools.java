@@ -30,6 +30,10 @@ public final class LaunchTools {
   private static final long POLL_MS = 250;
   private static final long CONSOLE_CATCH_UP_MS = 1_500;
   private static final int MAX_CONSOLE = 4_000;
+  private static final int MAX_FAILURE_CONSOLE = 6_000;
+  public static final String FROM_CONSOLE = "Read the console below and say what went wrong, quoting the error"
+      + " lines (Message, Error type, Element with its file and line, Caused by) and the fix they point to. Do not"
+      + " guess a cause the console does not show; if it shows none, say so.";
   private static final List<String> MODES = List.of("run", "debug");
   // Rows of Mule's status tables: "* app * DEPLOYED *", or "* app * domain * DEPLOYED *" in older runtimes. The
   // domain table looks the same, so rows count only under a header naming APPLICATION.
@@ -170,11 +174,11 @@ public final class LaunchTools {
             + (mode.equals("debug") ? " Requests the user sends now stop at the breakpoints set in Studio." : "")
             + " The app was started as asked: do not call an endpoint unless the user asked for that too; tell the"
             + " user it is running and end your turn."
-            + "\n\nCONSOLE, end of the start-up:\n" + AppConsole.tail(added, MAX_CONSOLE));
+            + "\n\nCONSOLE, start-up:\n" + AppConsole.digest(added, MAX_CONSOLE));
       }
       if (deploy == Deploy.FAILED) {
-        return masked("FAILED: " + project + " did not deploy (" + seconds + " s). Explain why from the console"
-            + " below:\n" + AppConsole.tail(added, MAX_CONSOLE));
+        return masked("FAILED: " + project + " did not deploy (" + seconds + " s). " + FROM_CONSOLE + "\n"
+            + AppConsole.digest(added, MAX_FAILURE_CONSOLE));
       }
       boolean running = launcher.running(project) != null;
       if (running && console == null) {
@@ -184,15 +188,15 @@ public final class LaunchTools {
       if (running) {
         seen = true;
       } else if (seen) {
-        return masked("STOPPED: the launch ended before the app deployed (" + seconds + " s). Console:\n"
-            + AppConsole.tail(added, MAX_CONSOLE));
+        return masked("STOPPED: the launch ended before the app deployed (" + seconds + " s). " + FROM_CONSOLE
+            + "\n" + AppConsole.digest(added, MAX_FAILURE_CONSOLE));
       } else if (added.isEmpty() && seconds >= START_TIMEOUT.toSeconds()) {
         return "ERROR: Studio did not start a launch within " + START_TIMEOUT.toSeconds() + " s. A dialog in"
             + " Studio may be waiting for the user, or the project cannot run as a Mule application.";
       }
       if (seconds >= deployTimeout.toSeconds()) {
         return masked("STILL STARTING after " + seconds + " s. Use read_console later to see whether it deployed."
-            + " Console so far:\n" + AppConsole.tail(added, MAX_CONSOLE));
+            + " Console so far:\n" + AppConsole.digest(added, MAX_FAILURE_CONSOLE));
       }
       Thread.sleep(POLL_MS);
     }

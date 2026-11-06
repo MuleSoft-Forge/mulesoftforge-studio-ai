@@ -480,7 +480,7 @@ final class HttpChecks {
       out = tools.execute(request(HttpTools.CALL, Map.of("method", "GET", "url",
           "http://localhost:" + freePort() + "/api/orders")));
       failed += check("console: when nothing answers, the end of the console comes back",
-          out.contains("nothing is answering") && out.contains("last part") && out.contains("DEPLOYMENT FAILED"));
+          out.contains("nothing is answering") && out.contains("CONSOLE (") && out.contains("DEPLOYMENT FAILED"));
 
       out = tools.execute(request(HttpTools.CONSOLE, Map.of()));
       failed += check("read_console: the end of the console", out.startsWith("CONSOLE (demo [Mule Applications]")
@@ -490,7 +490,12 @@ final class HttpChecks {
           .specifications().stream().noneMatch(s -> s.name().equals(HttpTools.CONSOLE)));
       out = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2), p -> null)
           .execute(request(HttpTools.CONSOLE, Map.of()));
-      failed += check("read_console: no console says to run the app", out.startsWith("ERROR: no Mule app console"));
+      failed += check("read_console: no console says to run the app", out.startsWith("ERROR: no Mule app or MUnit"));
+      out = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2), p -> null)
+          .munitConsole(() -> "[INFO] Building\nERROR [main] org.mule.module.apikit: Could not load the API spec\n")
+          .execute(request(HttpTools.CONSOLE, Map.of()));
+      failed += check("read_console: with no app running, shows the last MUnit run's console",
+          out.startsWith("CONSOLE (last MUnit run; no app is running)") && out.contains("Could not load the API spec"));
       out = new HttpTools(project, new SecretMask(), null, true, List.of(), Duration.ofSeconds(2), p -> {
         throw new IllegalStateException("console gone");
       }).execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/api/quiet")));

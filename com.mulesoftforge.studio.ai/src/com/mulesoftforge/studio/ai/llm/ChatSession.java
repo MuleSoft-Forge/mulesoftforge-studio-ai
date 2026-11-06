@@ -507,7 +507,11 @@ public class ChatSession {
     DataWeaveTools dataWeaveTools = cli == null ? null : new DataWeaveTools(cli, project, secrets);
     HttpTools httpTools = project == null ? null
         : new HttpTools(project, secrets, personalMask, mode.canChangeApp, currentDocsHosts, HttpTools.TIMEOUT,
-            appConsole).debugger(debug).lateResults(lateSink()).cancelledWhen(progress::isCancelled);
+            appConsole).debugger(debug).lateResults(lateSink()).cancelledWhen(progress::isCancelled)
+            .munitConsole(() -> {
+              MunitRunner runner = munitRunner;
+              return runner == null ? null : runner.console();
+            });
     AppLauncher launcher = appLauncher;
     LaunchTools launchTools = project == null || launcher == null || !mode.canChangeApp ? null
         : new LaunchTools(project, launcher, appConsole, secrets, progress::isCancelled, LaunchTools.DEPLOY_TIMEOUT);

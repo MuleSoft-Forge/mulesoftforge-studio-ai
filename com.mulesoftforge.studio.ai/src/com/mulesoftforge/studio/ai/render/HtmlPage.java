@@ -567,6 +567,9 @@ public final class HtmlPage {
           starters.classList.add('show');
           var todos = document.getElementById('todos');
           if (todos) { todos.remove(); }
+          // WebKit keeps the old offset and scrollbar size after the content shrinks until the page scrolls.
+          window.scrollTo(0, 0);
+          lastY = 0;
         }
         function msfTheme(cssText) {
           var root = document.documentElement;

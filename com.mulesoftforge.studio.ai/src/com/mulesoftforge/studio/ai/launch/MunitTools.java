@@ -36,7 +36,7 @@ public final class MunitTools {
   private static final long POLL_MS = 500;
   private static final int MAX_CAUSE = 1_500;
   private static final int MAX_CAUSES = 8_000;
-  private static final int MAX_CONSOLE = 4_000;
+  private static final int MAX_CONSOLE = 6_000;
   private static final int MAX_SUITES = 200;
   private static final List<String> MODES = List.of("run", "debug");
   private static final ObjectMapper JSON = new ObjectMapper();
@@ -185,7 +185,7 @@ public final class MunitTools {
           return reported(run) ? masked(report(run, seconds(started)))
               : masked("ENDED: the MUnit run stopped before it reported results (" + seconds(started) + " s)."
                   + (run != null && run.error() != null ? " MUnit said: " + run.error() : "")
-                  + " Explain why from the console:\n" + console());
+                  + " " + LaunchTools.FROM_CONSOLE + "\n" + console());
         }
       } else if (!seen && seconds(started) >= START_TIMEOUT.toSeconds()) {
         return notStarted();
@@ -210,8 +210,9 @@ public final class MunitTools {
     int ignored = count(run, MunitRunner.Outcome.IGNORED);
     StringBuilder out = new StringBuilder();
     if (run.error() != null && run.results().isEmpty()) {
-      return "ERROR: MUnit could not run the tests (" + seconds + " s): " + cut(run.error(), MAX_CAUSE)
-          + "\n\nCONSOLE, end of the run:\n" + console();
+      return "ERROR: MUnit could not run the tests (" + seconds + " s): "
+          + cut(AppConsole.withoutFrames(run.error()), MAX_CAUSE) + "\n\n" + LaunchTools.FROM_CONSOLE
+          + "\n\nCONSOLE of the MUnit run:\n" + console();
     }
     out.append(failed + errors == 0 && run.error() == null ? "PASSED" : "FAILED").append(": ")
         .append(passed).append(" passed, ").append(failed).append(" failed, ").append(errors).append(" errors")
@@ -223,11 +224,15 @@ public final class MunitTools {
       out.append("\n").append(test.outcome()).append(' ').append(test.suite()).append(" / ").append(test.name());
       if ((test.outcome() == MunitRunner.Outcome.FAILED || test.outcome() == MunitRunner.Outcome.ERROR)
           && test.cause() != null && !test.cause().isBlank() && out.length() < MAX_CAUSES) {
-        out.append(":\n").append(cut(test.cause().strip(), MAX_CAUSE));
+        out.append(":\n").append(cut(AppConsole.withoutFrames(test.cause().strip()), MAX_CAUSE));
       }
     }
-    if (failed + errors > 0) {
-      out.append("\n\nExplain each failure: a wrong expectation in the test, a wrong mock, or a bug in the flow.");
+    if (failed + errors > 0 || run.error() != null) {
+      out.append("\n\nExplain each failure: a wrong expectation in the test, a wrong mock, or a bug in the flow. ")
+          .append(LaunchTools.FROM_CONSOLE)
+          .append(" The console shows how the test app started (a listener that did not bind, a config or API spec"
+              + " that did not load), which the test results leave out.\n\nCONSOLE of the MUnit run:\n")
+          .append(console());
     }
     return out.toString();
   }
@@ -281,7 +286,7 @@ public final class MunitTools {
     } catch (RuntimeException e) {
       text = null;
     }
-    return text == null || text.isBlank() ? "(no MUnit console)" : AppConsole.tail(AppConsole.clean(text), MAX_CONSOLE);
+    return text == null || text.isBlank() ? "(no MUnit console)" : AppConsole.digest(text, MAX_CONSOLE);
   }
 
   private static String cut(String text, int max) {

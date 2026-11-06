@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -124,6 +125,7 @@ public final class HttpTools {
   private DebugSession debugger;
   private Consumer<Late> late = result -> {};
   private BooleanSupplier cancelled = () -> false;
+  private Supplier<String> munitConsole;
 
   // files is null when no project is open; personal is null when personal data is sent as it is. canChange allows
   // requests that change data (POST, PUT, PATCH, DELETE), which Ask and Plan mode do not send. docsHosts is the
@@ -164,6 +166,12 @@ public final class HttpTools {
   // Receives, as text for the model, the result of a request that finished after call_endpoint stopped waiting.
   public HttpTools lateResults(Consumer<Late> sink) {
     late = sink == null ? result -> {} : sink;
+    return this;
+  }
+
+  // The last MUnit run's console, which read_console shows when no app is running.
+  public HttpTools munitConsole(Supplier<String> tests) {
+    munitConsole = tests;
     return this;
   }
 
@@ -294,10 +302,10 @@ public final class HttpTools {
     if (console != null) {
       out.add(ToolSpecification.builder()
           .name(CONSOLE)
-          .description("Read the last part of the console of the Mule app the user runs in Studio: whether it"
-              + " deployed, logger output, and errors with the flow, processor and file line they came from."
-              + " call_endpoint already returns what the console printed during each call; use this to see why"
-              + " the app did not start, or what it did after a redeploy.")
+          .description("Read the console of the Mule app the user runs in Studio, or of the last MUnit run when no"
+              + " app is running: whether it deployed, logger output, and errors with the flow, processor and file"
+              + " line they came from. call_endpoint already returns what the console printed during each call; use"
+              + " this to see why the app or the tests did not start, or what the app did after a redeploy.")
           .parameters(JsonObjectSchema.builder().build())
           .build());
     }
@@ -720,12 +728,16 @@ public final class HttpTools {
   private String readConsole() {
     AppConsole.Text now = consoleNow();
     if (now == null) {
-      return "ERROR: no Mule app console is open in Studio. Ask the user to run the app (Run As > Mule"
-          + " Application).";
+      String tests = munitConsole == null ? null : munitConsole.get();
+      if (tests == null || tests.isBlank()) {
+        return "ERROR: no Mule app or MUnit console is open in Studio. Ask the user to run the app (Run As > Mule"
+            + " Application) or the tests.";
+      }
+      now = new AppConsole.Text("last MUnit run; no app is running", tests);
     }
     String text = clean(now.text());
     return masked(text.isEmpty() ? "CONSOLE (" + now.name() + ") is empty."
-        : "CONSOLE (" + now.name() + "), last part:\n" + tail(text, MAX_CONSOLE_READ));
+        : "CONSOLE (" + now.name() + "):\n" + AppConsole.digest(text, MAX_CONSOLE_READ));
   }
 
   // The app's console now, or null when there is none or it cannot be read.
@@ -748,8 +760,9 @@ public final class HttpTools {
     }
     String text = clean(before.text());
     return text.isEmpty() ? "\n\nCONSOLE (" + before.name() + ") is empty."
-        : "\n\nCONSOLE (" + before.name() + "), last part. If it shows the app failed to deploy or is still"
-            + " starting, say so from it rather than only asking the user to run the app:\n" + tail(text, MAX_CONSOLE);
+        : "\n\nCONSOLE (" + before.name() + "). If it shows the app failed to deploy or is still"
+            + " starting, say so from it rather than only asking the user to run the app:\n"
+            + AppConsole.digest(text, MAX_CONSOLE);
   }
 
   // What the console printed between before and the log going quiet after the response.
@@ -763,7 +776,7 @@ public final class HttpTools {
       return "\n\nCONSOLE (" + after.name() + "): nothing new while the call ran.";
     }
     return "\n\nCONSOLE (" + after.name() + "), printed while the call ran. Other flows and schedulers write here"
-        + " too, so not every line is from this request:\n" + tail(added, MAX_CONSOLE);
+        + " too, so not every line is from this request:\n" + AppConsole.digest(added, MAX_CONSOLE);
   }
 
   private AppConsole.Text settled(AppConsole.Text before) throws InterruptedException {
