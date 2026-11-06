@@ -79,7 +79,7 @@ public final class HtmlPage {
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 999px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        #sticky { position: sticky; top: 0; z-index: 5; display: none; padding: 6px 12px; margin: 0;
+        #sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 5; display: none; padding: 6px 12px; margin: 0;
           background: var(--card); border-bottom: 1px solid var(--card-border); color: var(--muted);
           font-size: 0.82em; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         #sticky.show { display: block; }
@@ -249,10 +249,22 @@ public final class HtmlPage {
         var lastYouText = '';
         var quoteText = '';
         starters.classList.add('show');
+        // Follows new output until the user scrolls up, and again once they scroll back to the end or send, as
+        // Continue's useAutoScroll and Cline's useScrollBehavior do.
+        var following = true;
+        var lastY = 0;
         function nearBottom() {
           return window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
         }
-        function scrollIfNeeded(was) { if (was) { window.scrollTo(0, document.body.scrollHeight); } }
+        function keepAtEnd() { if (following) { window.scrollTo(0, document.body.scrollHeight); } }
+        window.addEventListener('scroll', function () {
+          if (nearBottom()) { following = true; }
+          else if (window.scrollY < lastY) { following = false; }
+          lastY = window.scrollY;
+        }, { passive: true });
+        window.addEventListener('wheel', function (e) {
+          if (e.deltaY < 0) { following = false; }
+        }, { passive: true });
         function dropLive() {
           var live = document.getElementById('live');
           if (live) { live.remove(); }
@@ -293,7 +305,6 @@ public final class HtmlPage {
         });
         function msfLive(status, preview) {
           if (status === null) { dropLive(); return; }
-          var was = nearBottom();
           var live = document.getElementById('live');
           if (!live) {
             if (!steps) {
@@ -312,7 +323,7 @@ public final class HtmlPage {
           var text = live.querySelector('.preview');
           text.textContent = preview;
           text.scrollTop = text.scrollHeight;
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function closeSteps() {
           dropLive();
@@ -328,7 +339,6 @@ public final class HtmlPage {
           steps = null;
         }
         function msfMessage(kind, who, html, ctx) {
-          var was = nearBottom();
           closeSteps();
           hideStarters();
           var div = document.createElement('div');
@@ -340,6 +350,7 @@ public final class HtmlPage {
           if (ctx) { div.querySelector('.ctx').textContent = ctx; }
           log.appendChild(div);
           if (kind === 'you') {
+            following = true;
             lastYou = div;
             var plain = div.querySelector('.body').textContent || '';
             lastYouText = plain.length > 120 ? plain.substring(0, 117) + '…' : plain;
@@ -358,11 +369,17 @@ public final class HtmlPage {
               actions.appendChild(a);
             });
             log.appendChild(actions);
+            // The answer arrives whole, so a long one opens at its first line, and what follows it (the raw
+            // log) does not pull the view past it. Scrolling to the end follows again.
+            if (following && div.offsetHeight > window.innerHeight * 0.6) {
+              window.scrollTo(0, div.getBoundingClientRect().top + window.scrollY - 8);
+              following = false;
+              return;
+            }
           }
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfStep(text) {
-          var was = nearBottom();
           dropLive();
           if (!steps) {
             steps = document.createElement('div');
@@ -373,10 +390,9 @@ public final class HtmlPage {
           line.className = 'step';
           line.textContent = text;
           steps.appendChild(line);
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfThought(summary, text) {
-          var was = nearBottom();
           if (!steps) {
             steps = document.createElement('div');
             steps.className = 'steps';
@@ -396,10 +412,9 @@ public final class HtmlPage {
           var live = document.getElementById('live');
           if (live && live.parentNode === steps) { steps.insertBefore(block, live); }
           else { steps.appendChild(block); }
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfAction(label, id) {
-          var was = nearBottom();
           closeSteps();
           var div = document.createElement('div');
           div.className = 'actions';
@@ -409,10 +424,9 @@ public final class HtmlPage {
           a.textContent = label;
           div.appendChild(a);
           log.appendChild(div);
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfOffer(id, items, label, suggested) {
-          var was = nearBottom();
           closeSteps();
           var div = document.createElement(suggested ? 'details' : 'div');
           div.className = 'offer' + (suggested ? ' suggested' : '');
@@ -438,10 +452,9 @@ public final class HtmlPage {
           a.textContent = label;
           div.appendChild(a);
           log.appendChild(div);
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfAsk(id, question, choices) {
-          var was = nearBottom();
           closeSteps();
           hideStarters();
           var div = document.createElement('div');
@@ -464,10 +477,9 @@ public final class HtmlPage {
           hint.textContent = 'Click an answer to send it. Shift-click to edit it first.';
           div.appendChild(hint);
           log.appendChild(div);
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfTodos(items) {
-          var was = nearBottom();
           var existing = document.getElementById('todos');
           if (!items || !items.length) {
             if (existing) { existing.remove(); }
@@ -506,7 +518,7 @@ public final class HtmlPage {
             if (steps && steps.parentNode) { log.insertBefore(details, steps); }
             else { log.appendChild(details); }
           }
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         var showRaw = true;
         function details(title) {
@@ -517,7 +529,6 @@ public final class HtmlPage {
           return d;
         }
         function msfRaw(title, calls, open) {
-          var was = nearBottom();
           closeSteps();
           var block = details(title);
           block.className = 'raw' + (showRaw ? '' : ' hidden');
@@ -540,7 +551,7 @@ public final class HtmlPage {
             block.appendChild(one);
           });
           log.appendChild(block);
-          scrollIfNeeded(was);
+          keepAtEnd();
         }
         function msfShowRaw(on) {
           showRaw = on;
@@ -551,6 +562,7 @@ public final class HtmlPage {
           steps = null;
           lastYou = null;
           lastYouText = '';
+          following = true;
           sticky.classList.remove('show');
           starters.classList.add('show');
           var todos = document.getElementById('todos');

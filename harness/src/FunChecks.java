@@ -191,6 +191,13 @@ final class FunChecks {
         && !page.contains("%s"));
     failed += check("the thumbs say where they go", page.contains("'Liked it? Share it on LinkedIn'")
         && page.contains("'Missed? Tell us what went wrong'"));
+    failed += check("the You bar floats over the chat, so showing it does not move the page",
+        page.contains("#sticky { position: fixed;") && !page.contains("position: sticky"));
+    failed += check("new output is followed until the user scrolls up, and again after they send",
+        page.contains("if (e.deltaY < 0) { following = false; }") && page.contains("if (nearBottom()) { following = true; }")
+            && page.contains("if (kind === 'you') {\n    following = true;") && !page.contains("scrollIfNeeded"));
+    failed += check("a long answer opens at its first line, not its end", page.contains(
+        "div.offsetHeight > window.innerHeight * 0.6") && page.contains("div.getBoundingClientRect().top + window.scrollY"));
     failed += starterIcons(page);
     return failed;
   }

@@ -1618,20 +1618,25 @@ public class Harness {
   // With --auto fast,strong, each turn's model is chosen as ChatView does; previous[0] carries it between turns.
   private static AppLauncher runningLauncher(String runningMode) {
     return new AppLauncher() {
+      private String mode = runningMode;
+
       @Override
       public Running running(String project) {
-        return new Running(project, runningMode);
+        return mode == null ? null : new Running(project, mode);
       }
 
       @Override
       public void start(String project, String startMode) {
         launcherCalls.add("start " + startMode);
+        mode = startMode;
       }
 
       @Override
       public boolean stop() {
         launcherCalls.add("stop");
-        return true;
+        boolean was = mode != null;
+        mode = null;
+        return was;
       }
     };
   }

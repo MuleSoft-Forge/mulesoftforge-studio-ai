@@ -87,7 +87,6 @@ public class ChatSession {
   public static final String MODE_REFUSED = "(not in this mode)";
   public static final String REPEATED = "(repeated)";
   public static final String HOOK_BLOCKED = "(blocked by a hook)";
-  public static final String ALREADY_RUNNING = "(app already running)";
   static final String HOOK_BLOCKED_CALL = "ERROR: not run. The user's PreToolUse hook blocked this call: ";
   static final String HOOK_NOTE = "[From the user's %s hook]\n";
   // In toolCounts when the turn stopped at MAX_TOOL_ROUNDS, so the view can offer Continue.
@@ -191,8 +190,8 @@ public class ChatSession {
       if (started > 0) {
         parts.add("started the app" + (started == 1 ? "" : " " + started + " times"));
       }
-      if (toolCounts.getOrDefault(ALREADY_RUNNING, 0) > 0) {
-        parts.add("found the app already running");
+      if (toolCounts.getOrDefault(LaunchTools.STOP, 0) > 0) {
+        parts.add("stopped the app");
       }
       int tested = toolCounts.getOrDefault(MunitTools.RUN, 0);
       if (tested > 0) {
@@ -314,7 +313,7 @@ public class ChatSession {
     appConsole = console;
   }
 
-  // Studio's Run As / Debug As > Mule Application, so Agent and Diagnose can start the app; null without.
+  // Studio's Run As / Debug As > Mule Application, so Agent and Diagnose can start and stop the app; null without.
   public void appLauncher(AppLauncher launcher) {
     appLauncher = launcher;
   }
@@ -715,8 +714,8 @@ public class ChatSession {
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
             : munitCall && munitTools != null ? munitTools.execute(call)
-            : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot start"
-                + " the app or run tests. Agent or Diagnose mode can.")
+            : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot run or"
+                + " stop the app or run tests. Agent or Diagnose mode can.")
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
@@ -729,8 +728,7 @@ public class ChatSession {
         // A refused call did nothing, so it counts as what stopped it rather than as a call that failed.
         String countedAs = blocked != null ? HOOK_BLOCKED
             : result.startsWith(ChatMode.REFUSED) ? MODE_REFUSED
-            : result.startsWith(REPEATED_START) ? REPEATED
-            : result.startsWith(LaunchTools.ALREADY_RUNNING) ? ALREADY_RUNNING : call.name();
+            : result.startsWith(REPEATED_START) ? REPEATED : call.name();
         toolCounts.merge(countedAs, 1, Integer::sum);
         int hidden = secrets.total() - before;
         if (hidden > 0) {
