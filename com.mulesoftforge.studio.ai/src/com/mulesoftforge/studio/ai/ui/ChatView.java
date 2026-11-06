@@ -235,7 +235,7 @@ public class ChatView extends ViewPart {
     ThemeStyles.applyClass(middle, "MsfDivider");
     transcript = HtmlTranscript.create(middle, new TranscriptActions(), AiSettings.richTranscript());
     transcript.showRaw(AiSettings.rawLog());
-    status = new StatusPanel(middle, () -> composer.refreshPrices(), this::compactChat);
+    status = new StatusPanel(middle, () -> composer.refreshPrices(), this::compactChat, new TranscriptActions()::open);
     middle.setWeights(78, 22);
     middle.setSashWidth(1);
 

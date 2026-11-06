@@ -1,7 +1,10 @@
 package com.mulesoftforge.studio.ai.ui;
 
 import java.util.List;
+import java.util.function.Consumer;
 
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Color;
@@ -16,6 +19,8 @@ import org.eclipse.ui.PlatformUI;
 
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.ContextWindow;
+import com.mulesoftforge.studio.ai.llm.Errors;
+import com.mulesoftforge.studio.ai.llm.NewsFeed;
 
 // The column beside the transcript: the model in use, its list price, what chats have cost, and the list
 // price of every model in the picker.
@@ -33,17 +38,23 @@ final class StatusPanel {
   private final Label todayCost;
   private final Label monthCost;
   private final Label context;
-  private final Link compact;
+  private final Label compact;
   private final Label pricesNote;
   private final Label pricesHelp;
   private final ScrolledComposite pricesScroll;
   private final Composite pricesRows;
   private final Composite pricesHeading;
-  private final Link pricesToggle;
+  private final Label pricesToggle;
   private boolean pricesShown;
+  private final Consumer<String> openUrl;
+  private final Label newsToggle;
+  private final ScrolledComposite newsScroll;
+  private final Composite newsRows;
+  private boolean newsShown;
+  private boolean newsLoaded;
   private Color muted;
 
-  StatusPanel(Composite parent, Runnable refreshPrices, Runnable compactChat) {
+  StatusPanel(Composite parent, Runnable refreshPrices, Runnable compactChat, Consumer<String> openUrl) {
     panel = new Composite(parent, SWT.NONE);
     ThemeStyles.applyClass(panel, "MsfPanel");
     panel.setBackgroundMode(SWT.INHERIT_DEFAULT);
@@ -64,18 +75,15 @@ final class StatusPanel {
     gap();
     heading("Context");
     context = value(false);
-    compact = new Link(panel, SWT.NONE);
-    compact.setText("<a>Compact</a>");
-    compact.setToolTipText("Summarise the older turns before your next message, so the chat stays within the model's"
-        + " context window. It happens by itself at " + Math.round(ChatSession.COMPACT_AT * 100) + "%.");
-    compact.addListener(SWT.Selection, e -> compactChat.run());
+    compact = action(panel, "Compact", "Summarise the older turns before your next message, so the chat stays within"
+        + " the model's context window. It happens by itself at " + Math.round(ChatSession.COMPACT_AT * 100) + "%.",
+        compactChat);
     showContext(0, 0, false);
     gap();
 
     // The full price list is reference material, so it stays folded away until asked for.
-    pricesToggle = new Link(panel, SWT.NONE);
-    pricesToggle.setToolTipText("List prices per 1M tokens for every model in the picker");
-    pricesToggle.addListener(SWT.Selection, e -> setPricesShown(!pricesShown));
+    pricesToggle = disclosure("List prices per 1M tokens for every model in the picker",
+        () -> setPricesShown(!pricesShown));
 
     pricesHeading = new Composite(panel, SWT.NONE);
     GridLayout headingLayout = new GridLayout(3, false);
@@ -85,16 +93,13 @@ final class StatusPanel {
     pricesHeading.setLayout(headingLayout);
     pricesHeading.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
     Label pricesTitle = new Label(pricesHeading, SWT.NONE);
-    pricesTitle.setText("Prices per 1M tokens");
-    pricesTitle.setFont(TranscriptStyles.bold());
+    pricesTitle.setText("Per 1M tokens");
+    pricesTitle.setForeground(muted);
     pricesTitle.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     pricesHelp = new Label(pricesHeading, SWT.NONE);
     pricesHelp.setImage(PlatformUI.getWorkbench().getSharedImages().getImage(ISharedImages.IMG_LCL_LINKTO_HELP));
     pricesHelp.setToolTipText("Where these rates come from, and how they relate to Cost above.");
-    Link refresh = new Link(pricesHeading, SWT.NONE);
-    refresh.setText("<a>Refresh</a>");
-    refresh.setToolTipText("Fetch the price list again");
-    refresh.addListener(SWT.Selection, e -> refreshPrices.run());
+    action(pricesHeading, "Refresh", "Fetch the price list again", refreshPrices);
     pricesNote = value(false);
     pricesNote.setForeground(muted);
 
@@ -113,14 +118,123 @@ final class StatusPanel {
     pricesRows.setLayout(rowsLayout);
     pricesScroll.setContent(pricesRows);
     pricesScroll.addListener(SWT.Resize, e -> fitPrices());
+
+    // MuleSoftForge's What's New feed, also folded away; it is fetched only when first opened.
+    this.openUrl = openUrl;
+    newsToggle = disclosure("New connectors, tools and Studio AI releases from " + NewsFeed.URL,
+        () -> setNewsShown(!newsShown));
+    newsScroll = new ScrolledComposite(panel, SWT.V_SCROLL);
+    newsScroll.setExpandHorizontal(true);
+    newsScroll.setExpandVertical(true);
+    GridData newsData = new GridData(SWT.FILL, SWT.FILL, true, true);
+    newsData.widthHint = 120;
+    newsData.heightHint = 160;
+    newsScroll.setLayoutData(newsData);
+    newsRows = new Composite(newsScroll, SWT.NONE);
+    GridLayout newsLayout = new GridLayout(1, false);
+    newsLayout.marginWidth = 0;
+    newsLayout.marginHeight = 0;
+    newsLayout.verticalSpacing = 2;
+    newsRows.setLayout(newsLayout);
+    newsScroll.setContent(newsRows);
+    newsScroll.addListener(SWT.Resize, e -> fit(newsScroll, newsRows));
+
     matchPanelBackground();
     showPrices(null);
     setPricesShown(false);
+    setNewsShown(false);
+  }
+
+  private void setNewsShown(boolean shown) {
+    newsShown = shown;
+    newsToggle.setText((shown ? "▾  " : "▸  ") + "News");
+    newsScroll.setVisible(shown);
+    ((GridData) newsScroll.getLayoutData()).exclude = !shown;
+    if (shown && !newsLoaded) {
+      newsLoaded = true;
+      loadNews();
+    }
+    if (shown) {
+      fit(newsScroll, newsRows);
+    }
+    relayout();
+  }
+
+  private void loadNews() {
+    showNews(null, null);
+    Job.create("Reading MuleSoftForge news", monitor -> {
+      List<NewsFeed.Item> items = null;
+      String error = null;
+      try {
+        items = NewsFeed.fetch(NewsFeed.URL);
+      } catch (Exception e) {
+        error = Errors.describe(e);
+      }
+      List<NewsFeed.Item> shown = items;
+      String failed = error;
+      Ui.async(panel, () -> showNews(shown, failed));
+      return Status.OK_STATUS;
+    }).schedule();
+  }
+
+  // items is null while loading, or when error says why it could not be read.
+  private void showNews(List<NewsFeed.Item> items, String error) {
+    if (panel.isDisposed()) {
+      return;
+    }
+    for (Control row : newsRows.getChildren()) {
+      row.dispose();
+    }
+    if (items == null) {
+      Label note = newsLabel(error == null ? "Reading news…" : "Could not read the news: " + error);
+      note.setForeground(muted);
+      if (error != null) {
+        newsLink("Try again", null, () -> loadNews());
+      }
+    } else {
+      if (items.isEmpty()) {
+        newsLabel("No news yet.").setForeground(muted);
+      }
+      for (NewsFeed.Item item : items) {
+        if (item.link() == null) {
+          newsLabel(item.title()).setFont(TranscriptStyles.bold());
+        } else {
+          newsLink(item.title(), item.link(), () -> openUrl.accept(item.link()));
+        }
+        if (item.date() != null || !item.description().isEmpty()) {
+          Label about = newsLabel((item.date() == null ? "" : item.date() + " · ") + item.description());
+          about.setForeground(muted);
+        }
+        new Label(newsRows, SWT.NONE).setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+      }
+      newsLink("All news on mulesoftforge.com", NewsFeed.PAGE, () -> openUrl.accept(NewsFeed.PAGE));
+    }
+    fit(newsScroll, newsRows);
+    relayout();
+  }
+
+  private Label newsLabel(String text) {
+    Label label = new Label(newsRows, SWT.WRAP);
+    GridData data = new GridData(SWT.FILL, SWT.TOP, true, false);
+    data.widthHint = 100;
+    label.setLayoutData(data);
+    label.setText(text.replace("&", "&&"));
+    return label;
+  }
+
+  private void newsLink(String text, String tooltip, Runnable click) {
+    Link link = new Link(newsRows, SWT.WRAP);
+    GridData data = new GridData(SWT.FILL, SWT.TOP, true, false);
+    data.widthHint = 100;
+    link.setLayoutData(data);
+    link.setText("<a>" + text.replace("&", "&&").replace("<", "&lt;") + "</a>");
+    link.setToolTipText(tooltip);
+    link.addListener(SWT.Selection, e -> click.run());
   }
 
   private void setPricesShown(boolean shown) {
     pricesShown = shown;
-    pricesToggle.setText(shown ? "<a>Hide prices ▾</a>" : "<a>Show prices ▸</a>");
+    pricesToggle.setText((shown ? "▾  " : "▸  ") + "Prices");
     for (Control part : new Control[] {pricesHeading, pricesNote, pricesScroll}) {
       part.setVisible(shown);
       ((GridData) part.getLayoutData()).exclude = !shown;
@@ -168,6 +282,8 @@ final class StatusPanel {
             + " latest message. Reserved is room kept for the model's reply (~"
             + ContextWindow.tokens(ContextWindow.RESERVED_OUTPUT) + ").");
     compact.setEnabled(canCompact);
+    compact.setForeground(canCompact ? muted : ThemeStyles.swt(ThemeStyles.BUTTON_DISABLED));
+    compact.setCursor(canCompact ? compact.getDisplay().getSystemCursor(SWT.CURSOR_HAND) : null);
     relayout();
   }
 
@@ -217,15 +333,55 @@ final class StatusPanel {
   // A ScrolledComposite paints its own grey on macOS, which reads as a box inside the panel.
   private void matchPanelBackground() {
     Color background = ThemeStyles.swt(ThemeStyles.PANEL);
-    pricesScroll.setBackground(background);
-    pricesRows.setBackground(background);
+    for (Composite part : new Composite[] {pricesScroll, pricesRows, newsScroll, newsRows}) {
+      part.setBackground(background);
+    }
     pricesRows.setBackgroundMode(SWT.INHERIT_DEFAULT);
+    newsRows.setBackgroundMode(SWT.INHERIT_DEFAULT);
   }
 
   private void heading(String text) {
     Label label = new Label(panel, SWT.NONE);
     label.setText(text);
     label.setFont(TranscriptStyles.bold());
+  }
+
+  // A bold section header like Model and Cost, whose arrow folds the part below it.
+  private Label disclosure(String tooltip, Runnable click) {
+    Label header = clickable(panel, tooltip, click, null);
+    header.setFont(TranscriptStyles.bold());
+    return header;
+  }
+
+  private Label action(Composite parent, String text, String tooltip, Runnable click) {
+    Label action = clickable(parent, tooltip, click, muted);
+    action.setText(text);
+    return action;
+  }
+
+  // Text that works as a button: a hand cursor and a hover colour rather than a link's underline.
+  private static Label clickable(Composite parent, String tooltip, Runnable click, Color rest) {
+    Label label = new Label(parent, SWT.NONE);
+    label.setToolTipText(tooltip);
+    label.setForeground(rest);
+    label.setCursor(label.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+    label.addListener(SWT.MouseEnter, e -> {
+      if (label.isEnabled()) {
+        label.setForeground(ThemeStyles.swt(ThemeStyles.LINK));
+      }
+    });
+    label.addListener(SWT.MouseExit, e -> {
+      if (label.isEnabled()) {
+        label.setForeground(rest);
+      }
+    });
+    label.addListener(SWT.MouseUp, e -> {
+      if (e.button == 1 && label.isEnabled() && e.x >= 0 && e.y >= 0 && e.x < label.getSize().x
+          && e.y < label.getSize().y) {
+        click.run();
+      }
+    });
+    return label;
   }
 
   private void gap() {
@@ -259,9 +415,13 @@ final class StatusPanel {
 
   // The rows wrap to the visible width, so their height depends on it.
   private void fitPrices() {
-    int width = pricesScroll.getClientArea().width;
-    pricesScroll.setMinSize(pricesRows.computeSize(width > 0 ? width : SWT.DEFAULT, SWT.DEFAULT));
-    pricesRows.layout(true, true);
+    fit(pricesScroll, pricesRows);
+  }
+
+  private static void fit(ScrolledComposite scroll, Composite rows) {
+    int width = scroll.getClientArea().width;
+    scroll.setMinSize(rows.computeSize(width > 0 ? width : SWT.DEFAULT, SWT.DEFAULT));
+    rows.layout(true, true);
   }
 
   private void relayout() {

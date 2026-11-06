@@ -17,9 +17,9 @@ public final class LoadingPhrases {
 
     public static Mode fromName(String name) {
       try {
-        return name == null || name.isBlank() ? OFF : valueOf(name.trim().toUpperCase(Locale.ROOT));
+        return name == null || name.isBlank() ? ALL : valueOf(name.trim().toUpperCase(Locale.ROOT));
       } catch (IllegalArgumentException e) {
-        return OFF;
+        return ALL;
       }
     }
   }

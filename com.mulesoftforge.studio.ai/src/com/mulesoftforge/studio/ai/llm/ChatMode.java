@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 
 // How the AI works on a message. Every mode is offered the same tools, so a mode switch keeps the prompt cache;
 // the tools refuse what the mode does not allow (see refused). canEdit lets edit_file and write_file propose
-// changes; canChangeApp lets the AI start and stop the app, run MUnit tests and send requests that change data to
+// changes; canChangeApp lets the AI start the app, run MUnit tests and send requests that change data to
 // the app running on this machine. Each mode's prompt is prompts/<name>.md.
 public enum ChatMode {
   ASK("Ask", "Answers and explains. Never changes files; can suggest fixes for Agent mode to make.", false, false),

@@ -602,42 +602,47 @@ final class HttpChecks {
     out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "debug")));
     failed += check("run_app: already running in that mode is left alone", out.startsWith("ALREADY RUNNING")
         && launcher.calls.size() == 1);
-    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
-    failed += check("run_app: running in the other mode is stopped, then started", launcher.calls.equals(List.of(
-        "start debug", "stop", "start run")) && out.startsWith("Stopped employees-app (debug mode) first.")
-        && out.contains("DEPLOYED: employees-app is running in run mode"));
-    launcher.domainColumn = true;
     out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
-    failed += check("run_app: restart true restarts the same mode; older three-column table read",
-        launcher.calls.size() == 5 && out.contains("DEPLOYED: employees-app"));
+    failed += check("run_app: never stops an app, even to switch mode; the user terminates it in Studio",
+        launcher.calls.equals(List.of("start debug")) && out.startsWith("ALREADY RUNNING: employees-app runs in debug")
+            && out.contains("To run it in run mode instead") && out.contains("Terminate")
+            && out.contains("Never stop it yourself"));
+    failed += check("run_app: no stop_app tool and no restart parameter", LaunchTools.SPECIFICATIONS.size() == 1
+        && !LaunchTools.handles("stop_app") && !LaunchTools.SPECIFICATIONS.get(0).parameters().properties()
+            .containsKey("restart"));
+
+    launcher.running = null;
+    launcher.domainColumn = true;
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
+    failed += check("run_app: starts again once the user has stopped it; older three-column table read",
+        launcher.calls.equals(List.of("start debug", "start run")) && out.contains("DEPLOYED: employees-app"));
     launcher.domainColumn = false;
 
+    launcher.running = null;
     launcher.outcome = "FAILED";
-    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
-    failed += check("run_app: a failed deployment comes back with the console", out.contains("\nFAILED:")
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
+    failed += check("run_app: a failed deployment comes back with the console", out.startsWith("FAILED:")
         && out.contains("Failed to deploy artifact") && out.contains("${db.url}"));
 
+    launcher.running = null;
     launcher.outcome = "DEPLOYED";
     launcher.reports = AppLauncher.Deployment.STARTED;
     launcher.quiet = true;
     long started = System.nanoTime();
-    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
     long waited = (System.nanoTime() - started) / 1_000_000;
     failed += check("run_app: Studio's runtime event says started, without any deployment table in the console",
         out.contains("DEPLOYED: employees-app is running in run mode") && waited < 3_500);
     launcher.quiet = false;
+    launcher.running = null;
     launcher.reports = AppLauncher.Deployment.FAILED;
     launcher.outcome = "FAILED";
-    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run", "restart", true)));
-    failed += check("run_app: a reported failure waits for the console to say why", out.contains("\nFAILED:")
+    out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "run")));
+    failed += check("run_app: a reported failure waits for the console to say why", out.startsWith("FAILED:")
         && out.contains("${db.url} not found"));
     launcher.reports = null;
+    failed += check("run_app: never called the launcher's stop", !launcher.calls.contains("stop"));
 
-    out = tools.execute(request(LaunchTools.STOP, Map.of()));
-    failed += check("stop_app: stops the running app", out.startsWith("STOPPED: employees-app")
-        && launcher.running == null);
-    out = tools.execute(request(LaunchTools.STOP, Map.of()));
-    failed += check("stop_app: nothing running says so", out.startsWith("NOT RUNNING"));
     out = tools.execute(request(LaunchTools.RUN, Map.of("mode", "profile")));
     failed += check("run_app: only run and debug modes", out.startsWith("ERROR: mode must be run or debug"));
     failed += check("run_app: progress names Studio's menu item", LaunchTools.describe(request(LaunchTools.RUN,
@@ -899,8 +904,8 @@ final class HttpChecks {
               && bodies.get(0).contains("Only these sites: docs.example.com"));
       failed += check("loop: Ask mode is told it only sends reading methods",
           bodies.get(0).contains("Ask and Plan mode only send GET, HEAD, OPTIONS"));
-      failed += check("loop: Ask mode is offered the same run tools as Agent (it refuses them)",
-          DebugChecks.tool(bodies.get(0), LaunchTools.RUN) && DebugChecks.tool(bodies.get(0), LaunchTools.STOP));
+      failed += check("loop: Ask mode is offered the same run tool as Agent (it refuses it); there is no stop_app",
+          DebugChecks.tool(bodies.get(0), LaunchTools.RUN) && !DebugChecks.tool(bodies.get(0), "stop_app"));
       failed += check("loop: the app's reply went back to the model", bodies.size() == 2
           && bodies.get(1).contains("STATUS 200") && bodies.get(1).contains("UP"));
       failed += check("loop: activity says the app was called", turn.activity().contains("called the app once"));
@@ -909,9 +914,9 @@ final class HttpChecks {
       diagnose.appLauncher(new FakeLauncher());
       diagnose.send(ChatModels.create(connection), ChatMode.DIAGNOSE, "Why does it fail?", List.of(),
           DebugChecks.project("employees-app"), Progress.NONE);
-      failed += check("loop: Diagnose can run, debug and stop the app", DebugChecks.tool(bodies.get(0),
-          LaunchTools.RUN) && DebugChecks.tool(bodies.get(0), LaunchTools.STOP)
-          && bodies.get(0).contains("Debug As > Mule Application"));
+      failed += check("loop: Diagnose can run and debug the app but never stop it", DebugChecks.tool(bodies.get(0),
+          LaunchTools.RUN) && !DebugChecks.tool(bodies.get(0), "stop_app")
+          && bodies.get(0).contains("Debug As > Mule Application") && bodies.get(0).contains("You cannot stop an app"));
       failed += check("loop: Diagnose can send any method and is offered the same edit tools (it refuses them)",
           bodies.get(0).contains("\"POST\"") && DebugChecks.tool(bodies.get(0), "edit_file")
           && DebugChecks.tool(bodies.get(0), "offer_changes") && bodies.get(0).contains("You are in Diagnose mode"));

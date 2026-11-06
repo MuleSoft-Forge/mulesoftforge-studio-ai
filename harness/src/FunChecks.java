@@ -16,6 +16,7 @@ import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
+import com.mulesoftforge.studio.ai.llm.NewsFeed;
 import com.mulesoftforge.studio.ai.llm.Progress;
 import com.mulesoftforge.studio.ai.llm.Updates;
 import com.mulesoftforge.studio.ai.render.Alerts;
@@ -42,6 +43,7 @@ final class FunChecks {
     failed += alerts();
     failed += page();
     failed += linkedIn();
+    failed += news();
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -143,8 +145,10 @@ final class FunChecks {
 
   private static int phrases() {
     int failed = 0;
-    failed += check("loading phrases are off by default", LoadingPhrases.Mode.fromName("") == LoadingPhrases.Mode.OFF
-        && LoadingPhrases.Mode.fromName("nonsense") == LoadingPhrases.Mode.OFF
+    failed += check("tips and witty lines are on by default, and Off stays off once chosen",
+        LoadingPhrases.Mode.fromName("") == LoadingPhrases.Mode.ALL
+        && LoadingPhrases.Mode.fromName("nonsense") == LoadingPhrases.Mode.ALL
+        && LoadingPhrases.Mode.fromName("OFF") == LoadingPhrases.Mode.OFF
         && LoadingPhrases.at(LoadingPhrases.Mode.OFF, 12, 3) == null);
     failed += check("witty lines change every 5 s", LoadingPhrases.at(LoadingPhrases.Mode.WITTY, 0, 7)
         .equals(LoadingPhrases.at(LoadingPhrases.Mode.WITTY, 4, 7))
@@ -221,6 +225,43 @@ final class FunChecks {
         url.startsWith("https://www.linkedin.com/feed/?shareActive=true&text=") && !url.contains("+")
             && text.equals(LinkedInPost.TEXT) && text.contains("I used MuleSoftForge Studio AI")
             && text.contains("liked the result") && text.contains(LinkedInPost.SITE));
+  }
+
+  private static int news() {
+    String feed = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel><title>MuleSoftForge: What's New</title>
+          <item><title>Studio AI 0.5.27: chat polish</title>
+            <link>https://mulesoftforge.com/studio-ai/use-the-chat</link>
+            <pubDate>Fri, 06 Nov 2026 12:00:00 GMT</pubDate>
+            <description>Thought blocks &amp; hooks.</description></item>
+          <item><title>Old link</title><link>javascript:alert(1)</link><description>%s</description></item>
+          <item><title></title><link>https://mulesoftforge.com/x</link></item>
+        </channel></rss>
+        """.formatted("x".repeat(400));
+    int failed = 0;
+    try {
+      List<NewsFeed.Item> items = NewsFeed.parse(feed);
+      NewsFeed.Item first = items.get(0);
+      failed += check("news shows each item's title, description, link and date", items.size() == 2
+          && first.title().equals("Studio AI 0.5.27: chat polish") && first.description().equals("Thought blocks & hooks.")
+          && first.link().equals("https://mulesoftforge.com/studio-ai/use-the-chat") && first.date().equals("6 Nov 2026"));
+      failed += check("news keeps only https links and short descriptions", items.get(1).link() == null
+          && items.get(1).date() == null && items.get(1).description().length() == NewsFeed.MAX_DESCRIPTION
+          && items.get(1).description().endsWith("…"));
+    } catch (Exception e) {
+      failed += check("news parses the feed: " + e, false);
+    }
+    boolean refused;
+    try {
+      NewsFeed.parse("<?xml version=\"1.0\"?><!DOCTYPE rss [<!ENTITY x SYSTEM \"file:///etc/passwd\">]>"
+          + "<rss><channel><item><title>&x;</title></item></channel></rss>");
+      refused = false;
+    } catch (Exception e) {
+      refused = true;
+    }
+    failed += check("a feed with a DOCTYPE is refused, so no entity reads a file", refused);
+    return failed;
   }
 
   private static String chunk(String delta, String finish) {

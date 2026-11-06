@@ -17,14 +17,14 @@ import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 
-// The model's tools for starting and stopping the project's app in Studio, as Run As and Debug As > Mule
-// Application do. Offered only in modes that may change the running app (Agent and Diagnose). run_app waits until
-// the app has deployed or failed; starting it is the whole request, so the model is told not to call a flow next.
+// The model's tool for starting the project's app in Studio, as Run As and Debug As > Mule Application do. Offered
+// only in modes that may change the running app (Agent and Diagnose). run_app waits until the app has deployed or
+// failed; starting it is the whole request, so the model is told not to call a flow next. Nothing here stops an app:
+// the user ends it with Studio's own Terminate button, and only then can run_app start it again.
 public final class LaunchTools {
   public static final String RUN = "run_app";
-  public static final String STOP = "stop_app";
+  public static final String ALREADY_RUNNING = "ALREADY RUNNING:";
   public static final Duration DEPLOY_TIMEOUT = Duration.ofMinutes(3);
-  public static final Duration STOP_TIMEOUT = Duration.ofSeconds(30);
   // Without any sign of a launch by then, Studio did not start one (a dialog may be asking the user something).
   private static final Duration START_TIMEOUT = Duration.ofSeconds(20);
   private static final long POLL_MS = 250;
@@ -43,22 +43,13 @@ public final class LaunchTools {
           .name(RUN)
           .description("Start this project's Mule app in Studio, as Run As > Mule Application (mode run) or Debug"
               + " As > Mule Application (mode debug) do, and wait until it has deployed or failed. Returns what"
-              + " the console printed. Use it only when the user asks to run, debug or restart the app. It only"
-              + " starts the app: do not call an endpoint afterwards unless the user also asked for that call. An app"
-              + " already running in the other mode is stopped first; one running in the same mode is left alone"
-              + " unless restart is true.")
+              + " the console printed. Use it only when the user asks to run or debug the app. It only starts the"
+              + " app: do not call an endpoint afterwards unless the user also asked for that call. It never stops an"
+              + " app: while one is running it returns ALREADY RUNNING, and the user must stop it in Studio first.")
           .parameters(JsonObjectSchema.builder()
               .addEnumProperty("mode", MODES)
-              .addBooleanProperty("restart", "Optional, default false. true stops and starts the app even when"
-                  + " it already runs in this mode; only when the user asked to restart or redeploy it")
               .required("mode")
               .build())
-          .build(),
-      ToolSpecification.builder()
-          .name(STOP)
-          .description("Stop the Mule app running in Studio, like the Terminate button in the Console view. Use it"
-              + " only when the user asks to stop the app.")
-          .parameters(JsonObjectSchema.builder().build())
           .build());
 
   private enum Deploy { DEPLOYED, FAILED }
@@ -83,13 +74,10 @@ public final class LaunchTools {
   }
 
   public static boolean handles(String tool) {
-    return RUN.equals(tool) || STOP.equals(tool);
+    return RUN.equals(tool);
   }
 
   public static String describe(ToolExecutionRequest request) {
-    if (STOP.equals(request.name())) {
-      return "Stopping the app";
-    }
     String mode = arguments(request).path("mode").asText("run");
     return mode.equals("debug") ? "Starting the app in debug mode (Debug As > Mule Application)"
         : "Starting the app (Run As > Mule Application)";
@@ -100,7 +88,6 @@ public final class LaunchTools {
     try {
       return switch (request.name()) {
         case RUN -> run(arguments(request));
-        case STOP -> stop();
         default -> "ERROR: unknown tool " + request.name();
       };
     } catch (InterruptedException e) {
@@ -116,26 +103,18 @@ public final class LaunchTools {
     if (!MODES.contains(mode)) {
       return "ERROR: mode must be run or debug.";
     }
-    boolean restart = args.path("restart").asBoolean(false);
     String project = files.name();
     AppLauncher.Running now = launcher.running(project);
-    if (now != null && now.mode().equals(mode) && !restart) {
-      return "ALREADY RUNNING: " + now.name() + " runs in " + mode + " mode, so nothing was restarted. Pass"
-          + " restart true only if the user asked to restart or redeploy it.";
-    }
-    String stopped = "";
     if (now != null) {
-      launcher.stop();
-      if (!stopped()) {
-        return "ERROR: " + now.name() + " did not stop within " + STOP_TIMEOUT.toSeconds() + " s, so it was not"
-            + " started again. Ask the user to stop it in Studio (Terminate in the Console view).";
-      }
-      stopped = "Stopped " + now.name() + " (" + now.mode() + " mode) first.\n";
+      return ALREADY_RUNNING + " " + now.name() + " runs in " + now.mode() + " mode, so nothing was started or"
+          + " stopped." + (now.mode().equals(mode) ? "" : " To run it in " + mode + " mode instead,")
+          + " ask the user to stop it in Studio first (Terminate, the red square in the Console view), then to ask"
+          + " again. Never stop it yourself.";
     }
     AppConsole.Text before = read(project);
     long started = System.nanoTime();
     launcher.start(project, mode);
-    return stopped + deployed(project, mode, before, started);
+    return deployed(project, mode, before, started);
   }
 
   private String deployed(String project, String mode, AppConsole.Text before, long started) throws Exception {
@@ -229,28 +208,6 @@ public final class LaunchTools {
       }
     }
     return found;
-  }
-
-  private String stop() throws Exception {
-    AppLauncher.Running now = launcher.running(files.name());
-    if (now == null) {
-      return "NOT RUNNING: no Mule app is running in Studio, so nothing was stopped.";
-    }
-    launcher.stop();
-    return stopped() ? "STOPPED: " + now.name() + " (" + now.mode() + " mode)."
-        : "ERROR: " + now.name() + " did not stop within " + STOP_TIMEOUT.toSeconds() + " s. Ask the user to stop"
-            + " it in Studio (Terminate in the Console view).";
-  }
-
-  private boolean stopped() throws InterruptedException {
-    long end = System.nanoTime() + STOP_TIMEOUT.toNanos();
-    while (System.nanoTime() < end) {
-      if (launcher.running(files.name()) == null) {
-        return true;
-      }
-      Thread.sleep(POLL_MS);
-    }
-    return launcher.running(files.name()) == null;
   }
 
   private AppConsole.Text read(String project) {

@@ -172,7 +172,7 @@ public final class AiSettings {
     ((ScopedPreferenceStore) prefs).save();
   }
 
-  // Tips or witty lines on the live status line while the model works. Off by default.
+  // Tips or witty lines on the live status line while the model works. Both by default; Off is kept once chosen.
   public static LoadingPhrases.Mode loadingPhrases() {
     return LoadingPhrases.Mode.fromName(store().getString(LOADING_PHRASES));
   }

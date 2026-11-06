@@ -1,5 +1,6 @@
 import java.net.http.HttpTimeoutException;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -43,6 +44,7 @@ import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.RawLog;
 import com.mulesoftforge.studio.ai.history.UsageLog;
+import com.mulesoftforge.studio.ai.launch.AppLauncher;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
@@ -110,6 +112,9 @@ public class Harness {
   private static AutoRouter.Models autoPair;
   private static final String IMAGE_SPEC = "image:";
   private static ChatMode mode = ChatMode.AGENT;
+  // --app-running run|debug: a fake Studio launcher that reports the project's app already running in that mode.
+  private static String appRunning;
+  private static final List<String> launcherCalls = new CopyOnWriteArrayList<>();
   private static final Path DEFAULT_WORKSPACE = Path.of(System.getProperty("user.home"),
       "AnypointStudio", "studio-workspace-728");
   private static final Path DEFAULT_STATE = DEFAULT_WORKSPACE.resolve(".metadata").resolve(".plugins")
@@ -166,6 +171,7 @@ public class Harness {
             case "--workspace" -> workspace = Path.of(args[++i]);
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
             case "--then" -> then.add(args[++i]);
+            case "--app-running" -> appRunning = args[++i];
             case "--auto" -> {
               String[] pair = args[++i].split(",", 2);
               autoPair = new AutoRouter.Models(pair[0], pair[1]);
@@ -363,10 +369,16 @@ public class Harness {
       }
     };
     ChatSession session = new ChatSession();
+    if (appRunning != null) {
+      session.appLauncher(runningLauncher(appRunning));
+    }
     String[] autoModel = {null};
     ChatSession.Turn turn = session.send(modelFor(connection, session, mode, prompt, attachments, autoModel), mode,
         prompt, attachments, project, progress);
     System.out.println(turn.text());
+    if (appRunning != null) {
+      System.out.println("LAUNCHER CALLS: " + launcherCalls);
+    }
     // --then mode:prompt runs another turn in the same chat, attaching the same files again as Studio does;
     // compact-mode:prompt presses Compact first.
     for (String next : then) {
@@ -1604,6 +1616,26 @@ public class Harness {
   }
 
   // With --auto fast,strong, each turn's model is chosen as ChatView does; previous[0] carries it between turns.
+  private static AppLauncher runningLauncher(String runningMode) {
+    return new AppLauncher() {
+      @Override
+      public Running running(String project) {
+        return new Running(project, runningMode);
+      }
+
+      @Override
+      public void start(String project, String startMode) {
+        launcherCalls.add("start " + startMode);
+      }
+
+      @Override
+      public boolean stop() {
+        launcherCalls.add("stop");
+        return true;
+      }
+    };
+  }
+
   private static ChatModel modelFor(Connection connection, ChatSession session, ChatMode mode, String prompt,
       List<Attachment> attachments, String[] previous) {
     if (autoPair == null) {
