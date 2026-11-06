@@ -16,6 +16,7 @@ import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Network;
+import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 
 // Base URL and model are kept per provider so switching presets does not lose earlier values.
 // API keys live in Eclipse secure storage, never in the plain preference file.
@@ -43,6 +44,10 @@ public final class AiSettings {
   private static final String INSTRUCTIONS = "chat.instructions";
   private static final String HTTP_INSTRUCTIONS = "http.instructions";
   private static final String DOCS_HOSTS = "http.docsHosts";
+  private static final String LOADING_PHRASES = "chat.loadingPhrases";
+  private static final String ALERT_DISABLED = "chat.alertDisabled";
+  private static final String ALERT_SOUND = "chat.alertSound";
+  private static final String HOOKS_ENABLED = "hooks.enabled";
   private static final String GITHUB_LOGIN = "github.login";
   private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
@@ -164,6 +169,37 @@ public final class AiSettings {
   public static void saveCheckForUpdates(boolean check) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(UPDATE_CHECK_DISABLED, !check);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Tips or witty lines on the live status line while the model works. Off by default.
+  public static LoadingPhrases.Mode loadingPhrases() {
+    return LoadingPhrases.Mode.fromName(store().getString(LOADING_PHRASES));
+  }
+
+  // Whether the view's tab and the Dock or taskbar icon show that an answer or a question is waiting while
+  // Studio is in the background. On by default.
+  public static boolean alertWhenDone() {
+    return !store().getBoolean(ALERT_DISABLED);
+  }
+
+  // A system beep with that alert. Off by default.
+  public static boolean alertSound() {
+    return store().getBoolean(ALERT_SOUND);
+  }
+
+  // Whether the commands in Hooks.userFile() run on chat events. Off until turned on.
+  public static boolean hooksEnabled() {
+    return store().getBoolean(HOOKS_ENABLED);
+  }
+
+  public static void saveChatExtras(LoadingPhrases.Mode phrases, boolean alert, boolean sound, boolean hooks)
+      throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(LOADING_PHRASES, phrases.name());
+    prefs.setValue(ALERT_DISABLED, !alert);
+    prefs.setValue(ALERT_SOUND, sound);
+    prefs.setValue(HOOKS_ENABLED, hooks);
     ((ScopedPreferenceStore) prefs).save();
   }
 

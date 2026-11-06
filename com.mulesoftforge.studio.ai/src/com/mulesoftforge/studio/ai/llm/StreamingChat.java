@@ -8,6 +8,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.function.UnaryOperator;
 
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.ModelProvider;
 import dev.langchain4j.model.chat.Capability;
 import dev.langchain4j.model.chat.ChatModel;
@@ -23,6 +24,7 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 // A streaming model behind the blocking ChatModel interface the chat loop uses: chat() returns the complete reply,
 // so tools only ever run from finished calls, and what arrives meanwhile is reported to the turn's Progress.
 final class StreamingChat implements ChatModel {
+  private static final int MAX_THOUGHT_CHARS = 40_000;
   private final StreamingChatModel streaming;
   // Applied to each request before it is sent, e.g. to add cache marks.
   private final UnaryOperator<ChatRequest> prepare;
@@ -48,20 +50,32 @@ final class StreamingChat implements ChatModel {
     streaming.chat(prepare.apply(request), new StreamingChatResponseHandler() {
       private String state;
       private int toolIndex = -1;
+      private long thinkingSince;
+      private final StringBuilder thoughts = new StringBuilder();
 
       @Override
       public void onPartialThinking(PartialThinking thinking) {
+        if (thinkingSince == 0) {
+          thinkingSince = System.nanoTime();
+        }
         receiving("Thinking…");
+        String text = thinking.text();
+        if (text != null && !text.isEmpty() && thoughts.length() < MAX_THOUGHT_CHARS) {
+          thoughts.append(text);
+          shown.thinking(text);
+        }
       }
 
       @Override
       public void onPartialResponse(String text) {
+        thought();
         receiving("Writing the answer…");
         shown.partial(text);
       }
 
       @Override
       public void onPartialToolCall(PartialToolCall call) {
+        thought();
         if (call.index() != toolIndex && call.name() != null && !call.name().isBlank()) {
           toolIndex = call.index();
           state = null;
@@ -71,7 +85,16 @@ final class StreamingChat implements ChatModel {
 
       @Override
       public void onCompleteResponse(ChatResponse response) {
-        done.complete(response);
+        thought();
+        done.complete(withoutThinking(response));
+      }
+
+      private void thought() {
+        if (thinkingSince != 0) {
+          shown.thought(thoughts.toString().strip(), (System.nanoTime() - thinkingSince) / 1_000_000);
+          thinkingSince = 0;
+          thoughts.setLength(0);
+        }
       }
 
       @Override
@@ -101,6 +124,15 @@ final class StreamingChat implements ChatModel {
       }
       throw new CompletionException(cause);
     }
+  }
+
+  // Reasoning is asked for only to show it; it is not kept in the history, so later requests are unchanged.
+  static ChatResponse withoutThinking(ChatResponse response) {
+    AiMessage message = response.aiMessage();
+    if (message == null || message.thinking() == null) {
+      return response;
+    }
+    return response.toBuilder().aiMessage(message.toBuilder().thinking(null).build()).build();
   }
 
   @Override

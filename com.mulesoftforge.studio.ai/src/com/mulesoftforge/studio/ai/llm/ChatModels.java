@@ -77,6 +77,8 @@ public final class ChatModels {
             .apiKey(apiKey)
             .modelName(connection.model())
             .maxCompletionTokens(MAX_OUTPUT_TOKENS)
+            // Reads reasoning_content from the reply to show it; nothing is added to the request.
+            .returnThinking(true)
             .timeout(TIMEOUT)
             .listeners(listeners);
         Map<String, String> headers = gatewayHeaders(connection);
@@ -94,6 +96,7 @@ public final class ChatModels {
           // Tools come before the system prompt, so its mark caches them too; a separate tools mark would be a
           // fifth, and Anthropic rejects more than four.
           .cacheSystemMessages(true)
+          .returnThinking(true)
           .timeout(TIMEOUT)
           .listeners(listeners)
           .build(), CacheMarks::anthropic);
@@ -124,6 +127,7 @@ public final class ChatModels {
           .httpClientBuilder(http(capture, inFlight))
           .baseUrl(connection.baseUrl())
           .modelName(connection.model())
+          .returnThinking(true)
           .timeout(TIMEOUT)
           .listeners(listeners)
           .build());

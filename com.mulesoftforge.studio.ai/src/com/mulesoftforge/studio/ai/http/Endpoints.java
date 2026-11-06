@@ -2,11 +2,13 @@ package com.mulesoftforge.studio.ai.http;
 
 import java.io.StringReader;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,6 +33,11 @@ public final class Endpoints {
   private static final String HTTP = "http://www.mulesoft.org/schema/mule/http";
   private static final String APIKIT = "http://www.mulesoft.org/schema/mule/mule-apikit";
   private static final int LIST_LIMIT = 300;
+  private static final int PAGE_CALL_LIMIT = 40;
+  // action="/x", formaction='/x', fetch("/x", fetch(`/x`, .open("POST", "/x"; not protocol-relative //host paths.
+  private static final Pattern PAGE_CALL = Pattern.compile(
+      "(?:\\b(?:form)?action\\s*=\\s*|\\bfetch\\(\\s*|\\.open\\(\\s*[\"'][A-Za-z]+[\"']\\s*,\\s*)[\"'`](/(?!/)[^\"'`\\s$]*)",
+      Pattern.CASE_INSENSITIVE);
   private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{([^}]+)}");
   private static final Pattern APIKIT_FLOW = Pattern.compile(
       "^(get|post|put|patch|delete|head|options):(\\\\[^:]*)(?::[^:]+)?:([^:]+)$", Pattern.CASE_INSENSITIVE);
@@ -42,7 +49,12 @@ public final class Endpoints {
   // method is ANY for a plain listener without allowedMethods.
   public record Endpoint(String method, String url, String flow, String note) {}
 
-  public record Found(List<Listener> listeners, List<Endpoint> endpoints, List<String> notes) {}
+  // A root-relative path that a page or script under src/main/resources requests, and the listener URL that
+  // serves it (null when none does).
+  public record PageCall(String file, int line, String path, Endpoint servedBy) {}
+
+  public record Found(List<Listener> listeners, List<Endpoint> endpoints, List<PageCall> pageCalls,
+      List<String> notes) {}
 
   private Endpoints() {}
 
@@ -126,7 +138,57 @@ public final class Endpoints {
       endpoints.add(new Endpoint(m.group(1).toUpperCase(Locale.ROOT), prefix + resource, flow.getAttribute("name"),
           "APIkit"));
     }
-    return new Found(List.copyOf(listeners.values()), endpoints, notes.stream().distinct().toList());
+    return new Found(List.copyOf(listeners.values()), endpoints, pageCalls(files, endpoints),
+        notes.stream().distinct().toList());
+  }
+
+  // The paths in form actions, fetch() and XMLHttpRequest.open() of the HTML and JavaScript the app serves: the
+  // URLs its pages really use, which can differ from the listener paths (a page posting to /idp/webapp/upload
+  // under a listener on /*).
+  private static List<PageCall> pageCalls(ProjectFiles files, List<Endpoint> endpoints) throws Exception {
+    List<PageCall> out = new ArrayList<>();
+    Set<String> seen = new HashSet<>();
+    for (String path : files.list("src/main/resources", LIST_LIMIT)) {
+      String lower = path.toLowerCase(Locale.ROOT);
+      if (!(lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".js"))
+          || SecretMask.isBlocked(path)) {
+        continue;
+      }
+      String text = files.read(path);
+      if (text == null) {
+        continue;
+      }
+      String[] lines = text.split("\\R", -1);
+      for (int i = 0; i < lines.length && out.size() < PAGE_CALL_LIMIT; i++) {
+        Matcher m = PAGE_CALL.matcher(lines[i]);
+        while (m.find()) {
+          String called = m.group(1).replaceFirst("[?#].*$", "");
+          if (seen.add(path + " " + called)) {
+            out.add(new PageCall(path, i + 1, called, servedBy(called, endpoints)));
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  private static Endpoint servedBy(String called, List<Endpoint> endpoints) {
+    Endpoint wildcard = null;
+    int longest = -1;
+    for (Endpoint endpoint : endpoints) {
+      String path = endpoint.url().replaceFirst("^https?://[^/]+", "");
+      String template = path.replaceAll("\\{[^}]+}", "[^/]+").replace("*", ".*");
+      if (!path.contains("*") && called.matches(template)) {
+        return endpoint;
+      }
+      String prefix = trimWildcard(path);
+      if (path.endsWith("/*") && (called.equals(prefix) || called.startsWith(prefix + "/"))
+          && prefix.length() > longest) {
+        wildcard = endpoint;
+        longest = prefix.length();
+      }
+    }
+    return wildcard;
   }
 
   public static String describe(Found found) {
@@ -143,6 +205,20 @@ public final class Endpoints {
     for (Endpoint endpoint : found.endpoints()) {
       out.append("- ").append(endpoint.method()).append(' ').append(endpoint.url()).append("  (flow ")
           .append(endpoint.flow()).append(endpoint.note().isEmpty() ? "" : ", " + endpoint.note()).append(")\n");
+    }
+    if (!found.pageCalls().isEmpty()) {
+      out.append("\nPAGES CALL (paths in the app's HTML and JavaScript; call these, not only the listener"
+          + " paths):\n");
+      for (PageCall call : found.pageCalls()) {
+        Endpoint served = call.servedBy();
+        out.append("- ").append(call.path()).append("  (").append(call.file()).append(" line ").append(call.line())
+            .append(served == null ? "; no listener path matches it"
+                : "; " + served.url().replaceFirst("(https?://[^/]+).*", "$1") + call.path() + ", flow "
+                    + served.flow())
+            .append(served != null && served.note().startsWith("APIkit router")
+                ? ", whose APIkit router has no flow for this path: it will not reach a resource flow" : "")
+            .append(")\n");
+      }
     }
     if (!found.notes().isEmpty()) {
       out.append("\nNOTES:\n");

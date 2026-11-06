@@ -1,0 +1,32 @@
+---
+description: Plan and build the chat loop, prompts, tools and provider calls by first checking how open-source AI coding tools solve the same problem
+alwaysApply: true
+---
+
+# Learn from the reference projects first
+
+Open-source AI coding tools are cloned in `/Users/gjeffcock/Documents/github/mulesoftforge-master/references/`: `cline`, `Roo-Code`, `continue`, `aider`, `codex`, `gemini-cli`, `vscode-copilot-chat`. They have already solved most of what this plugin needs. See `reference-map.mdc` for where each topic lives.
+
+## Before planning or changing how the plugin talks to a model
+
+This covers the chat loop, prompts, history, tools, edits, caching, streaming, output limits, cost, providers, modes and the chat UI.
+
+1. Read how **at least two** references do it. Read the code, not their docs or memory.
+2. In the plan or the reply, name them and what they do, with file paths. For example: "Roo-Code marks the system prompt and the last two user messages (`src/api/transform/caching/anthropic.ts`); Continue does …".
+3. Say what we will do and why it differs where it does: Java and LangChain4j, Eclipse, Mule, our gateways.
+4. If no reference handles it, say so; then design it ourselves.
+
+## Design rules learned the hard way
+
+- **No per-provider tuning to fix one chat.** A fix must hold for every provider, or be keyed to a documented API difference (for example, Claude needs `cache_control` markers and OpenAI caches automatically). Never key it to one gateway's quirks.
+- **A gateway behaviour is a fact only after a live probe.** One chat is an anecdote: `reasoning_effort` "worked" until a probe showed it did nothing.
+- **Prefer what most references do** over a clever local scheme, unless we can show a reason it fails for us.
+
+## Verify like they do
+
+- Every behaviour change gets an offline harness check (`harness/run-checks.sh`).
+- Anything that changes what a provider receives is tested live: `harness/run.sh chat --then mode:prompt …` on two models of the `custom` provider (see `live-testing.mdc`), comparing tokens, cache reads and cost with the chat that showed the problem.
+
+## Copying
+
+Learn ideas freely. Code copied from a reference keeps its license notice (Apache-2.0 or MIT) in the file. Never copy from closed tools.

@@ -1,10 +1,13 @@
 package com.mulesoftforge.studio.ai.ui;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.eclipse.core.filesystem.EFS;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.equinox.security.storage.StorageException;
@@ -27,9 +30,13 @@ import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
+import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPreferencePage;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.ide.IDE;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
@@ -38,6 +45,7 @@ import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Prompts;
 import com.mulesoftforge.studio.ai.llm.Updates;
+import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -70,6 +78,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button checkUpdates;
   private Button maskSecrets;
   private Button maskPersonal;
+  private Button alertWhenDone;
+  private Button alertSound;
+  private Combo loadingPhrases;
+  private Button hooksEnabled;
   private DataWeaveCliGroup dataWeaveCli;
   private Text instructions;
   private Text docsHosts;
@@ -164,6 +176,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     testResult.setLayoutData(resultData);
 
     createDisplayGroup(body);
+    createAlertsGroup(body);
     createInstructionsGroup(body);
     createHttpGroup(body);
     createNetworkGroup(body);
@@ -206,6 +219,68 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     maskPersonal.setSelection(AiSettings.maskPersonalData());
     label(group, "When you ask about an event Studio's debugger is stopped at, its real data is sent. With this on,"
         + " email addresses and phone numbers in it become «email-N» and «phone-N».");
+  }
+
+  private void createAlertsGroup(Composite body) {
+    Group group = new Group(body, SWT.NONE);
+    group.setText("Alerts, loading phrases and hooks");
+    group.setLayout(new GridLayout(2, false));
+    GridData groupData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    groupData.horizontalSpan = 2;
+    groupData.verticalIndent = 10;
+    group.setLayoutData(groupData);
+
+    alertWhenDone = new Button(group, SWT.CHECK);
+    alertWhenDone.setText("When an answer or a question is waiting and you are elsewhere, highlight the chat tab"
+        + " and badge the Dock or taskbar icon");
+    alertWhenDone.setSelection(AiSettings.alertWhenDone());
+    alertWhenDone.setLayoutData(span(2));
+    alertSound = new Button(group, SWT.CHECK);
+    alertSound.setText("Play a sound with the badge (untick for silence; off by default)");
+    alertSound.setSelection(AiSettings.alertSound());
+    alertSound.setLayoutData(span(2));
+
+    label(group, "While the model works, show:");
+    loadingPhrases = new Combo(group, SWT.READ_ONLY);
+    for (LoadingPhrases.Mode mode : LoadingPhrases.Mode.values()) {
+      loadingPhrases.add(mode.label);
+    }
+    loadingPhrases.select(AiSettings.loadingPhrases().ordinal());
+
+    hooksEnabled = new Button(group, SWT.CHECK);
+    hooksEnabled.setText("Run my hooks: commands for UserPromptSubmit, PreToolUse, PostToolUse, Stop and"
+        + " Notification");
+    hooksEnabled.setSelection(AiSettings.hooksEnabled());
+    hooksEnabled.setLayoutData(span(2));
+    Link hooksFile = new Link(group, SWT.WRAP);
+    hooksFile.setText("Read from " + Hooks.userFile() + ", in the format Codex and Copilot use for hooks.json."
+        + " They run on your machine with your permissions, and see what the model sees, secrets masked."
+        + " A PreToolUse hook can block a tool call. <a>Open hooks file</a>");
+    GridData hooksData = span(2);
+    hooksData.widthHint = 420;
+    hooksFile.setLayoutData(hooksData);
+    hooksFile.addListener(SWT.Selection, e -> openHooksFile());
+  }
+
+  private static GridData span(int columns) {
+    GridData data = new GridData(SWT.FILL, SWT.TOP, true, false);
+    data.horizontalSpan = columns;
+    return data;
+  }
+
+  // Creates the file with every event empty and two examples when it does not exist yet.
+  private void openHooksFile() {
+    Path file = Hooks.userFile();
+    try {
+      if (!Files.exists(file)) {
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, Hooks.template());
+      }
+      IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
+      IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(file.toUri()));
+    } catch (Exception e) {
+      setErrorMessage("Could not open " + file + ": " + Errors.describe(e));
+    }
   }
 
   private void createInstructionsGroup(Composite body) {
@@ -465,6 +540,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
       AiSettings.saveMaskSecrets(maskSecrets.getSelection());
       AiSettings.saveMaskPersonalData(maskPersonal.getSelection());
+      int phrases = loadingPhrases.getSelectionIndex();
+      AiSettings.saveChatExtras(LoadingPhrases.Mode.values()[Math.max(0, phrases)], alertWhenDone.getSelection(),
+          alertSound.getSelection(), hooksEnabled.getSelection());
       AiSettings.saveDataWeaveCli(dataWeaveCli.path());
       AiSettings.saveInstructions(instructions.getText());
       try {

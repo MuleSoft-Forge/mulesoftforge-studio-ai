@@ -203,7 +203,7 @@ public final class MunitSchemas {
     }
   }
 
-  private static final class Input implements LSInput {
+  static final class Input implements LSInput {
     private final byte[] bytes;
     private String systemId;
 

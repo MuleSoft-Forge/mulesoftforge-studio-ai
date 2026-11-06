@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.check;
 
 import java.io.StringReader;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -56,6 +57,8 @@ public final class MuleChecks {
   // Shipped with the runtime or MUnit: no application dependency provides these namespaces.
   private static final Set<String> RUNTIME_NAMESPACES = Set.of("core", "ee/core", "documentation", "tls", "batch",
       "api-gateway", "munit", "munit-tools");
+  // Validated by MunitSchemas.
+  private static final Set<String> MUNIT_NAMESPACES = Set.of(MULE_NS + "munit", MULE_NS + "munit-tools");
   // Namespaces whose connector artifactId does not contain the namespace name.
   private static final Map<String, String> ARTIFACT_HINTS = Map.of("os", "objectstore",
       "secure-properties", "secure-configuration-property");
@@ -157,12 +160,17 @@ public final class MuleChecks {
     Pom pom = project.containsKey("pom.xml") ? Pom.parse(project.get("pom.xml"), found) : null;
     Map<String, ConnectorModel> byNamespace = new HashMap<>();
     Map<String, ConnectorModel> byErrorNamespace = new HashMap<>();
+    Map<String, Path> schemas = new HashMap<>();
     if (connectors != null && pom != null) {
       for (ConnectorCatalog.Entry entry : connectors.forPom(project.get("pom.xml"))) {
         ConnectorModel model = entry.model();
         if (model != null) {
           byNamespace.putIfAbsent(model.namespace(), model);
           model.errorNamespaces().forEach(namespace -> byErrorNamespace.putIfAbsent(namespace, model));
+          Path schema = connectors.schema(entry.dependency());
+          if (schema != null && !MUNIT_NAMESPACES.contains(model.namespace())) {
+            schemas.putIfAbsent(model.namespace(), schema);
+          }
         }
       }
     }
@@ -198,7 +206,10 @@ public final class MuleChecks {
     for (ConfigFile config : configs) {
       checkNamespaces(config, pom, found);
       checkErrorTypes(config, byErrorNamespace, found);
-      checkComponents(config, byNamespace, found);
+      List<Problem> components = new ArrayList<>();
+      checkComponents(config, byNamespace, components);
+      found.addAll(components);
+      checkSchemas(config, project.get(config.path), schemas, connectors, components, found);
       found.addAll(config.structure);
       checkPlaceholders(config, properties, found);
       for (Use file : config.propertyFiles) {
@@ -308,6 +319,28 @@ public final class MuleChecks {
           found.add(new Problem(config.path, use.line, "<" + element + "> has no parameter \"" + attribute + "\" in "
               + model.label() + ". Look up its parameters with connector_reference \"" + element + "\"."));
         }
+      }
+    }
+  }
+
+  // Schema errors in the file's connector elements, except on lines checkComponents already reported.
+  private static void checkSchemas(ConfigFile config, String xml, Map<String, Path> schemas,
+      ConnectorCatalog connectors, List<Problem> components, List<Problem> found) {
+    if (connectors == null) {
+      return;
+    }
+    Map<String, Path> used = new TreeMap<>();
+    schemas.forEach((uri, schema) -> {
+      if (config.usedUris.contains(uri)) {
+        used.put(uri, schema);
+      }
+    });
+    Set<Integer> reported = new HashSet<>();
+    components.forEach(problem -> reported.add(problem.line()));
+    for (Problem problem : ModuleSchemas.validate(config.path, xml, config.prefixes, used,
+        connectors::connectorSchema)) {
+      if (!reported.contains(problem.line())) {
+        found.add(problem);
       }
     }
   }

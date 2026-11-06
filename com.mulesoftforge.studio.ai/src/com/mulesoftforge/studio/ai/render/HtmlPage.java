@@ -1,5 +1,8 @@
 package com.mulesoftforge.studio.ai.render;
 
+import com.mulesoftforge.studio.ai.llm.ChatSession;
+import com.mulesoftforge.studio.ai.llm.Updates;
+
 // The rich transcript page. Content arrives through msfMessage/msfStep/msfAction calls with HTML that
 // HtmlRenderer has already escaped; clicks go back to Studio through the msfClick browser function.
 public final class HtmlPage {
@@ -7,6 +10,14 @@ public final class HtmlPage {
 
   public record Theme(Palette palette, Palette.Rgb background, Palette.Rgb foreground, String font, int fontPt,
       String mono, int monoPt) {}
+
+  // Starter-card icons as PNG data URIs: Studio's own images, and our round logo for the website card. A null shows
+  // the card without one.
+  public record Icons(String flow, String project, String munit, String error, String website) {
+    public static final Icons NONE = new Icons(null, null, null, null, null);
+  }
+
+  private static final String PNG_DATA = "data:image/png;base64,";
 
   private HtmlPage() {}
 
@@ -43,6 +54,10 @@ public final class HtmlPage {
   }
 
   public static String page(Theme theme) {
+    return page(theme, Icons.NONE);
+  }
+
+  public static String page(Theme theme, Icons icons) {
     String css = """
         :root { %s color-scheme: var(--scheme); }
         * { box-sizing: border-box; }
@@ -81,6 +96,10 @@ public final class HtmlPage {
         #starters .card:hover { border-color: var(--focus); background: var(--pill); }
         #starters .card b { display: block; margin-bottom: 2px; }
         #starters .card span { color: var(--muted); font-size: 0.85em; }
+        #starters .card.icon { display: flex; align-items: center; gap: 10px; }
+        #starters .card .ico { width: 24px; height: 24px; flex: none; object-fit: contain; }
+        #starters .help.icon { justify-content: center; text-align: left; }
+        #starters .help { width: calc(50%% - 4px); box-sizing: border-box; margin: 8px auto 0; text-align: center; }
         #log { padding: 12px 12px 18px; max-width: 900px; margin: 0 auto; }
         @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
         .msg, .offer, .ask, .actions, .raw, .todos { animation: rise .18s ease-out; }
@@ -110,6 +129,17 @@ public final class HtmlPage {
         .steps > .step:last-child::before { border-color: var(--focus); }
         .live .preview { white-space: pre-wrap; color: var(--fg); font-size: 1.15em; max-height: 16em;
           overflow-y: auto; margin-top: 2px; }
+        .live.thinking .preview { color: var(--muted); font-style: italic; font-size: 1em; }
+        /* A light band sweeps across the status while the model works, as in Cline and Codex. */
+        @keyframes shimmer { from { background-position: 100%% 0; } to { background-position: -100%% 0; } }
+        .live .status { color: transparent; background: linear-gradient(90deg, var(--muted) 0%%, var(--muted) 40%%,
+          var(--fg) 50%%, var(--muted) 60%%, var(--muted) 100%%); background-size: 200%% 100%%;
+          -webkit-background-clip: text; background-clip: text; animation: shimmer 2.2s linear infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .live .status { animation: none; background: none; color: var(--muted); }
+        }
+        .thought .text { white-space: pre-wrap; font-style: italic; margin: 4px 0 2px; max-height: 18em;
+          overflow-y: auto; }
         .h1 { font-size: 1.2em; font-weight: 650; }
         .h2 { font-size: 1.05em; font-weight: 650; }
         .quote { color: var(--muted); font-style: italic; border-left: 3px solid var(--card-border);
@@ -193,18 +223,19 @@ public final class HtmlPage {
         <!DOCTYPE html>
         <html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy"
-          content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+          content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
         <style>%s</style></head>
         <body>
         <div id="sticky"></div>
         <div id="starters">
           <div class="hint">Ask about this Mule project, or pick a start:</div>
           <div class="grid">
-            <div class="card" data-starter="Explain how the main flow in this project works."><b>Explain this flow</b><span>Summarise the message processors</span></div>
-            <div class="card" data-starter="Review this project and suggest improvements."><b>Review the project</b><span>Checklist of possible fixes</span></div>
-            <div class="card" data-starter="Create MUnit tests for the main flow."><b>Add MUnit tests</b><span>Cover the happy path and errors</span></div>
-            <div class="card" data-starter="Find the cause of the last run failure."><b>Diagnose last run</b><span>Use console and problems</span></div>
+            %s
+            %s
+            %s
+            %s
           </div>
+          %s
         </div>
         <div id="log"></div>
         <button id="quote-btn" type="button">Quote</button>
@@ -277,6 +308,7 @@ public final class HtmlPage {
             steps.appendChild(live);
           }
           live.querySelector('.status').textContent = status;
+          live.classList.toggle('thinking', status.indexOf(%s) === 0);
           var text = live.querySelector('.preview');
           text.textContent = preview;
           text.scrollTop = text.scrollHeight;
@@ -317,9 +349,11 @@ public final class HtmlPage {
             var actions = document.createElement('div');
             actions.className = 'msg-actions';
             [['Retry', 'cmd:retry'], ['Edit last message', 'cmd:edit-last'],
-             ['👍', 'cmd:feedback:up'], ['👎', 'cmd:feedback:down']].forEach(function (item) {
+             ['👍', 'cmd:feedback:up', 'Liked it? Share it on LinkedIn'],
+             ['👎', 'cmd:feedback:down', 'Missed? Tell us what went wrong']].forEach(function (item) {
               var a = document.createElement('a');
               a.setAttribute('data-a', item[1]);
+              if (item[2]) { a.title = item[2]; }
               a.textContent = item[0];
               actions.appendChild(a);
             });
@@ -339,6 +373,29 @@ public final class HtmlPage {
           line.className = 'step';
           line.textContent = text;
           steps.appendChild(line);
+          scrollIfNeeded(was);
+        }
+        function msfThought(summary, text) {
+          var was = nearBottom();
+          if (!steps) {
+            steps = document.createElement('div');
+            steps.className = 'steps';
+            log.appendChild(steps);
+          }
+          var block = document.createElement(text ? 'details' : 'div');
+          block.className = 'step thought';
+          var title = document.createElement(text ? 'summary' : 'span');
+          title.textContent = summary;
+          block.appendChild(title);
+          if (text) {
+            var body = document.createElement('div');
+            body.className = 'text';
+            body.textContent = text;
+            block.appendChild(body);
+          }
+          var live = document.getElementById('live');
+          if (live && live.parentNode === steps) { steps.insertBefore(block, live); }
+          else { steps.appendChild(block); }
           scrollIfNeeded(was);
         }
         function msfAction(label, id) {
@@ -545,7 +602,41 @@ public final class HtmlPage {
           if (a) { e.preventDefault(); msfClick(a.getAttribute('data-a')); }
         });
         </script></body></html>
-        """.formatted(css);
+        """.formatted(css,
+        starter("Explain how the main flow in this project works.", "Explain this flow",
+            "Summarise the message processors", icons.flow()),
+        starter("Review this project and suggest improvements.", "Review the project", "Checklist of possible fixes",
+            icons.project()),
+        starter("Create MUnit tests for the main flow.", "Add MUnit tests", "Cover the happy path and errors",
+            icons.munit()),
+        starter("Find the cause of the last run failure.", "Diagnose last run", "Use console and problems",
+            icons.error()),
+        card("help", "data-a=\"url:" + Updates.PAGE + "\"", "Visit the website", "Help and docs", icons.website()),
+        jsString(ChatSession.WAITING_FOR_DATA));
+  }
+
+  private static String starter(String prompt, String title, String hint, String icon) {
+    return card("", "data-starter=\"" + prompt + "\"", title, hint, icon);
+  }
+
+  private static String card(String kind, String data, String title, String hint, String icon) {
+    String text = "<b>" + title + "</b><span>" + hint + "</span>";
+    String classes = ("card " + kind).trim();
+    if (!isPngData(icon)) {
+      return "<div class=\"" + classes + "\" " + data + ">" + text + "</div>";
+    }
+    return "<div class=\"" + classes + " icon\" " + data + "><img class=\"ico\" alt=\"\" src=\"" + icon
+        + "\"><div>" + text + "</div></div>";
+  }
+
+  // Only base64 PNG data goes into the page, so an icon can never carry markup or a remote URL.
+  static boolean isPngData(String uri) {
+    return uri != null && uri.startsWith(PNG_DATA) && uri.length() > PNG_DATA.length()
+        && uri.substring(PNG_DATA.length()).matches("[A-Za-z0-9+/]+={0,2}");
+  }
+
+  private static String jsString(String text) {
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'";
   }
 
   private static String quote(String family) {

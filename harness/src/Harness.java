@@ -8,6 +8,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -217,6 +219,8 @@ public class Harness {
       case "check-context" -> ContextChecks.run();
       case "check-loop" -> LoopChecks.run();
       case "check-cache" -> CacheChecks.run();
+      case "check-hooks" -> HookChecks.run();
+      case "check-fun" -> FunChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -340,6 +344,11 @@ public class Harness {
       }
 
       @Override
+      public void thought(String text, long millis) {
+        System.out.println("  · " + Progress.thoughtFor(millis) + " (" + text.length() + " characters of reasoning)");
+      }
+
+      @Override
       public void answered(CallUsage usage, long seconds) {
         Pricing.CallCost cost = Pricing.cost(provider, usage);
         meter.add(cost);
@@ -402,6 +411,57 @@ public class Harness {
     }
   }
 
+  // search_files: grouped matches, filters, the cap, staged proposals, and secrets neither shown nor searchable.
+  private static int checkSearch() throws Exception {
+    Path root = Files.createTempDirectory("studio-ai-search");
+    Files.createDirectories(root.resolve("src/main/mule"));
+    Files.createDirectories(root.resolve("src/main/resources"));
+    Files.createDirectories(root.resolve("target"));
+    Files.writeString(root.resolve("src/main/mule/api.xml"), "<flow name=\"get-orders\">\n"
+        + "  <flow-ref name=\"Lookup-Customer\"/>\n</flow>\n<sub-flow name=\"lookup-customer\"/>\n");
+    Files.writeString(root.resolve("src/main/mule/global.xml"), "<http:listener-config name=\"api\">\n"
+        + "  <http:listener-connection port=\"${http.port}\"/>\n</http:listener-config>\n");
+    Files.writeString(root.resolve("src/main/resources/config.yaml"), "http:\n  port: \"8081\"\n"
+        + "db:\n  password: \"hunter2-very-secret\"\n");
+    Files.writeString(root.resolve(".env"), "API_KEY=lookup-customer-key\n");
+    Files.writeString(root.resolve("target/api.xml"), "<flow name=\"lookup-customer\"/>\n");
+    Files.write(root.resolve("src/main/resources/sample.pdf"), new byte[] {'%', 'P', 'D', 'F', (byte) 0xC3, 0x28,
+        (byte) 0xFF, '\n', 'l', 'o', 'o', 'k', 'u', 'p', '-', 'c', 'u', 's', 't', 'o', 'm', 'e', 'r'});
+    StringBuilder many = new StringBuilder();
+    for (int i = 0; i < 150; i++) {
+      many.append("<logger message=\"step ").append(i).append("\"/>\n");
+    }
+    Files.writeString(root.resolve("src/main/mule/many.xml"), many.toString());
+    ChangeSet changes = new ChangeSet();
+    ProjectTools tools = new ProjectTools(new DiskProject(root), changes);
+    int failed = 0;
+    failed += expect(tools, "search_files", "{\"regex\":\"lookup-customer\"}",
+        "Found 2 matches in 1 file.\n\n# src/main/mule/api.xml\n   2 |");
+    failed += expect(tools, "search_files", "{\"regex\":\"lookup-customer\"}",
+        "   4 | <sub-flow name=\"lookup-customer\"/>");
+    failed += expect(tools, "search_files", "{\"regex\":\"lookup-customer\"}",
+        "   2 |   <flow-ref name=\"Lookup-Customer\"/>");
+    failed += expectNot(tools, "search_files", "{\"regex\":\"lookup-customer\"}", "target/");
+    failed += expect(tools, "search_files", "{\"regex\":\"lookup-customer\"}",
+        "(1 file not searched because they can hold secrets, such as .env.)");
+    failed += expect(tools, "search_files", "{\"regex\":\"port\",\"file_pattern\":\"*.yaml\"}",
+        "Found 1 match in 1 file.\n\n# src/main/resources/config.yaml\n   2 |   port: \"8081\"");
+    failed += expect(tools, "search_files", "{\"regex\":\"port\",\"path\":\"src/main/mule\"}",
+        "# src/main/mule/global.xml");
+    failed += expect(tools, "search_files", "{\"regex\":\"hunter2\"}", "No matches in the project.");
+    failed += expectNot(tools, "search_files", "{\"regex\":\"password\"}", "hunter2");
+    failed += expect(tools, "search_files", "{\"regex\":\"step \\\\d+\"}",
+        "Showing the first 100 matches; narrow the regex, path or file_pattern for the rest.");
+    failed += expect(tools, "search_files", "{\"regex\":\"${http.port\"}", "ERROR: invalid regex");
+    tools.execute(ToolExecutionRequest.builder().id("w").name("write_file")
+        .arguments("{\"path\":\"src/main/mule/new.xml\",\"content\":\"<flow name=\\\"staged-flow\\\"/>\"}").build());
+    failed += expect(tools, "search_files", "{\"regex\":\"staged-flow\"}", "# src/main/mule/new.xml\n   1 |");
+    failed += check("search_files progress line names the regex", ProjectTools.describe(ToolExecutionRequest
+        .builder().id("d").name("search_files").arguments("{\"regex\":\"flow-ref\"}").build())
+        .equals("Searching the project for flow-ref"));
+    return failed;
+  }
+
   // Offline checks of the path guard and edit rules; no LLM call.
   private static void checkTools() throws Exception {
     Path root = Files.createTempDirectory("studio-ai-tools");
@@ -414,6 +474,7 @@ public class Harness {
     failed += expect(tools, "write_file", "{\"path\":\"/etc/passwd\",\"content\":\"x\"}", "ERROR: Refusing absolute");
     failed += expect(tools, "write_file", "{\"path\":\"target/x.xml\",\"content\":\"x\"}", "ERROR: Refusing to write");
     failed += expect(tools, "list_files", "{\"directory\":\"\"}", "src/main/mule/api.xml");
+    failed += checkSearch();
     ProjectTools readOnly = new ProjectTools(new DiskProject(root), new ChangeSet(), false);
     failed += check("Ask/Plan offer the same tools as Agent, so the prompt cache survives a mode switch",
         readOnly.specifications().equals(tools.specifications()));
@@ -796,6 +857,35 @@ public class Harness {
     return Files.isDirectory(models) ? models : null;
   }
 
+  // Shaped like the schemas Studio generates: configs substitute for mule:abstract-shared-extension.
+  private static final String DB_SCHEMA = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:mule="http://www.mulesoft.org/schema/mule/core"
+          xmlns:db="http://www.mulesoft.org/schema/mule/db" targetNamespace="http://www.mulesoft.org/schema/mule/db"
+          elementFormDefault="qualified" attributeFormDefault="unqualified">
+        <xs:import namespace="http://www.mulesoft.org/schema/mule/core"
+            schemaLocation="http://www.mulesoft.org/schema/mule/core/current/mule.xsd"/>
+        <xs:import namespace="http://www.mulesoft.org/schema/mule/tls"
+            schemaLocation="http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd"/>
+        <xs:element name="config" substitutionGroup="mule:abstract-shared-extension">
+          <xs:complexType>
+            <xs:complexContent>
+              <xs:extension base="mule:abstractExtensionType">
+                <xs:sequence minOccurs="0">
+                  <xs:element name="my-sql-connection">
+                    <xs:complexType>
+                      <xs:attribute name="host" type="mule:expressionString"/>
+                    </xs:complexType>
+                  </xs:element>
+                </xs:sequence>
+                <xs:attribute name="name" type="xs:string" use="required"/>
+              </xs:extension>
+            </xs:complexContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:schema>
+      """;
+
   private static final String DB_MODEL = """
       {"minMuleVersion": "4.1.1", "extensionModel": {
         "name": "Database", "version": "9.9.9",
@@ -853,6 +943,7 @@ public class Harness {
     Path modelDir = models.resolve("4.12.3/org/mule/connectors/mule-db-connector/9.9.9");
     Files.createDirectories(modelDir);
     Files.writeString(modelDir.resolve("mule-db-connector-9.9.9-mule-plugin.json"), DB_MODEL);
+    Files.writeString(modelDir.resolve("mule-db-connector-9.9.9-mule-plugin.xsd"), DB_SCHEMA);
     String pom = POM.formatted("<dependency><groupId>org.mule.connectors</groupId><artifactId>mule-db-connector"
         + "</artifactId><version>${db.version}</version><classifier>mule-plugin</classifier></dependency>")
         .replace("<dependencies>", "<properties><db.version>9.9.9</db.version></properties>\n  <dependencies>");
@@ -905,6 +996,35 @@ public class Harness {
         muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("DB:CONNECTIVITY", "DB:QUERY_EXECUTION")), null);
     failed += expectProblem("without models the connector checks are skipped", base, null, flow,
         muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("db:select", "db:selekt")), null);
+    String misnested = DB_BODY.replace("db:my-sql-connection", "db:my-sql-conection");
+    failed += expectProblem("schema: a config child that does not exist", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, misnested),
+        "line 11: schema: Invalid content was found starting with element 'db:my-sql-conection'. One of"
+            + " 'db:my-sql-connection' is expected.");
+    failed += expectProblem("schema: an attribute of a nested element", base, catalog, flow,
+        muleFile(DB_NS, DB_LOCATION, DB_BODY.replace("host=", "hots=")),
+        "schema: Attribute 'hots' is not allowed to appear in element 'db:my-sql-connection'.");
+    failed += expectProblem("schema: a prefix other than the connector's name", base, catalog, flow,
+        muleFile(DB_NS.replace("xmlns:db=", "xmlns:database="), DB_LOCATION,
+            misnested.replace("db:", "database:")),
+        "schema: Invalid content was found starting with element 'database:my-sql-conection'.");
+    String home = System.getProperty("user.home");
+    Path fakeHome = Files.createTempDirectory("msf-home");
+    Path jar = fakeHome.resolve(".m2/repository/org/mule/connectors/mule-db-connector/9.9.9"
+        + "/mule-db-connector-9.9.9-mule-plugin.jar");
+    Files.createDirectories(jar.getParent());
+    try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(jar))) {
+      zip.putNextEntry(new ZipEntry("META-INF/mule-db.xsd"));
+      zip.write(DB_SCHEMA.getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+    }
+    System.setProperty("user.home", fakeHome.toString());
+    try {
+      failed += expectProblem("schema: skipped for a module that ships its own schema", base, catalog, flow,
+          muleFile(DB_NS, DB_LOCATION, misnested), null);
+    } finally {
+      System.setProperty("user.home", home);
+    }
     System.exit(failed == 0 ? 0 : 1);
   }
 
@@ -1384,6 +1504,9 @@ public class Harness {
         && page.contains("data-ask-choice") && page.contains("'cmd:ask:'"));
     failed += check("todo tray and starters are in the page", page.contains("function msfTodos(")
         && page.contains("id=\"starters\"") && page.contains("data-starter="));
+    failed += check("starters end with a help card that opens the docs site", page.contains(
+        "<div class=\"card help\" data-a=\"url:" + Updates.PAGE + "\"><b>Visit the website</b>")
+        && page.contains("#starters .help { width: calc(50% - 4px);"));
     failed += check("sticky header and quote button are in the page", page.contains("id=\"sticky\"")
         && page.contains("id=\"quote-btn\"") && page.contains("'quote:'"));
     failed += check("AI message actions include retry and feedback", page.contains("'cmd:retry'")
@@ -2649,6 +2772,14 @@ public class Harness {
     return ok ? 0 : 1;
   }
 
+  private static int expectNot(ProjectTools tools, String name, String arguments, String unexpected) {
+    String result = tools.execute(ToolExecutionRequest.builder().id("t").name(name).arguments(arguments).build());
+    boolean ok = !result.startsWith("ERROR") && !result.contains(unexpected);
+    System.out.println((ok ? "PASS" : "FAIL") + "  " + name + " " + arguments + " has no " + unexpected + " -> "
+        + shorten(result));
+    return ok ? 0 : 1;
+  }
+
   static final class DiskProject implements ProjectFiles {
     final Path root;
     private final Path models;
@@ -2669,6 +2800,11 @@ public class Harness {
     }
 
     @Override
+    public Path location() {
+      return root;
+    }
+
+    @Override
     public String name() {
       return root.getFileName().toString();
     }
@@ -2677,6 +2813,12 @@ public class Harness {
     public String read(String path) throws Exception {
       Path file = root.resolve(path).normalize();
       return file.startsWith(root) && Files.isRegularFile(file) ? Files.readString(file) : null;
+    }
+
+    @Override
+    public byte[] readBytes(String path) throws Exception {
+      Path file = root.resolve(path).normalize();
+      return file.startsWith(root) && Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
     }
 
     @Override

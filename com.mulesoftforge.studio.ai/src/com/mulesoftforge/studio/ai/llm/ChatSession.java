@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.llm;
 
 import java.net.http.HttpTimeoutException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -9,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,6 +19,7 @@ import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveTools;
@@ -30,6 +33,7 @@ import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
+import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.launch.AppLauncher;
@@ -82,6 +86,9 @@ public class ChatSession {
   // Counted in toolCounts in place of the tool: calls the mode did not allow, and identical calls refused.
   public static final String MODE_REFUSED = "(not in this mode)";
   public static final String REPEATED = "(repeated)";
+  public static final String HOOK_BLOCKED = "(blocked by a hook)";
+  static final String HOOK_BLOCKED_CALL = "ERROR: not run. The user's PreToolUse hook blocked this call: ";
+  static final String HOOK_NOTE = "[From the user's %s hook]\n";
   // In toolCounts when the turn stopped at MAX_TOOL_ROUNDS, so the view can offer Continue.
   public static final String STEP_LIMIT = "(step limit)";
   // The third identical call in a turn is refused, as Roo-Code's ToolRepetitionDetector does; its result will not
@@ -142,6 +149,10 @@ public class ChatSession {
       }
       if (read > 0) {
         parts.add("read " + plural(read, "file"));
+      }
+      int searched = toolCounts.getOrDefault("search_files", 0);
+      if (searched > 0) {
+        parts.add("searched the project " + (searched == 1 ? "once" : searched + " times"));
       }
       if (toolCounts.getOrDefault("connector_reference", 0) > 0) {
         parts.add("looked up connector details");
@@ -213,6 +224,10 @@ public class ChatSession {
       if (repeated > 0) {
         parts.add("refused " + plural(repeated, "repeated call"));
       }
+      int hooked = toolCounts.getOrDefault(HOOK_BLOCKED, 0);
+      if (hooked > 0) {
+        parts.add("your hooks blocked " + plural(hooked, "call"));
+      }
       int cut = toolCounts.getOrDefault(CUT_OFF, 0);
       if (cut > 0) {
         parts.add("hit the output limit " + (cut == 1 ? "once" : cut + " times"));
@@ -254,6 +269,8 @@ public class ChatSession {
   private volatile AppConsole appConsole;
   private volatile AppLauncher appLauncher;
   private volatile MunitRunner munitRunner;
+  private volatile Hooks hooks = Hooks.NONE;
+  private final String sessionId = UUID.randomUUID().toString();
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
   private volatile String switchedFrom;
@@ -269,6 +286,16 @@ public class ChatSession {
   // Email addresses and phone numbers in live debug events; on by default since those hold real data.
   public void maskPersonalData(boolean on) {
     maskPersonal = on;
+  }
+
+  // The user's hooks for the next turns; Hooks.NONE runs nothing.
+  public void hooks(Hooks userHooks) {
+    hooks = userHooks == null ? Hooks.NONE : userHooks;
+  }
+
+  // Passed to hooks as session_id, so a hook can tell chats apart.
+  public String sessionId() {
+    return sessionId;
   }
 
   // Studio's debugger, so the model gets the debug tools whenever it is stopped; null when unavailable.
@@ -406,6 +433,25 @@ public class ChatSession {
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
     prompt = secrets.mask(null, prompt).text();
+    Hooks userHooks = hooks;
+    Path hookDir = project == null ? null : project.location();
+    if (userHooks.has(Hooks.Event.USER_PROMPT_SUBMIT)) {
+      ObjectNode input = Hooks.input(Hooks.Event.USER_PROMPT_SUBMIT, sessionId, hookDir);
+      input.put("prompt", prompt);
+      input.put("mode", mode.name().toLowerCase(Locale.ROOT));
+      Hooks.Outcome outcome = userHooks.run(Hooks.Event.USER_PROMPT_SUBMIT, null, input, hookDir,
+          progress::isCancelled);
+      hookProblems(progress, Hooks.Event.USER_PROMPT_SUBMIT, outcome);
+      if (outcome.blocked()) {
+        throw new Hooks.Blocked("Your UserPromptSubmit hook stopped this message before it was sent: "
+            + outcome.reason());
+      }
+      if (!outcome.context().isEmpty()) {
+        progress.step("Your UserPromptSubmit hook added context to the message");
+        prompt = prompt + "\n\n" + HOOK_NOTE.formatted(Hooks.Event.USER_PROMPT_SUBMIT.wire)
+            + secrets.mask(null, outcome.contextText()).text();
+      }
+    }
     List<Block> blocks = new ArrayList<>();
     int attachedChars = 0;
     List<String> sent = new ArrayList<>();
@@ -657,9 +703,12 @@ public class ChatSession {
         String signature = signature(call);
         String repeated = editCall ? failedEdits.get(signature) : null;
         int seen = seenCalls.merge(signature, 1, Integer::sum);
+        boolean runs = repeated == null && seen < MAX_IDENTICAL_CALLS;
+        String blocked = runs ? preToolUse(userHooks, call, hookDir, progress) : null;
         String result = repeated != null ? "ERROR: not run. You already sent this exact call this turn and it"
                 + " failed: " + repeated + "\nChange the call or the approach instead of repeating it."
             : seen >= MAX_IDENTICAL_CALLS ? String.format(Locale.ROOT, REPEATED_CALL, seen, call.name())
+            : blocked != null ? blocked
             : debugCall && debugTools != null ? debugTools.execute(call)
             : dataWeaveCall && dataWeaveTools != null ? dataWeaveTools.execute(call)
             : httpCall && httpTools != null ? httpTools.execute(call)
@@ -670,11 +719,15 @@ public class ChatSession {
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
-        if (editCall && repeated == null && result.startsWith("ERROR")) {
+        if (runs && blocked == null) {
+          result = postToolUse(userHooks, call, result, hookDir, progress);
+        }
+        if (editCall && repeated == null && blocked == null && result.startsWith("ERROR")) {
           failedEdits.put(signature, result);
         }
         // A refused call did nothing, so it counts as what stopped it rather than as a call that failed.
-        String countedAs = result.startsWith(ChatMode.REFUSED) ? MODE_REFUSED
+        String countedAs = blocked != null ? HOOK_BLOCKED
+            : result.startsWith(ChatMode.REFUSED) ? MODE_REFUSED
             : result.startsWith(REPEATED_START) ? REPEATED : call.name();
         toolCounts.merge(countedAs, 1, Integer::sum);
         int hidden = secrets.total() - before;
@@ -722,11 +775,69 @@ public class ChatSession {
             .activity() + "]";
     history.add(new History.Exchange(asSent(turn, answer), savedText, remembered), attached.inFull());
     lastMode = mode;
+    if (userHooks.has(Hooks.Event.STOP) && !progress.isCancelled()) {
+      ObjectNode input = Hooks.input(Hooks.Event.STOP, sessionId, hookDir);
+      input.put("last_assistant_message", answer);
+      input.put("stop_hook_active", false);
+      hookProblems(progress, Hooks.Event.STOP,
+          userHooks.run(Hooks.Event.STOP, null, input, hookDir, progress::isCancelled));
+    }
     List<Problem> problems = tools == null || changes.isEmpty() ? List.of() : tools.problemsIntroduced();
     FollowUpAsk ask = tools == null ? null : tools.ask();
     List<TodoItem> todos = tools == null ? List.of() : tools.todos();
     return new Turn(answer, changes, toolCalls, calls, toolCounts, problems, offers, ask, todos,
         secrets.total() - maskedBefore);
+  }
+
+  // The result to send instead of running the call when a PreToolUse hook blocks it, else null. Hooks see the
+  // arguments as the model wrote them, with secrets still masked.
+  private String preToolUse(Hooks userHooks, ToolExecutionRequest call, Path dir, Progress progress) {
+    if (!userHooks.has(Hooks.Event.PRE_TOOL_USE)) {
+      return null;
+    }
+    ObjectNode input = Hooks.input(Hooks.Event.PRE_TOOL_USE, sessionId, dir);
+    input.put("tool_name", call.name());
+    input.set("tool_input", Hooks.toolInput(call.arguments()));
+    input.put("tool_use_id", call.id() == null ? "" : call.id());
+    Hooks.Outcome outcome = userHooks.run(Hooks.Event.PRE_TOOL_USE, call.name(), input, dir, progress::isCancelled);
+    hookProblems(progress, Hooks.Event.PRE_TOOL_USE, outcome);
+    if (!outcome.blocked()) {
+      return null;
+    }
+    progress.step("Your PreToolUse hook blocked " + call.name() + ": " + outcome.reason());
+    return HOOK_BLOCKED_CALL + secrets.mask(null, outcome.reason()).text();
+  }
+
+  // The result with what PostToolUse hooks said about it added; a hook that "blocks" here can only add its reason,
+  // since the call already ran.
+  private String postToolUse(Hooks userHooks, ToolExecutionRequest call, String result, Path dir,
+      Progress progress) {
+    if (!userHooks.has(Hooks.Event.POST_TOOL_USE)) {
+      return result;
+    }
+    ObjectNode input = Hooks.input(Hooks.Event.POST_TOOL_USE, sessionId, dir);
+    input.put("tool_name", call.name());
+    input.set("tool_input", Hooks.toolInput(call.arguments()));
+    input.put("tool_response", result);
+    input.put("tool_use_id", call.id() == null ? "" : call.id());
+    Hooks.Outcome outcome = userHooks.run(Hooks.Event.POST_TOOL_USE, call.name(), input, dir, progress::isCancelled);
+    hookProblems(progress, Hooks.Event.POST_TOOL_USE, outcome);
+    List<String> said = new ArrayList<>(outcome.context());
+    if (outcome.blocked()) {
+      said.add(outcome.reason());
+    }
+    if (said.isEmpty()) {
+      return result;
+    }
+    progress.step("Your PostToolUse hook commented on " + call.name());
+    return result + "\n\n" + HOOK_NOTE.formatted(Hooks.Event.POST_TOOL_USE.wire)
+        + secrets.mask(null, String.join("\n\n", said)).text();
+  }
+
+  private static void hookProblems(Progress progress, Hooks.Event event, Hooks.Outcome outcome) {
+    for (String problem : outcome.problems()) {
+      progress.step("A " + event.wire + " hook did not work (" + problem + "); carrying on without it");
+    }
   }
 
   private static UserMessage current(Prompts.SystemParts system, String text, List<ImageContent> images) {

@@ -1,0 +1,32 @@
+---
+description: Stay on the current 0.5.x line; only bump the patch for releases
+alwaysApply: true
+---
+
+# Versioning — stay on 0.5.x
+
+Current line is **0.5**. Do not bump the middle number.
+
+## On every release
+
+- Bump only the **patch**: `0.5.0` → `0.5.1` → `0.5.2` → … → `0.5.1234` is fine.
+- Never invent a new minor (`0.6.0`) or major (`1.0.0`) unless the user explicitly asks for that jump.
+- Do not treat a feature or security change as a reason to leave `0.5.x`.
+
+## Do not
+
+```
+# BAD — jumping the middle segment without being asked
+0.4.9 → 0.5.0
+0.5.3 → 0.6.0
+```
+
+```
+# GOOD — patch only
+0.5.0 → 0.5.1
+0.5.9 → 0.5.10
+```
+
+## Leave it alone unless releasing
+
+Do not bump versions as a side effect of other work. Only bump when publishing / going live, and then only the patch on `0.5`.

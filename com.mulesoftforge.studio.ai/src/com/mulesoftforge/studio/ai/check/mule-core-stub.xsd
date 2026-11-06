@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Stand-in for Mule's core schema, which the runtime generates and does not ship: only the names MUnit's schemas
-     build on. Everything outside MUnit is accepted unchecked (lax), so this validates MUnit elements only. -->
+<!-- Stand-in for Mule's core schema, which the runtime generates and does not ship: only the names that MUnit's and
+     the Studio-generated connector schemas build on. Core elements are accepted unchecked (lax), so this validates
+     MUnit and connector elements only. -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
     xmlns="http://www.mulesoft.org/schema/mule/core"
     targetNamespace="http://www.mulesoft.org/schema/mule/core"
@@ -20,6 +21,45 @@
   <xs:element name="abstract-flow-construct" abstract="true"/>
   <xs:element name="abstract-message-processor" abstract="true"/>
   <xs:element name="abstract-operator" abstract="true"/>
+  <xs:element name="abstract-validator" abstract="true" substitutionGroup="abstract-message-processor"/>
+  <xs:element name="abstract-message-source" abstract="true" type="abstractMessageSourceType"/>
+  <xs:element name="abstractConnectionProvider" abstract="true" type="abstractConnectionProviderType"/>
+  <xs:element name="abstract-private-object-store" abstract="true" type="abstractObjectStoreType"/>
+  <xs:element name="global-abstract-object-store" abstract="true" type="abstractObjectStoreType"
+      substitutionGroup="abstract-shared-extension"/>
+  <xs:element name="abstract-reconnection-strategy" abstract="true" type="unchecked"/>
+  <xs:element name="abstract-byte-streaming-strategy" abstract="true" type="unchecked"/>
+  <xs:element name="abstract-object-streaming-strategy" abstract="true" type="unchecked"/>
+  <xs:element name="abstract-redelivery-policy" abstract="true" type="unchecked"/>
+
+  <xs:element name="reconnection" type="unchecked"/>
+  <xs:element name="reconnect" type="unchecked" substitutionGroup="abstract-reconnection-strategy"/>
+  <xs:element name="reconnect-forever" type="unchecked" substitutionGroup="abstract-reconnection-strategy"/>
+  <xs:element name="repeatable-in-memory-stream" type="unchecked" substitutionGroup="abstract-byte-streaming-strategy"/>
+  <xs:element name="non-repeatable-stream" type="unchecked" substitutionGroup="abstract-byte-streaming-strategy"/>
+  <xs:element name="repeatable-in-memory-iterable" type="unchecked"
+      substitutionGroup="abstract-object-streaming-strategy"/>
+  <xs:element name="non-repeatable-iterable" type="unchecked" substitutionGroup="abstract-object-streaming-strategy"/>
+  <xs:element name="redelivery-policy" type="unchecked" substitutionGroup="abstract-redelivery-policy"/>
+  <xs:element name="expiration-policy" type="unchecked"/>
+  <xs:element name="pooling-profile" type="unchecked"/>
+  <xs:element name="scheduling-strategy" type="unchecked"/>
+
+  <xs:complexType name="unchecked">
+    <xs:sequence>
+      <xs:any namespace="##any" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:anyAttribute namespace="##any" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="abstractMessageSourceType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="abstractConnectionProviderType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
+  <xs:complexType name="abstractObjectStoreType">
+    <xs:anyAttribute namespace="##other" processContents="skip"/>
+  </xs:complexType>
 
   <xs:group name="messageProcessorOrMixedContentMessageProcessor">
     <xs:choice>
@@ -50,4 +90,12 @@
   <xs:simpleType name="substitutableName"><xs:restriction base="xs:string"/></xs:simpleType>
   <xs:simpleType name="substitutableBoolean"><xs:restriction base="xs:string"/></xs:simpleType>
   <xs:simpleType name="propertyPlaceholderType"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionMap"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionDateTime"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionDouble"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="expressionDecimal"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="substitutableLong"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="substitutableDecimal"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="operationTransactionalActionType"><xs:restriction base="xs:string"/></xs:simpleType>
+  <xs:simpleType name="transactionType"><xs:restriction base="xs:string"/></xs:simpleType>
 </xs:schema>

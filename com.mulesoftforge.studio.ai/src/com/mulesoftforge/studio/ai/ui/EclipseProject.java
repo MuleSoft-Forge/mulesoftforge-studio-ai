@@ -95,6 +95,22 @@ final class EclipseProject implements ProjectFiles {
     }
   }
 
+  @Override
+  public byte[] readBytes(String path) throws Exception {
+    IFile file = project.getFile(path);
+    if (!file.exists()) {
+      return null;
+    }
+    try (InputStream in = file.getContents(true)) {
+      return in.readAllBytes();
+    }
+  }
+
+  @Override
+  public Path location() {
+    return project.getLocation() == null ? null : project.getLocation().toFile().toPath();
+  }
+
   // Studio writes them under the workspace root, which is not always where the project lives.
   @Override
   public Path connectorModels() {

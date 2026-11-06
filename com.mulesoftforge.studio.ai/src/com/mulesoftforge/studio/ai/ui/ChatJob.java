@@ -19,6 +19,7 @@ import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
+import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.CallUsage;
@@ -49,6 +50,9 @@ public final class ChatJob extends Job {
 
     default void todos(List<com.mulesoftforge.studio.ai.edit.TodoItem> items) {}
 
+    // A model call's reasoning, once it ends.
+    default void thought(String text, long millis) {}
+
     void finished(ChatSession.Turn turn, Errors.UserError failure, boolean cancelled, long seconds,
         CostMeter answerCost, List<RawCapture.Call> rawCalls);
   }
@@ -74,6 +78,7 @@ public final class ChatJob extends Job {
   private final AtomicBoolean liveQueued = new AtomicBoolean();
   private final StringBuilder livePreview = new StringBuilder();
   private String liveState;
+  private boolean liveThinking;
   private long liveSince;
 
   ChatJob(ChatSession session, ChatMode mode, String prompt, List<Attachment> attachments, ProjectFiles project,
@@ -134,9 +139,12 @@ public final class ChatJob extends Job {
       MunitSchemas.searchIn(MunitSchemas.studioRepositories(
           ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath()));
       session.dataWeave(DataWeaveCli.lookup(AiSettings.dataWeaveCli(), false).cli());
+      session.hooks(hooks(progress));
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
       cancelled = true;
+    } catch (Hooks.Blocked e) {
+      failure = new Errors.UserError(e.getMessage(), null, null);
     } catch (Exception e) {
       if (sub.isCanceled() || Thread.currentThread().isInterrupted()) {
         cancelled = true;
@@ -171,6 +179,18 @@ public final class ChatJob extends Job {
     clearLive();
     Ui.async(display, null, () -> listener.finished(result, error, wasCancelled, seconds, answerCost, rawCalls));
     return wasCancelled ? Status.CANCEL_STATUS : Status.OK_STATUS;
+  }
+
+  // Read each turn, so edits to the file apply to the next message.
+  private static Hooks hooks(Progress progress) {
+    if (!AiSettings.hooksEnabled()) {
+      return Hooks.NONE;
+    }
+    Hooks hooks = Hooks.load(Hooks.userFile());
+    if (hooks.problem() != null) {
+      progress.step("Hooks: " + hooks.problem());
+    }
+    return hooks;
   }
 
   private List<AutoRouter.Option> models(Connection connection, RawCapture capture) {
@@ -225,6 +245,11 @@ public final class ChatJob extends Job {
           if (liveState == null) {
             liveSince = System.nanoTime();
           }
+          // The reasoning preview gives way to the answer; the reasoning itself goes to thought().
+          if (liveThinking && !ChatSession.WAITING_FOR_DATA.equals(what)) {
+            livePreview.setLength(0);
+            liveThinking = false;
+          }
           liveState = what;
         }
         queueLive();
@@ -232,13 +257,22 @@ public final class ChatJob extends Job {
 
       @Override
       public void partial(String text) {
+        preview(text);
+      }
+
+      @Override
+      public void thinking(String text) {
         synchronized (liveLock) {
-          livePreview.append(text);
-          if (livePreview.length() > PREVIEW_CHARS) {
-            livePreview.delete(0, livePreview.length() - PREVIEW_CHARS);
-          }
+          liveThinking = true;
         }
-        queueLive();
+        preview(text);
+      }
+
+      @Override
+      public void thought(String text, long millis) {
+        if (!isCancelled()) {
+          Ui.async(display, null, () -> listener.thought(text, millis));
+        }
       }
 
       @Override
@@ -248,9 +282,20 @@ public final class ChatJob extends Job {
     };
   }
 
+  private void preview(String text) {
+    synchronized (liveLock) {
+      livePreview.append(text);
+      if (livePreview.length() > PREVIEW_CHARS) {
+        livePreview.delete(0, livePreview.length() - PREVIEW_CHARS);
+      }
+    }
+    queueLive();
+  }
+
   private void clearLive() {
     synchronized (liveLock) {
       liveState = null;
+      liveThinking = false;
       livePreview.setLength(0);
     }
     queueLive();

@@ -102,7 +102,7 @@ public class CanvasMenu implements IExecutableExtensionFactory {
         open(page, window, selected, Composer.munitPrompt(flows));
       }
     };
-    munit.setImageDescriptor(AbstractUIPlugin.imageDescriptorFromPlugin(Activator.PLUGIN_ID, "icons/forge16.png"));
+    munit.setImageDescriptor(StudioImages.descriptor(StudioImages.MUNIT, "icons/forge16.png"));
     munit.setToolTipText("Ask MuleSoftForge Studio AI to draft MUnit tests for the selected flow or sub-flow");
     return munit;
   }

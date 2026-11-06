@@ -1,10 +1,18 @@
 package com.mulesoftforge.studio.ai.edit;
 
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +36,9 @@ public final class ProjectTools {
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final int LIST_LIMIT = 300;
   private static final int READ_LIMIT = 60_000;
+  private static final int SEARCH_FILES = 5000;
+  private static final int SEARCH_LIMIT = 100;
+  private static final int SEARCH_LINE_LIMIT = 300;
 
   public static final List<ToolSpecification> SPECIFICATIONS = List.of(
       ToolSpecification.builder()
@@ -44,6 +55,21 @@ public final class ProjectTools {
           .parameters(JsonObjectSchema.builder()
               .addStringProperty("path", "Project-relative file path, e.g. src/main/mule/api.xml")
               .required("path")
+              .build())
+          .build(),
+      ToolSpecification.builder()
+          .name("search_files")
+          .description("Search the text of project files with a regular expression (case-insensitive) and get"
+              + " each matching line with its file and line number. Use it to find where a flow, config,"
+              + " property, path or DataWeave function is defined or used, instead of reading files one by one."
+              + " Includes your pending proposals.")
+          .parameters(JsonObjectSchema.builder()
+              .addStringProperty("regex", "Java regular expression, e.g. flow-ref name=\"get-orders\" or"
+                  + " \\$\\{db\\.")
+              .addStringProperty("path", "Project-relative directory to search; \"\" for the whole project")
+              .addStringProperty("file_pattern", "Glob on the file name, e.g. *.xml or *.{yaml,properties};"
+                  + " a pattern with / matches the project-relative path")
+              .required("regex")
               .build())
           .build(),
       ToolSpecification.builder()
@@ -235,6 +261,8 @@ public final class ProjectTools {
     return switch (request.name()) {
       case "list_files" -> "Listing " + target;
       case "read_file" -> "Reading " + target;
+      case "search_files" -> "Searching " + (target.equals("project root") ? "the project" : target)
+          + searchTarget(request);
       case "check_project" -> "Checking the project";
       case "connector_reference" -> "Looking up " + (target.equals("project root") ? "the project's connectors" : target);
       case "edit_file" -> "Drafting an edit to " + target;
@@ -257,6 +285,7 @@ public final class ProjectTools {
       return switch (request.name()) {
         case "list_files" -> list(args);
         case "read_file" -> read(args);
+        case "search_files" -> search(args);
         case "check_project" -> checkProject();
         case "connector_reference" -> connectorReference(args);
         case "edit_file" -> edit(args);
@@ -303,6 +332,105 @@ public final class ProjectTools {
       return shown.substring(0, READ_LIMIT) + "\n(truncated at " + READ_LIMIT + " characters)";
     }
     return shown;
+  }
+
+  private static String searchTarget(ToolExecutionRequest request) {
+    try {
+      JsonNode regex = JSON.readTree(request.arguments()).get("regex");
+      return regex == null || regex.asText().isBlank() ? "" : " for " + regex.asText();
+    } catch (Exception e) {
+      return "";
+    }
+  }
+
+  // Like Roo-Code's search_files and gemini-cli's grep: matching lines grouped by file, capped. The masked text
+  // is searched, so a regex cannot probe for a secret value.
+  private String search(JsonNode args) throws Exception {
+    Pattern pattern;
+    try {
+      pattern = Pattern.compile(text(args, "regex", true), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    } catch (PatternSyntaxException e) {
+      return "ERROR: invalid regex: " + e.getDescription() + ". Escape special characters such as . $ { ( with \\.";
+    }
+    String raw = text(args, "path", false);
+    String directory = raw == null || raw.isBlank() || ".".equals(raw.trim()) ? "" : ProjectPaths.normalize(raw);
+    String glob = text(args, "file_pattern", false);
+    PathMatcher matcher = glob == null || glob.isBlank() ? null
+        : FileSystems.getDefault().getPathMatcher("glob:" + glob.trim());
+    boolean onPath = glob != null && glob.contains("/");
+    Set<String> paths = new TreeSet<>(files.list(directory, SEARCH_FILES));
+    for (FileChange change : changes.all()) {
+      if (change.after() != null && (directory.isEmpty() || change.path().startsWith(directory + "/"))) {
+        paths.add(change.path());
+      }
+    }
+    Map<String, List<String>> found = new LinkedHashMap<>();
+    int matches = 0;
+    boolean more = false;
+    int withheld = 0;
+    for (String path : paths) {
+      if (ProjectPaths.isSkipped(path)) {
+        continue;
+      }
+      Path name = Path.of(onPath ? path : path.substring(path.lastIndexOf('/') + 1));
+      if (matcher != null && !matcher.matches(name)) {
+        continue;
+      }
+      if (SecretMask.isBlocked(path)) {
+        withheld++;
+        continue;
+      }
+      String content;
+      try {
+        content = current(path);
+      } catch (Exception e) {
+        // Not text (a PDF or image in src/main/resources): there is nothing to match.
+        continue;
+      }
+      if (content == null || content.indexOf('\0') >= 0) {
+        continue;
+      }
+      String[] lines = secrets.mask(path, content).text().split("\\R", -1);
+      for (int i = 0; i < lines.length; i++) {
+        if (!pattern.matcher(lines[i]).find()) {
+          continue;
+        }
+        if (matches == SEARCH_LIMIT) {
+          more = true;
+          break;
+        }
+        String line = lines[i].stripTrailing();
+        if (line.length() > SEARCH_LINE_LIMIT) {
+          line = line.substring(0, SEARCH_LINE_LIMIT) + "…";
+        }
+        found.computeIfAbsent(path, p -> new ArrayList<>()).add(String.format("%4d | %s", i + 1, line));
+        matches++;
+      }
+      if (more) {
+        break;
+      }
+    }
+    StringBuilder out = new StringBuilder();
+    if (matches == 0) {
+      out.append("No matches in ").append(directory.isEmpty() ? "the project" : directory)
+          .append(matcher == null ? "" : " for files matching " + glob.trim()).append(".\n");
+    } else if (more) {
+      out.append("Showing the first ").append(SEARCH_LIMIT).append(" matches; narrow the regex, path or"
+          + " file_pattern for the rest.\n\n");
+    } else {
+      out.append("Found ").append(matches).append(matches == 1 ? " match" : " matches").append(" in ")
+          .append(found.size()).append(found.size() == 1 ? " file" : " files").append(".\n\n");
+    }
+    found.forEach((path, lines) -> {
+      out.append("# ").append(path).append('\n');
+      lines.forEach(line -> out.append(line).append('\n'));
+      out.append('\n');
+    });
+    if (withheld > 0) {
+      out.append("(").append(withheld).append(withheld == 1 ? " file" : " files")
+          .append(" not searched because they can hold secrets, such as .env.)\n");
+    }
+    return out.toString().stripTrailing();
   }
 
   // edits is a list of {old_text, new_text, expected_replacements}; a single old_text and new_text at the top

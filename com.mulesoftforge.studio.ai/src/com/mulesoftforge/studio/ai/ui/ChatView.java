@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.compare.CompareUI;
@@ -43,6 +44,7 @@ import org.eclipse.ui.actions.ActionFactory;
 import org.eclipse.ui.browser.IWorkbenchBrowserSupport;
 import org.eclipse.ui.dialogs.PreferencesUtil;
 import org.eclipse.ui.part.ViewPart;
+import org.eclipse.ui.progress.IWorkbenchSiteProgressService;
 import org.eclipse.ui.texteditor.ITextEditor;
 import org.osgi.service.event.EventHandler;
 
@@ -53,6 +55,7 @@ import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.FollowUpAsk;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.edit.TodoItem;
+import com.mulesoftforge.studio.ai.feedback.LinkedInPost;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
 import com.mulesoftforge.studio.ai.history.UsageLog;
@@ -69,8 +72,11 @@ import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
+import com.mulesoftforge.studio.ai.llm.Progress;
 import com.mulesoftforge.studio.ai.llm.RawCapture;
+import com.mulesoftforge.studio.ai.render.Alerts;
 import com.mulesoftforge.studio.ai.render.HtmlPage;
+import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -137,7 +143,10 @@ public class ChatView extends ViewPart {
   private String liveState;
   private String livePreview = "";
   private long liveSince;
+  // Where this turn's loading phrases start, so each turn does not open with the same one.
+  private int liveSeed;
   private final Runnable liveTicker = this::tickLive;
+  private Attention attention;
   // The mode of the turn that paused at the step limit, which Continue resumes in.
   private ChatMode continueMode;
   // The model of the last call, whose window the context size is shown against.
@@ -313,6 +322,7 @@ public class ChatView extends ViewPart {
     // CSS may style widgets after createPartControl; re-apply once the skin event has run.
     display.asyncExec(this::applyTheme);
 
+    attention = new Attention(this);
     refreshHeader();
     refreshCost();
     pruneOldChats();
@@ -414,6 +424,9 @@ public class ChatView extends ViewPart {
     }
     if (eventBroker != null && themeHandler != null) {
       eventBroker.unsubscribe(themeHandler);
+    }
+    if (attention != null) {
+      attention.dispose();
     }
     super.dispose();
   }
@@ -533,9 +546,12 @@ public class ChatView extends ViewPart {
         retryLast();
       } else if (EDIT_LAST.equals(id)) {
         editLast();
-      } else if (FEEDBACK_UP.equals(id) || FEEDBACK_DOWN.equals(id)) {
-        appendStep(FEEDBACK_UP.equals(id) ? "Thanks — opening feedback." : "Sorry it missed — opening feedback.");
-        new FeedbackDialog(getSite().getShell()).open();
+      } else if (FEEDBACK_UP.equals(id)) {
+        appendStep("Thanks! Opening a LinkedIn post you can edit, or close without posting.");
+        open(LinkedInPost.url());
+      } else if (FEEDBACK_DOWN.equals(id)) {
+        appendStep("Sorry it missed. Opening feedback.");
+        new FeedbackDialog(getSite().getShell(), "An answer missed").open();
       } else if (id.startsWith(ASK)) {
         answerAsk(id.substring(ASK.length()));
       } else if (id.startsWith(OFFER)) {
@@ -982,6 +998,12 @@ public class ChatView extends ViewPart {
             running = null;
             composer.setBusy(false);
             saveChat();
+            if (!cancelled && attention != null) {
+              boolean waits = result != null && (result.ask() != null
+                  || (mode == ChatMode.PLAN && project != null) || result.stoppedAtLimit());
+              attention.ended(result == null ? Alerts.Kind.ERROR : waits ? Alerts.Kind.QUESTION : Alerts.Kind.ANSWER,
+                  session.sessionId());
+            }
             flushQueue();
           }
 
@@ -991,9 +1013,26 @@ public class ChatView extends ViewPart {
               transcript.todos(items);
             }
           }
+
+          // Saved chats keep the summary line only, like the other steps.
+          @Override
+          public void thought(String text, long millis) {
+            if (!transcript.control().isDisposed()) {
+              String summary = Progress.thoughtFor(millis);
+              record("Step", summary);
+              transcript.thought(summary, text);
+            }
+          }
         });
     running = job;
-    job.schedule();
+    liveSeed = ThreadLocalRandom.current().nextInt(1000);
+    // Through the site's progress service, so the view's tab shows it is busy while the turn runs.
+    IWorkbenchSiteProgressService progress = getSite().getService(IWorkbenchSiteProgressService.class);
+    if (progress != null) {
+      progress.schedule(job);
+    } else {
+      job.schedule();
+    }
   }
 
   private void flushQueue() {
@@ -1252,7 +1291,10 @@ public class ChatView extends ViewPart {
       return;
     }
     long seconds = (System.nanoTime() - liveSince) / 1_000_000_000;
-    transcript.live(liveState == null ? null : liveState + " · " + seconds + " s", livePreview);
+    String phrase = livePreview == null || livePreview.isEmpty()
+        ? LoadingPhrases.at(AiSettings.loadingPhrases(), seconds, liveSeed) : null;
+    transcript.live(liveState == null ? null
+        : liveState + " · " + seconds + " s" + (phrase == null ? "" : " · " + phrase), livePreview);
   }
 
   private void tickLive() {

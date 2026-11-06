@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -120,6 +122,29 @@ final class HttpChecks {
         "flow orphan uses config missing, which is not in src/main/mule"));
     failed += check("APIkit URI parameters and content-type suffix", app.contains(
         "GET http://localhost:9091/v2/rest/orders/{orderId}"));
+
+    Files.createDirectories(root.resolve("src/main/resources/web"));
+    Files.writeString(root.resolve("src/main/resources/web/index.html"), """
+        <form action="/v2/orders" method="post"></form>
+        <script src="//cdn.example.com/x.js"></script>
+        <script>
+          fetch('/v2/rest/orders/42?expand=1');
+          fetch(`/v1/upload`, {method: 'POST'});
+          xhr.open("POST", "/v2/rest/anything");
+        </script>
+        """);
+    String pages = Endpoints.describe(Endpoints.find(DebugChecks.project(root, "app")));
+    failed += check("page calls: a form action matched to its listener", pages.contains(
+        "- /v2/orders  (src/main/resources/web/index.html line 1; http://localhost:9091/v2/orders, flow orders)"));
+    failed += check("page calls: fetch with a query matched through the wildcard listener", pages.contains(
+        "- /v2/rest/orders/42  (src/main/resources/web/index.html line 4; http://localhost:9091/v2/rest/orders/42,"
+            + " flow get:\\orders\\(orderId):application\\json:rest-config)"));
+    failed += check("page calls: a path no listener serves is flagged", pages.contains(
+        "- /v1/upload  (src/main/resources/web/index.html line 5; no listener path matches it)"));
+    failed += check("page calls: XMLHttpRequest.open under an APIkit router with no flow for it", pages.contains(
+        "- /v2/rest/anything  (src/main/resources/web/index.html line 6; http://localhost:9091/v2/rest/anything,"
+            + " flow main, whose APIkit router has no flow for this path: it will not reach a resource flow)"));
+    failed += check("page calls: protocol-relative URLs are not paths", !pages.contains("cdn.example.com"));
     return failed;
   }
 
@@ -228,6 +253,13 @@ final class HttpChecks {
     });
     server.createContext("/logo.png", exchange -> respond(exchange, 200, "image/png", new byte[] {(byte) 0x89, 'P',
         'N', 'G', 0, 0}));
+    List<String> uploadTypes = new CopyOnWriteArrayList<>();
+    List<byte[]> uploads = new CopyOnWriteArrayList<>();
+    server.createContext("/upload", exchange -> {
+      uploadTypes.add(exchange.getRequestHeaders().getFirst("Content-Type"));
+      uploads.add(exchange.getRequestBody().readAllBytes());
+      respond(exchange, 201, "application/json", "{\"id\":\"exec-1\"}".getBytes(StandardCharsets.UTF_8));
+    });
     server.start();
     try {
       String base = "http://localhost:" + server.getAddress().getPort();
@@ -262,6 +294,54 @@ final class HttpChecks {
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/api/employees",
           "file", ".env")));
       failed += check("files that hold secrets are never sent", out.contains("WITHHELD"));
+
+      // Every byte value, so a text round trip (bad UTF-8, NUL, CR LF) would show.
+      byte[] pdf = new byte[600];
+      byte[] magic = "%PDF-1.4\n".getBytes(StandardCharsets.US_ASCII);
+      System.arraycopy(magic, 0, pdf, 0, magic.length);
+      for (int i = magic.length; i < pdf.length; i++) {
+        pdf[i] = (byte) i;
+      }
+      Files.createDirectories(root.resolve("src/main/resources/examples"));
+      Files.write(root.resolve("src/main/resources/examples/order.pdf"), pdf);
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "file", "src/main/resources/examples/order.pdf")));
+      failed += check("a binary file sent as the body arrives byte for byte, typed from its name",
+          out.startsWith("STATUS 201") && uploads.size() == 1 && Arrays.equals(uploads.get(0), pdf)
+              && "application/pdf".equals(uploadTypes.get(0)));
+
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "headers", List.of(Map.of("name", "Content-Type", "value", "application/json")),
+          "parts", List.of(Map.of("name", "documentActionId", "value", "90c3e286"),
+              Map.of("name", "documentActionVersion", "value", "1.1.0"),
+              Map.of("name", "file", "file", "src/main/resources/examples/order.pdf")))));
+      String type = uploadTypes.size() == 2 ? uploadTypes.get(1) : "";
+      String boundary = type.startsWith("multipart/form-data; boundary=") ? type.substring(type.indexOf('=') + 1)
+          : null;
+      Map<String, byte[]> parts = boundary == null ? Map.of() : multipart(uploads.get(1), boundary);
+      failed += check("parts: sent as multipart/form-data with its boundary, replacing a Content-Type header",
+          out.startsWith("STATUS 201") && boundary != null && out.contains("NOT SENT (set by the client): Content-Type"));
+      failed += check("parts: text fields and the file arrive under their names, the PDF byte for byte",
+          parts.size() == 3 && "90c3e286".equals(text(parts.get("documentActionId")))
+              && "1.1.0".equals(text(parts.get("documentActionVersion")))
+              && Arrays.equals(parts.get("file"), pdf));
+      String headers = boundary == null ? "" : new String(uploads.get(1), StandardCharsets.ISO_8859_1);
+      failed += check("parts: the file part has its file name and a type guessed from it",
+          headers.contains("name=\"file\"; filename=\"order.pdf\"\r\nContent-Type: application/pdf\r\n"));
+
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "body", "{}", "parts", List.of(Map.of("name", "a", "value", "b")))));
+      failed += check("parts with body is refused", out.equals("ERROR: give parts, or body or file, not both."));
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "parts", List.of(Map.of("name", "secrets", "file", ".env")))));
+      failed += check("parts: files that hold secrets are never sent", out.contains("WITHHELD")
+          && uploads.size() == 2);
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "parts", List.of(Map.of("name", "file", "file", "missing.pdf")))));
+      failed += check("parts: a missing file is named", out.equals("ERROR: no file missing.pdf in the project."));
+      out = agent.execute(request(HttpTools.CALL, Map.of("method", "POST", "url", base + "/upload",
+          "parts", List.of(Map.of("name", "a", "value", "b", "file", "missing.pdf")))));
+      failed += check("parts: a part with both value and file is refused", out.contains("not both or neither"));
 
       String placeholder = secrets.mask(null, "password=Sup3r-Secret-42").text().replace("password=", "");
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/echo",
@@ -862,6 +942,46 @@ final class HttpChecks {
         portal.startsWith("WEB PAGE https://dev-portal.mulesoft.com/llms.txt") && portal.contains("Anypoint")
             && portal.length() > 1_000);
     return failed;
+  }
+
+  private static String text(byte[] bytes) {
+    return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
+  }
+
+  // A multipart/form-data body split into its parts by name, each part's bytes exactly as sent.
+  private static Map<String, byte[]> multipart(byte[] body, String boundary) {
+    Map<String, byte[]> parts = new LinkedHashMap<>();
+    byte[] delimiter = ("\r\n--" + boundary).getBytes(StandardCharsets.ISO_8859_1);
+    byte[] blank = "\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1);
+    String opening = "--" + boundary + "\r\n";
+    if (!new String(body, 0, Math.min(body.length, opening.length()), StandardCharsets.ISO_8859_1).equals(opening)) {
+      return parts;
+    }
+    int at = opening.length();
+    while (true) {
+      int headEnd = indexOf(body, blank, at);
+      int end = headEnd < 0 ? -1 : indexOf(body, delimiter, headEnd + blank.length);
+      if (end < 0) {
+        return parts;
+      }
+      String head = new String(body, at, headEnd - at, StandardCharsets.ISO_8859_1);
+      int name = head.indexOf("name=\"") + 6;
+      parts.put(head.substring(name, head.indexOf('"', name)), Arrays.copyOfRange(body, headEnd + blank.length, end));
+      at = end + delimiter.length;
+      if (at + 2 <= body.length && body[at] == '-' && body[at + 1] == '-') {
+        return parts;
+      }
+      at += 2;
+    }
+  }
+
+  private static int indexOf(byte[] data, byte[] target, int from) {
+    for (int i = from; i <= data.length - target.length; i++) {
+      if (Arrays.equals(data, i, i + target.length, target, 0, target.length)) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   static int check(String name, boolean ok) {

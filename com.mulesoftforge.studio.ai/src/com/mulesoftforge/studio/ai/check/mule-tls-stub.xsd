@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Stand-in for Mule's TLS schema, which connector schemas import: tls:context is accepted unchecked. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns="http://www.mulesoft.org/schema/mule/tls"
+    targetNamespace="http://www.mulesoft.org/schema/mule/tls"
+    elementFormDefault="qualified" attributeFormDefault="unqualified">
+
+  <xs:element name="context">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="##any" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:anyAttribute namespace="##any" processContents="skip"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

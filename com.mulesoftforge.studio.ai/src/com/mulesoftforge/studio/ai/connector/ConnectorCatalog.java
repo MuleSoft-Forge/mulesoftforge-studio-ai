@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import java.util.zip.ZipFile;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -90,6 +91,64 @@ public final class ConnectorCatalog {
       return cached.model();
     } catch (Exception e) {
       return null;
+    }
+  }
+
+  // The XML schema Studio writes next to the model, or null. Also null for modules that ship a hand-written
+  // schema in their jar (Spring, APIkit): the runtime uses that one, and Studio's generated copy differs from it.
+  public Path schema(Dependency dependency) {
+    Path model = locate(dependency);
+    if (model == null || shipsSchema(dependency)) {
+      return null;
+    }
+    Path schema = model.resolveSibling(model.getFileName().toString().replaceFirst("\\.json$", ".xsd"));
+    return Files.isRegularFile(schema) ? schema : null;
+  }
+
+  private static boolean shipsSchema(Dependency dependency) {
+    Path jar = Path.of(System.getProperty("user.home"), ".m2", "repository")
+        .resolve(dependency.groupId().replace('.', '/')).resolve(dependency.artifactId())
+        .resolve(dependency.version())
+        .resolve(dependency.artifactId() + "-" + dependency.version() + "-mule-plugin.jar");
+    if (!Files.isRegularFile(jar)) {
+      return false;
+    }
+    try (ZipFile zip = new ZipFile(jar.toFile())) {
+      return zip.stream().anyMatch(entry -> entry.getName().startsWith("META-INF/")
+          && entry.getName().endsWith(".xsd") && entry.getName().indexOf('/', "META-INF/".length()) < 0);
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  // The newest schema of org.mule.connectors:mule-<name>-connector in any runtime folder, or null. Connector
+  // schemas import each other's (the HTTP schema imports the sockets one) whether or not the pom lists them.
+  public Path connectorSchema(String name) {
+    String relative = "org/mule/connectors/mule-" + name + "-connector";
+    try (Stream<Path> runtimes = Files.list(root)) {
+      return runtimes.map(runtime -> runtime.resolve(relative))
+          .filter(Files::isDirectory)
+          .flatMap(ConnectorCatalog::schemasIn)
+          .max((a, b) -> Long.compare(modified(a), modified(b)))
+          .orElse(null);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  private static Stream<Path> schemasIn(Path folder) {
+    try (Stream<Path> files = Files.walk(folder, 2)) {
+      return files.filter(p -> p.getFileName().toString().endsWith("-mule-plugin.xsd")).toList().stream();
+    } catch (Exception e) {
+      return Stream.empty();
+    }
+  }
+
+  private static long modified(Path file) {
+    try {
+      return Files.getLastModifiedTime(file).toMillis();
+    } catch (Exception e) {
+      return 0;
     }
   }
 

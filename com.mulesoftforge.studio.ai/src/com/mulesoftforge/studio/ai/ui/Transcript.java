@@ -38,6 +38,12 @@ interface Transcript {
 
   void step(String text);
 
+  // A model call's reasoning among the steps: the summary line ("Thought for 2.3 s"), with the reasoning text
+  // folded under it when there is any.
+  default void thought(String summary, String text) {
+    step(summary);
+  }
+
   // One line under the steps, replaced on each call, for the model call in progress, with the answer text so far
   // under it. A null status removes it; so does the next step or message.
   void live(String status, String preview);

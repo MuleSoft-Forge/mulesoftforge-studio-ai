@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
+import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.settings.Provider;
 
 import dev.langchain4j.exception.HttpException;
@@ -201,6 +202,21 @@ public final class AutoRouter {
       @Override
       public void partial(String text) {
         progress.partial(text);
+      }
+
+      @Override
+      public void thinking(String text) {
+        progress.thinking(text);
+      }
+
+      @Override
+      public void thought(String text, long millis) {
+        progress.thought(text, millis);
+      }
+
+      @Override
+      public void todos(List<TodoItem> items) {
+        progress.todos(items);
       }
 
       @Override

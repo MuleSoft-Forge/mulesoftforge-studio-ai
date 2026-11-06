@@ -509,6 +509,12 @@ final class DebugChecks {
       }
 
       @Override
+      public byte[] readBytes(String path) throws Exception {
+        Path file = root.resolve(path).normalize();
+        return file.startsWith(root) && Files.isRegularFile(file) ? Files.readAllBytes(file) : null;
+      }
+
+      @Override
       public List<String> list(String directory, int limit) throws Exception {
         Path start = root.resolve(directory).normalize();
         if (!Files.isDirectory(start)) {

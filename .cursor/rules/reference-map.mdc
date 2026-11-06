@@ -1,0 +1,29 @@
+---
+description: Where each chat-interface topic lives in the cloned reference projects
+globs: com.mulesoftforge.studio.ai/src/**,harness/**
+alwaysApply: false
+---
+
+# Reference map
+
+Root: `/Users/gjeffcock/Documents/github/mulesoftforge-master/references/`. Paths below are relative to it. Run `git pull` in a repo if it looks stale; paths can move, so search with `rg` when one is missing.
+
+| Topic | Look at first | Then |
+|---|---|---|
+| Claude prompt caching (`cache_control`) | `Roo-Code/src/api/transform/caching/anthropic.ts`, `Roo-Code/src/api/transform/cache-strategy/` | `continue/packages/openai-adapters/src/apis/AnthropicCachingStrategies.ts`, `aider/aider/coders/chat_chunks.py` |
+| Caching through OpenRouter or a LiteLLM gateway | `continue/packages/openai-adapters/src/apis/OpenRouterCaching.ts`, `Roo-Code/src/api/providers/lite-llm.ts` | `Roo-Code/src/api/providers/openrouter.ts` |
+| Caching on Bedrock or native Anthropic | `continue/packages/openai-adapters/src/apis/Bedrock.ts`, `.../Anthropic.ts` | `Roo-Code/src/api/providers/bedrock.ts`, `.../anthropic.ts` |
+| Streaming: text, tool calls, usage | `Roo-Code/src/api/transform/stream.ts`, `Roo-Code/src/api/providers/base-openai-compatible-provider.ts` | `continue/core/llm/index.ts`, `gemini-cli/packages/core/src/core/` |
+| Output limits, thinking budgets | `Roo-Code/src/api/transform/model-params.ts`, `Roo-Code/src/api/transform/reasoning.ts` | `aider/aider/resources/model-settings.yml` |
+| Reply cut off at the output limit | `aider/aider/coders/base_coder.py` (`FinishReasonLength`, continue with prefill) | |
+| Edit formats and how well models follow them | `aider/aider/coders/` (`editblock_*`, `udiff_*`, `wholefile_*`, `search_replace.py`) | `Roo-Code/src/core/tools/` (`EditFileTool.ts`, `ApplyDiffTool.ts`, `ToolRepetitionDetector.ts`), `gemini-cli/packages/core/src/tools/edit.ts` |
+| Modes and which tools each mode may use | `Roo-Code/packages/types/src/mode.ts`, `.../tool.ts` | `aider/aider/coders/ask_coder.py`, `architect_coder.py` |
+| Agent loop, tool scheduling, approvals | `gemini-cli/packages/core/src/scheduler/`, `.../tools/` | `codex/codex-rs/`, `vscode-copilot-chat/src/extension/tools/` |
+| Prompt building and context | `vscode-copilot-chat/src/extension/prompts/` | `gemini-cli/packages/core/src/prompts/`, `aider/aider/coders/base_prompts.py` |
+| Auto model choice, fallback, models for side tasks | `gemini-cli/packages/core/src/routing/` (`modelRouterService.ts`, `strategies/classifierStrategy.ts`), `vscode-copilot-chat/src/platform/endpoint/node/automodeService.ts` | `gemini-cli/packages/core/src/fallback/handler.ts`, `aider/aider/models.py` (`weak_model`), `Roo-Code/src/core/config/ProviderSettingsManager.ts` (model per mode) |
+| History, compaction, tool-output budget | `gemini-cli/packages/core/src/context/` (`chatCompressionService.ts`, `toolOutputMaskingService.ts`), `codex/codex-rs/core/src/compact.rs` | `Roo-Code/src/core/condense/`, `cline/sdk/packages/core/src/extensions/context/` |
+| Chat UI in an IDE | `cline/apps/vscode/webview-ui/`, `continue/gui/` | `vscode-copilot-chat/src/extension/conversation/` |
+
+Cline keeps its provider and caching code under `cline/sdk/packages/llms/src/providers/` (for example `routing/anthropic-compatible.ts`, `routing/bedrock-cache-point.ts`).
+
+Roo-Code, Cline and vscode-copilot-chat use Git LFS for large assets and `git-lfs` is not installed. Clone or pull them with `-c filter.lfs.smudge= -c filter.lfs.process= -c filter.lfs.required=false`, or the checkout stops halfway and files go missing.

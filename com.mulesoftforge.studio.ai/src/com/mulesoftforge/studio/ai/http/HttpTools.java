@@ -1,5 +1,6 @@
 package com.mulesoftforge.studio.ai.http;
 
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.InputStream;
 import java.net.ConnectException;
@@ -20,6 +21,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -87,6 +89,14 @@ public final class HttpTools {
   private static final int MAX_BODY = 8_000;
   private static final int MAX_PAGE = 20_000;
   private static final int MAX_DOWNLOAD = 2_000_000;
+  private static final int MAX_UPLOAD = 20_000_000;
+  private static final Map<String, String> BINARY_TYPES = Map.ofEntries(Map.entry("pdf", "application/pdf"),
+      Map.entry("png", "image/png"), Map.entry("jpg", "image/jpeg"), Map.entry("jpeg", "image/jpeg"),
+      Map.entry("gif", "image/gif"), Map.entry("tif", "image/tiff"), Map.entry("tiff", "image/tiff"),
+      Map.entry("webp", "image/webp"), Map.entry("zip", "application/zip"), Map.entry("gz", "application/gzip"),
+      Map.entry("jar", "application/java-archive"),
+      Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+      Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
   private static final int MAX_REDIRECTS = 5;
   private static final int MAX_DOCS_URL = 500;
   private static final int MAX_MARKDOWN_LINKS = 40;
@@ -229,8 +239,9 @@ public final class HttpTools {
       out.add(ToolSpecification.builder()
           .name(LIST)
           .description("List the HTTP endpoints of the Mule app in this project, with the URL each answers on"
-              + " when the app runs in Studio: every HTTP listener's path and every APIkit resource. Use it before"
-              + " call_endpoint so the port and paths are the real ones.")
+              + " when the app runs in Studio: every HTTP listener's path, every APIkit resource, and the paths"
+              + " the app's own pages and scripts call. Use it before call_endpoint so the port and paths are the"
+              + " real ones.")
           .parameters(JsonObjectSchema.builder().build())
           .build());
     }
@@ -257,7 +268,22 @@ public final class HttpTools {
                     .build())
                 .build())
             .addStringProperty("body", "The request body")
-            .addStringProperty("file", "Project-relative file to send as the body, e.g. src/test/resources/new.json")
+            .addStringProperty("file", "Project-relative file to send as the body, byte for byte, e.g."
+                + " src/test/resources/new.json")
+            .addProperty("parts", JsonArraySchema.builder()
+                .description("Send a multipart/form-data body instead of body or file, as an HTML form or curl -F"
+                    + " does, e.g. to upload a PDF with its form fields. Each part has a name and either a text"
+                    + " value or a project-relative file, sent byte for byte. The Content-Type header is set for you.")
+                .items(JsonObjectSchema.builder()
+                    .addStringProperty("name", "The form field name, e.g. file or documentId")
+                    .addStringProperty("value", "A text value for the field")
+                    .addStringProperty("file", "Project-relative file to upload, e.g."
+                        + " src/main/resources/examples/order.pdf")
+                    .addStringProperty("content_type", "Optional: the file's type, e.g. application/pdf. Guessed from"
+                        + " the file name when left out")
+                    .required("name")
+                    .build())
+                .build())
             .addStringProperty("expected_status", "Optional: the status the call should return, e.g. 201")
             .addStringProperty("expected_body", "Optional: the body it should return, compared with the response")
             .addBooleanProperty("wait", "Optional, default true. false sends the request and returns at once without"
@@ -356,21 +382,61 @@ public final class HttpTools {
     }
     uri = local(uri);
 
-    String body = null;
-    if (args.hasNonNull("file")) {
-      if (files == null) {
-        return "ERROR: no project is open, so give the body as body.";
+    byte[] body = null;
+    String bodyType = null;
+    boolean multipart = args.path("parts").isArray() && !args.path("parts").isEmpty();
+    if (multipart && (args.hasNonNull("file") || args.hasNonNull("body"))) {
+      return "ERROR: give parts, or body or file, not both.";
+    }
+    if (multipart) {
+      String boundary = "----MuleSoftForgeStudioAI" + Long.toHexString(new SecureRandom().nextLong());
+      ByteArrayOutputStream form = new ByteArrayOutputStream();
+      for (JsonNode part : args.path("parts")) {
+        String name = part.path("name").asText("").strip();
+        if (name.isEmpty()) {
+          return "ERROR: every part needs a name.";
+        }
+        boolean hasFile = part.hasNonNull("file");
+        if (hasFile == part.hasNonNull("value")) {
+          return "ERROR: part " + name + " needs a value or a file, not both or neither.";
+        }
+        StringBuilder head = new StringBuilder("--").append(boundary)
+            .append("\r\nContent-Disposition: form-data; name=\"").append(quoted(name)).append('"');
+        byte[] data;
+        if (hasFile) {
+          Upload upload = upload(part.get("file").asText());
+          if (upload.error() != null) {
+            return upload.error();
+          }
+          data = upload.bytes();
+          String type = part.path("content_type").asText("").strip();
+          head.append("; filename=\"").append(quoted(upload.path().substring(upload.path().lastIndexOf('/') + 1)))
+              .append("\"\r\nContent-Type: ").append(type.isEmpty() ? fileType(upload.path(), data) : type);
+        } else {
+          data = secrets.unmask(part.get("value").asText()).getBytes(StandardCharsets.UTF_8);
+        }
+        form.write(head.append("\r\n\r\n").toString().getBytes(StandardCharsets.UTF_8));
+        form.write(data);
+        form.write("\r\n".getBytes(StandardCharsets.UTF_8));
+        if (form.size() > MAX_UPLOAD) {
+          return "ERROR: the parts come to more than " + MAX_UPLOAD / 1_000_000 + " MB, which call_endpoint does not"
+              + " send.";
+        }
       }
-      String path = ProjectPaths.normalize(args.get("file").asText());
-      if (SecretMask.isBlocked(path)) {
-        return "ERROR: " + SecretMask.withheld(path);
+      form.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+      body = form.toByteArray();
+      bodyType = "multipart/form-data; boundary=" + boundary;
+    } else if (args.hasNonNull("file")) {
+      Upload upload = upload(args.get("file").asText());
+      if (upload.error() != null) {
+        return upload.error();
       }
-      body = files.read(path);
-      if (body == null) {
-        return "ERROR: no file " + path + " in the project.";
-      }
+      body = upload.bytes();
+      bodyType = fileType(upload.path(), body);
     } else if (args.hasNonNull("body")) {
-      body = secrets.unmask(args.get("body").asText());
+      String text = secrets.unmask(args.get("body").asText());
+      body = text.getBytes(StandardCharsets.UTF_8);
+      bodyType = text.isEmpty() ? null : DataWeaveTools.guess(text);
     }
 
     boolean wait = args.path("wait").asBoolean(true);
@@ -384,21 +450,23 @@ public final class HttpTools {
       if (name.isEmpty()) {
         continue;
       }
-      if (RESTRICTED_HEADERS.contains(name.toLowerCase(Locale.ROOT))) {
+      // A multipart body only parses with the boundary it was written with.
+      if (RESTRICTED_HEADERS.contains(name.toLowerCase(Locale.ROOT))
+          || multipart && name.equalsIgnoreCase("Content-Type")) {
         skipped.add(name);
         continue;
       }
       contentType |= name.equalsIgnoreCase("Content-Type");
       builder.header(name, secrets.unmask(header.path("value").asText("")));
     }
-    if (body != null && !body.isEmpty() && !contentType) {
-      builder.header("Content-Type", DataWeaveTools.guess(body));
+    if (bodyType != null && !contentType) {
+      builder.header("Content-Type", bodyType);
     }
     builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
-        : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        : HttpRequest.BodyPublishers.ofByteArray(body));
     HttpRequest request = builder.build();
     URI target = uri;
-    String sentBody = body;
+    byte[] sentBody = body;
 
     AppConsole.Text before = consoleNow();
     Exchange exchange = new Exchange(limit);
@@ -450,6 +518,48 @@ public final class HttpTools {
     }
   }
 
+  // A project file read for sending, or why it cannot be sent.
+  private record Upload(String path, byte[] bytes, String error) {}
+
+  private Upload upload(String given) throws Exception {
+    if (files == null) {
+      return new Upload(null, null, "ERROR: no project is open, so give the body as body.");
+    }
+    String path = ProjectPaths.normalize(given);
+    if (SecretMask.isBlocked(path)) {
+      return new Upload(path, null, "ERROR: " + SecretMask.withheld(path));
+    }
+    byte[] bytes = files.readBytes(path);
+    if (bytes == null) {
+      return new Upload(path, null, "ERROR: no file " + path + " in the project.");
+    }
+    if (bytes.length > MAX_UPLOAD) {
+      return new Upload(path, null, "ERROR: " + path + " is more than " + MAX_UPLOAD / 1_000_000 + " MB, which"
+          + " call_endpoint does not send.");
+    }
+    return new Upload(path, bytes, null);
+  }
+
+  // Binary types by extension; anything else that reads as text is typed from its content, as body is.
+  static String fileType(String path, byte[] bytes) {
+    String name = path.toLowerCase(Locale.ROOT);
+    String known = BINARY_TYPES.get(name.substring(name.lastIndexOf('.') + 1));
+    if (known != null) {
+      return known;
+    }
+    for (int i = 0; i < Math.min(bytes.length, 1024); i++) {
+      if (bytes[i] == 0) {
+        return "application/octet-stream";
+      }
+    }
+    return bytes.length == 0 ? "text/plain" : DataWeaveTools.guess(new String(bytes, StandardCharsets.UTF_8));
+  }
+
+  // Content-Disposition names are quoted strings; a quote or line break would end the header early.
+  private static String quoted(String value) {
+    return value.replace("\"", "%22").replace("\r", "").replace("\n", "");
+  }
+
   private static String noResponse(Duration waited) {
     return "ERROR: no response within " + waited.toSeconds() + " s. If Studio's debugger is stopped at a"
         + " breakpoint, the request is waiting there: look at the event, then resume. Otherwise the flow is slow"
@@ -457,7 +567,7 @@ public final class HttpTools {
   }
 
   // Runs on a worker thread and never throws: failures come back as text.
-  private String exchange(Exchange exchange, HttpRequest request, URI uri, String method, String body,
+  private String exchange(Exchange exchange, HttpRequest request, URI uri, String method, byte[] body,
       String shownUrl, List<String> skipped, JsonNode args, AppConsole.Text before) {
     try {
       return format(exchange, request, uri, method, body, shownUrl, skipped, args, before);
@@ -489,7 +599,7 @@ public final class HttpTools {
     return false;
   }
 
-  private String format(Exchange exchange, HttpRequest request, URI uri, String method, String body,
+  private String format(Exchange exchange, HttpRequest request, URI uri, String method, byte[] body,
       String shownUrl, List<String> skipped, JsonNode args, AppConsole.Text before) throws Exception {
     long started = System.nanoTime();
     Received received;
@@ -865,7 +975,7 @@ public final class HttpTools {
 
   // Follows redirects only to addresses the same rule allows; 303, and 301 or 302 for a POST, continue as GET.
   // exchange is null for requests that are never dropped while they run.
-  private Received send(HttpClient client, HttpRequest first, URI uri, String method, String body, Rule rule,
+  private Received send(HttpClient client, HttpRequest first, URI uri, String method, byte[] body, Rule rule,
       Duration limit, Exchange exchange) throws Exception {
     HttpRequest request = first;
     List<URI> redirects = new ArrayList<>();
@@ -917,7 +1027,7 @@ public final class HttpTools {
         }
       });
       builder.method(keep ? method : "GET", keep && body != null
-          ? HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8) : HttpRequest.BodyPublishers.noBody());
+          ? HttpRequest.BodyPublishers.ofByteArray(body) : HttpRequest.BodyPublishers.noBody());
       request = builder.build();
       redirects.add(next);
       uri = next;

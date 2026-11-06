@@ -1,0 +1,21 @@
+---
+description: Live model tests of the plugin run on the custom OpenAI-compatible provider from .env
+alwaysApply: true
+---
+
+# Live tests run on `custom`
+
+Every live chat, benchmark or provider comparison for this plugin uses the **custom** provider ("Other OpenAI-compatible" in Settings). The harness reads it from `.env` in the plugin root: `CUSTOM_BASE_URL`, `CUSTOM_API_KEY` and `CUSTOM_MODEL`.
+
+```bash
+cd harness
+./run.sh chat --provider custom --model claude-sonnet-5-5 --mode ask --project <dir> "prompt"
+./run.sh chat --provider custom --model claude-opus-5-5   --mode ask --project <dir> "prompt"
+```
+
+- The two-model check that `learn-from-references.mdc` asks for is **claude-sonnet-5-5 and claude-opus-5-5 on `custom`**. Report tokens, cache reads and cost for both.
+- Do not run live tests on OpenRouter, OpenAI or any other paid provider unless the user asks for that provider by name.
+- If `CUSTOM_API_KEY` or `CUSTOM_BASE_URL` is empty, stop and ask the user to fill `.env`. Do not fall back to another provider.
+- Never print, log or paste `CUSTOM_API_KEY`, or any other `.env` value. Name the key instead. `.env` is gitignored; keep it that way.
+- Point live runs at a copy of a Studio project under `/tmp` when the prompt could lead to edits. Never use `--apply` on a real project unless the user asks.
+- Offline checks (`harness/run-checks.sh`) still come first. A live run does not replace them.

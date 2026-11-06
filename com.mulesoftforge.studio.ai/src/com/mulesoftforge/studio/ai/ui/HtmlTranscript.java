@@ -75,7 +75,7 @@ final class HtmlTranscript implements Transcript {
         }
       }
     });
-    browser.setText(HtmlPage.page(theme(parent)));
+    browser.setText(HtmlPage.page(theme(parent), StudioImages.starterIcons()));
   }
 
   private static HtmlPage.Theme theme(Composite parent) {
@@ -122,6 +122,11 @@ final class HtmlTranscript implements Transcript {
   @Override
   public void step(String text) {
     run("msfStep(" + js(text) + ")");
+  }
+
+  @Override
+  public void thought(String summary, String text) {
+    run("msfThought(" + js(summary) + "," + js(text == null ? "" : text) + ")");
   }
 
   @Override

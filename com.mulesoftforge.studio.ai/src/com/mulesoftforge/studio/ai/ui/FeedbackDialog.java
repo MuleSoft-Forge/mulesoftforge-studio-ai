@@ -70,8 +70,16 @@ final class FeedbackDialog extends TitleAreaDialog {
   private boolean sending;
   private GitHub.Issue sentIssue;
 
+  // Opened from 👎 under an answer: Feedback picked, with this title to start from.
+  private final String feedbackTitle;
+
   FeedbackDialog(Shell shell) {
+    this(shell, null);
+  }
+
+  FeedbackDialog(Shell shell, String feedbackTitle) {
     super(shell);
+    this.feedbackTitle = feedbackTitle;
     setShellStyle(getShellStyle() | SWT.RESIZE);
     setHelpAvailable(false);
   }
@@ -148,6 +156,11 @@ final class FeedbackDialog extends TitleAreaDialog {
     }
 
     setTitle("Report a bug or send feedback");
+    if (feedbackTitle != null) {
+      bug.setSelection(false);
+      feedback.setSelection(true);
+      title.setText(feedbackTitle);
+    }
     kindChanged();
     return area;
   }
