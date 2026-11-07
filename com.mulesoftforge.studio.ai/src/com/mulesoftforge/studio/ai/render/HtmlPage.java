@@ -7,6 +7,7 @@ import com.mulesoftforge.studio.ai.llm.Updates;
 // HtmlRenderer has already escaped; clicks go back to Studio through the msfClick browser function.
 public final class HtmlPage {
   public static final String OFFER_BUTTON = "Draft selected changes for review";
+  public static final String DONT_SUGGEST = "Don't suggest";
 
   public record Theme(Palette palette, Palette.Rgb background, Palette.Rgb foreground, String font, int fontPt,
       String mono, int monoPt) {}
@@ -183,6 +184,12 @@ public final class HtmlPage {
         .offer.suggested:not([open]) .title { margin-bottom: 0; }
         .offer label { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; padding: 3px 6px;
           border-radius: 6px; cursor: pointer; }
+        .offer label .text { flex: 1 1 auto; min-width: 0; }
+        .offer .ignore { flex: none; color: var(--muted); font-size: 0.85em; cursor: pointer;
+          text-decoration: none; white-space: nowrap; margin-top: 0.15em; }
+        .offer .ignore:hover { color: var(--link); text-decoration: underline; }
+        .offer label.ignored { opacity: 0.45; }
+        .offer label.ignored .ignore { pointer-events: none; }
         .offer label:hover { background: var(--pill); }
         .offer input { accent-color: var(--focus); margin-top: 0.3em; flex: none; }
         .offer .button { margin-top: 8px; color: #fff; border: 0; background: linear-gradient(135deg, #00a3e0, #6d5dfc); }
@@ -430,6 +437,7 @@ public final class HtmlPage {
           closeSteps();
           var div = document.createElement(suggested ? 'details' : 'div');
           div.className = 'offer' + (suggested ? ' suggested' : '');
+          div.setAttribute('data-offer-id', id);
           var title = document.createElement(suggested ? 'summary' : 'div');
           title.className = 'title';
           title.textContent = suggested
@@ -438,12 +446,22 @@ public final class HtmlPage {
           div.appendChild(title);
           items.forEach(function (text, i) {
             var row = document.createElement('label');
+            row.setAttribute('data-offer-row', String(i));
             var box = document.createElement('input');
             box.type = 'checkbox';
             box.checked = !suggested;
             box.value = String(i);
             row.appendChild(box);
-            row.appendChild(document.createTextNode(' ' + text));
+            var body = document.createElement('span');
+            body.className = 'text';
+            body.textContent = text;
+            row.appendChild(body);
+            var ignore = document.createElement('a');
+            ignore.className = 'ignore';
+            ignore.href = '#';
+            ignore.setAttribute('data-ignore', id + ':' + i);
+            ignore.textContent = "Don't suggest";
+            row.appendChild(ignore);
             div.appendChild(row);
           });
           var a = document.createElement('a');
@@ -453,6 +471,12 @@ public final class HtmlPage {
           div.appendChild(a);
           log.appendChild(div);
           keepAtEnd();
+        }
+        function msfIgnoreOffer(id, index) {
+          var root = document.querySelector('[data-offer-id=\"' + id + '\"]');
+          if (!root) { return; }
+          var row = root.querySelector('[data-offer-row=\"' + index + '\"]');
+          if (row) { row.classList.add('ignored'); }
         }
         function msfAsk(id, question, choices) {
           closeSteps();
@@ -603,6 +627,13 @@ public final class HtmlPage {
             } else {
               msfClick('cmd:ask:' + value);
             }
+            return;
+          }
+          var ignore = e.target.closest('[data-ignore]');
+          if (ignore) {
+            e.preventDefault();
+            e.stopPropagation();
+            msfClick('cmd:ignore:' + ignore.getAttribute('data-ignore'));
             return;
           }
           var offer = e.target.closest('[data-offer]');

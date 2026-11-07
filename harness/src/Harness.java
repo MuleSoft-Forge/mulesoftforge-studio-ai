@@ -59,6 +59,7 @@ import com.mulesoftforge.studio.ai.llm.ContextWindow;
 import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.Errors;
+import com.mulesoftforge.studio.ai.llm.Memory;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Progress;
@@ -2477,6 +2478,7 @@ public class Harness {
   // and capped, and announced once per chat.
   private static void checkInstructions() throws Exception {
     int failed = 0;
+    failed += checkMemory();
     for (ChatMode mode : ChatMode.values()) {
       String system = Prompts.system(mode, "demo", "", "");
       failed += check(mode.label + " prompt loads from the bundle", system.contains("You are MuleSoftForge Studio AI")
@@ -2526,6 +2528,11 @@ public class Harness {
     failed += check("an error-handling word does not hide a real report",
         ChatMode.reportsProblem("the error handler returns 500"));
 
+    Path memoryDir = Files.createTempDirectory("studio-ai-memory");
+    Path memoryFile = memoryDir.resolve(Memory.FILE_NAME);
+    Files.writeString(memoryFile, Memory.TEMPLATE + "- Do not suggest moving configuration properties to secure"
+        + " properties\nAPI_KEY=MemSecretValue99\n");
+    Memory.overrideUserFile(memoryFile);
     List<String> bodies = new ArrayList<>();
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/v1/chat/completions", exchange -> {
@@ -2566,16 +2573,22 @@ public class Harness {
           && body.contains("Log with the JSON Logger connector."));
       failed += check("your instructions sent", body.contains("THE USER'S INSTRUCTIONS")
           && body.contains("Use British English."));
+      failed += check("saved preferences sent", body.contains("SAVED PREFERENCES (memory.md")
+          && body.contains("Do not suggest moving configuration properties to secure properties"));
+      failed += check("do-not-suggest rule is in the built-in rules",
+          body.contains("unless SAVED PREFERENCES or PROJECT INSTRUCTIONS say not to suggest"));
       failed += check("instructions come after the rules", body.indexOf("copy the placeholder exactly")
           < body.indexOf("PROJECT INSTRUCTIONS") && body.indexOf("PROJECT INSTRUCTIONS")
-          < body.indexOf("THE USER'S INSTRUCTIONS"));
+          < body.indexOf("THE USER'S INSTRUCTIONS") && body.indexOf("THE USER'S INSTRUCTIONS")
+          < body.indexOf("SAVED PREFERENCES (memory.md"));
       failed += check("secret in AGENTS.md masked", !body.contains("Sup3rS3cretValue99"));
       failed += check("secret in your instructions masked", !body.contains("abcdefghijklmnop1234567890XYZ"));
+      failed += check("secret in memory.md masked", !body.contains("MemSecretValue99"));
       failed += check("instruction secrets not counted as message secrets", turn.masked() == 0);
       String following = steps.stream().filter(s -> s.startsWith("Following ")).findFirst().orElse("");
       failed += check("first message says what it follows: " + following,
           following.startsWith("Following AGENTS.md (") && following.contains("your instructions (")
-              && following.contains("hid 2 secret values"));
+              && following.contains("your saved preferences (") && following.contains("hid 3 secret values"));
 
       steps.clear();
       session.send(ChatModels.create(connection), ChatMode.ASK, "And the flows?", List.of(), new DiskProject(root),
@@ -2590,20 +2603,58 @@ public class Harness {
       capped.send(ChatModels.create(connection), ChatMode.ASK, "Hi", List.of(), new DiskProject(root), progress);
       failed += check("long AGENTS.md cut with a note", bodies.get(0).contains("[cut at 8,000 characters]")
           && !bodies.get(0).contains("x".repeat(Prompts.MAX_INSTRUCTIONS + 1)));
-      failed += check("cut shown in the step", steps.contains("Following AGENTS.md (20,000 characters, cut to 8,000)"));
+      failed += check("cut shown in the step",
+          steps.stream().anyMatch(s -> s.contains("Following AGENTS.md (20,000 characters, cut to 8,000)")));
 
       bodies.clear();
       steps.clear();
+      Memory.overrideUserFile(memoryDir.resolve("missing-memory.md"));
       new ChatSession().send(ChatModels.create(connection), ChatMode.ASK, "Hi", List.of(), null, progress);
-      failed += check("no project, no instructions: built-in prompt only",
-          !bodies.get(0).contains("PROJECT INSTRUCTIONS") && !bodies.get(0).contains("THE USER'S INSTRUCTIONS")
+      failed += check("no project, no instructions, no memory: built-in prompt only",
+          !bodies.get(0).contains("PROJECT INSTRUCTIONS (AGENTS.md")
+          && !bodies.get(0).contains("THE USER'S INSTRUCTIONS")
+          && !bodies.get(0).contains("SAVED PREFERENCES (memory.md")
           && !bodies.get(0).contains("The instructions below come from the user")
           && bodies.get(0).contains("copy the placeholder exactly")
           && steps.stream().noneMatch(s -> s.startsWith("Following")));
     } finally {
+      Memory.overrideUserFile(null);
       server.stop(0);
     }
     System.exit(failed == 0 ? 0 : 1);
+  }
+
+  private static int checkMemory() {
+    int failed = 0;
+    failed += check("ruleFromOffer prefixes Do not suggest",
+        Memory.ruleFromOffer("Move passwords to secure properties")
+            .equals("Do not suggest: Move passwords to secure properties"));
+    failed += check("ruleFromOffer keeps an already prefixed rule",
+        Memory.ruleFromOffer("Do not suggest: X").equals("Do not suggest: X"));
+    String created = Memory.appendRule("", "Do not suggest: secure properties");
+    failed += check("appendRule creates the heading on an empty file",
+        created.contains(Memory.DO_NOT_SUGGEST) && created.contains("- Do not suggest: secure properties"));
+    String kept = Memory.appendRule("# Existing notes\nKeep logging JSON.\n", "Do not suggest: secure properties");
+    failed += check("appendRule keeps existing AGENTS.md text",
+        kept.startsWith("# Existing notes") && kept.contains("Keep logging JSON.")
+            && kept.contains(Memory.DO_NOT_SUGGEST) && kept.contains("- Do not suggest: secure properties"));
+    String again = Memory.appendRule(kept, "Do not suggest: secure properties");
+    failed += check("appendRule skips an exact duplicate", again.equals(kept));
+    String second = Memory.appendRule(kept, "Do not suggest: rename the API");
+    failed += check("appendRule adds a second rule under the same heading",
+        second.indexOf("Do not suggest: secure properties") < second.indexOf("Do not suggest: rename the API")
+            && second.indexOf(Memory.DO_NOT_SUGGEST) == second.lastIndexOf(Memory.DO_NOT_SUGGEST));
+    failed += check("empty memory adds nothing to the system prompt",
+        !Prompts.system(ChatMode.ASK, "demo", "", "").contains("SAVED PREFERENCES (memory.md"));
+    String withMemory = Prompts.system(ChatMode.ASK, "demo", "", "", "## Do not suggest\n- X\n", false, false, false,
+        false, false, "");
+    failed += check("saved preferences appear in the system prompt",
+        withMemory.contains("SAVED PREFERENCES (memory.md") && withMemory.contains("- X"));
+    failed += check("following names saved preferences", ChatSession
+        .following(new Prompts.Capped("", 0, false), new Prompts.Capped("", 0, false), null,
+            new Prompts.Capped("x", 1, false), 0)
+        .equals("Following your saved preferences (1 characters)"));
+    return failed;
   }
 
   private static String textReply(String content) {

@@ -41,6 +41,7 @@ import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
 import com.mulesoftforge.studio.ai.llm.Errors;
+import com.mulesoftforge.studio.ai.llm.Memory;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Prompts;
@@ -283,6 +284,34 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
   }
 
+  private void openMemoryFile() {
+    try {
+      Path file = Memory.ensureUserFile();
+      IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
+      IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(file.toUri()));
+    } catch (Exception e) {
+      setErrorMessage("Could not open " + Memory.FILE_NAME + ": " + Errors.describe(e));
+    }
+  }
+
+  private void openAgentsFile() {
+    EclipseProject project = EclipseProject.find(PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage());
+    if (project == null) {
+      setErrorMessage("Open a Mule project first to edit its " + Prompts.AGENTS_FILE + ".");
+      return;
+    }
+    try {
+      if (!project.resource().getFile(Prompts.AGENTS_FILE).exists()) {
+        WorkspaceWrites.write(project.resource(), Prompts.AGENTS_FILE,
+            "# Project instructions for MuleSoftForge Studio AI\n\n" + Memory.DO_NOT_SUGGEST + "\n");
+      }
+      IDE.openEditor(PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage(),
+          project.resource().getFile(Prompts.AGENTS_FILE));
+    } catch (Exception e) {
+      setErrorMessage("Could not open " + Prompts.AGENTS_FILE + ": " + Errors.describe(e));
+    }
+  }
+
   private void createInstructionsGroup(Composite body) {
     Group group = new Group(body, SWT.NONE);
     group.setText("Instructions");
@@ -305,9 +334,21 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     info.setLayoutData(infoData);
     info.setText("Sent with every message, after secrets are masked, up to "
         + String.format(Locale.ROOT, "%,d", Prompts.MAX_INSTRUCTIONS) + " characters. A project's "
-        + Prompts.AGENTS_FILE + " in its root is sent too, as project instructions. Both override the built-in"
+        + Prompts.AGENTS_FILE + " in its root is sent too, as project instructions. Your "
+        + Memory.FILE_NAME + " holds Don't suggest rules for this machine. They override the built-in"
         + " guidance (style, Mule conventions) but not the rules the plugin relies on (tools, masked values,"
         + " reviewable proposals).");
+    Link files = new Link(group, SWT.NONE);
+    files.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+    files.setText("<a>Open saved preferences (" + Memory.FILE_NAME + ")</a>  ·  <a>Open this project's "
+        + Prompts.AGENTS_FILE + "</a>");
+    files.addListener(SWT.Selection, e -> {
+      if (e.text != null && e.text.contains(Memory.FILE_NAME)) {
+        openMemoryFile();
+      } else {
+        openAgentsFile();
+      }
+    });
     Link show = new Link(group, SWT.NONE);
     show.setText("<a>Show built-in prompt</a>");
     show.addListener(SWT.Selection, e -> new BuiltInPromptDialog(getShell()).open());

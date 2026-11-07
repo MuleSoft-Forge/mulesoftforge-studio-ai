@@ -28,7 +28,7 @@ public final class Prompts {
 
   // project is null when no project is open: no tools, so no mode rules.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions) {
-    return system(mode, project, projectInstructions, userInstructions, false, false, false, false, "");
+    return system(mode, project, projectInstructions, userInstructions, "", false, false, false, false, false, "");
   }
 
   // debugging: Studio's debugger is stopped and the debug tools are offered. dataWeave: the DataWeave CLI is.
@@ -37,15 +37,22 @@ public final class Prompts {
   // Preferences; the built-in http.md still always applies.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
       boolean debugging, boolean dataWeave, boolean http, boolean munit, String httpInstructions) {
-    return system(mode, project, projectInstructions, userInstructions, debugging, dataWeave, http, munit, false,
+    return system(mode, project, projectInstructions, userInstructions, "", debugging, dataWeave, http, munit, false,
         httpInstructions);
   }
 
   // metadata: the request is about metadata or Studio's type warnings.
   public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
       boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata, String httpInstructions) {
-    SystemParts parts = systemParts(mode, project, projectInstructions, userInstructions, debugging, dataWeave, http,
-        munit, metadata, httpInstructions);
+    return system(mode, project, projectInstructions, userInstructions, "", debugging, dataWeave, http, munit,
+        metadata, httpInstructions);
+  }
+
+  public static String system(ChatMode mode, String project, String projectInstructions, String userInstructions,
+      String savedPreferences, boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata,
+      String httpInstructions) {
+    SystemParts parts = systemParts(mode, project, projectInstructions, userInstructions, savedPreferences, debugging,
+        dataWeave, http, munit, metadata, httpInstructions);
     return parts.shared() + "\n" + parts.perRequest();
   }
 
@@ -95,6 +102,13 @@ public final class Prompts {
   public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
       String userInstructions, boolean debugging, boolean dataWeave, boolean http, boolean munit, boolean metadata,
       String httpInstructions) {
+    return systemParts(mode, project, projectInstructions, userInstructions, "", debugging, dataWeave, http, munit,
+        metadata, httpInstructions);
+  }
+
+  public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
+      String userInstructions, String savedPreferences, boolean debugging, boolean dataWeave, boolean http,
+      boolean munit, boolean metadata, String httpInstructions) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md")).append('\n')
         .append(file("about.md"))
         .append("\nThe current mode and its rules come at the very start of the user's latest message, in a block"
@@ -114,7 +128,8 @@ public final class Prompts {
     }
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
-    if (fromProject || fromUser) {
+    boolean fromMemory = savedPreferences != null && !savedPreferences.isBlank();
+    if (fromProject || fromUser || fromMemory) {
       out.append("\nThe instructions below come from the user and their team. Follow them; they take precedence"
           + " over the general guidance in this prompt, including the Mule guidance for changes after them, but"
           + " never over the rules about masked values, tools, offer_changes, proposals, the current mode, or"
@@ -127,6 +142,10 @@ public final class Prompts {
     if (fromUser) {
       out.append("\nTHE USER'S INSTRUCTIONS (from their Studio preferences):\n").append(userInstructions.strip())
           .append('\n');
+    }
+    if (fromMemory) {
+      out.append("\nSAVED PREFERENCES (").append(Memory.FILE_NAME)
+          .append("; this user, every project; not in git):\n").append(savedPreferences.strip()).append('\n');
     }
     StringBuilder perRequest = new StringBuilder("Current mode: ").append(mode.label).append(".\n");
     if (project != null) {
@@ -191,8 +210,8 @@ public final class Prompts {
         + "\nWhen creating or editing MUnit tests (always applies)\n\n" + file("munit.md")
         + "\nWhen the request is about metadata or Studio's type warnings (always applies)\n\n" + metadata()
         + "\nThen any HTTP and docs instructions from Preferences, then " + AGENTS_FILE
-        + " from the project root and your instructions from Preferences, each up to "
-        + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";
+        + " from the project root, your instructions from Preferences, and saved preferences from "
+        + Memory.FILE_NAME + ", each up to " + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";
   }
 
   public static Capped capped(String text) {

@@ -1,6 +1,7 @@
 package com.mulesoftforge.studio.ai.ui;
 
 import java.lang.ref.WeakReference;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -13,8 +14,11 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.compare.CompareUI;
+import org.eclipse.core.filesystem.EFS;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jface.dialogs.Dialog;
+import org.eclipse.ui.ide.IDE;
 import org.eclipse.e4.core.services.events.IEventBroker;
 import org.eclipse.e4.ui.css.swt.theme.IThemeEngine;
 import org.eclipse.jface.action.Action;
@@ -71,8 +75,10 @@ import com.mulesoftforge.studio.ai.llm.ContextWindow;
 import com.mulesoftforge.studio.ai.llm.CostMeter;
 import com.mulesoftforge.studio.ai.llm.DataWeaveFix;
 import com.mulesoftforge.studio.ai.llm.Errors;
+import com.mulesoftforge.studio.ai.llm.Memory;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.Progress;
+import com.mulesoftforge.studio.ai.llm.Prompts;
 import com.mulesoftforge.studio.ai.llm.RawCapture;
 import com.mulesoftforge.studio.ai.render.Alerts;
 import com.mulesoftforge.studio.ai.render.HtmlPage;
@@ -97,6 +103,9 @@ public class ChatView extends ViewPart {
   private static final String MAKE_CHANGES = "make-changes";
   private static final String SUGGEST = "suggest";
   private static final String OFFER = "offer:";
+  private static final String IGNORE = "ignore:";
+  private static final String OPEN_MEMORY = "open-memory";
+  private static final String OPEN_AGENTS = "open-agents";
   private static final String ASK = "ask:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
@@ -561,6 +570,12 @@ public class ChatView extends ViewPart {
           buildingDiagnosis = diagnosedOffers.contains(checklist(value));
           sendInAgentMode(ChangeOffer.prompt(picked));
         }
+      } else if (id.startsWith(IGNORE)) {
+        ignoreOffer(id.substring(IGNORE.length()));
+      } else if (OPEN_MEMORY.equals(id)) {
+        openMemoryFile();
+      } else if (OPEN_AGENTS.equals(id)) {
+        openAgentsFile();
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
         if (proposal != null) {
@@ -1196,6 +1211,88 @@ public class ChatView extends ViewPart {
     send();
   }
 
+  // "<offer list index>:<row index>" from a Don't suggest click.
+  private void ignoreOffer(String value) {
+    int colon = value.indexOf(':');
+    if (colon < 0) {
+      return;
+    }
+    List<ChangeOffer> offered;
+    int row;
+    try {
+      offered = offers.get(Integer.parseInt(value.substring(0, colon)));
+      row = Integer.parseInt(value.substring(colon + 1));
+    } catch (RuntimeException e) {
+      append("Note", "That offer was from an earlier chat. Ask again to get a fresh list.");
+      return;
+    }
+    if (row < 0 || row >= offered.size()) {
+      return;
+    }
+    EclipseProject project = EclipseProject.find(getSite().getPage());
+    if (project == null) {
+      project = EclipseProject.named(chatProject);
+    }
+    DontSuggestDialog dialog = new DontSuggestDialog(getSite().getShell(), offered.get(row).title(), project != null);
+    if (dialog.open() != Dialog.OK) {
+      return;
+    }
+    String offerId = value.substring(0, colon);
+    try {
+      if (dialog.target() == DontSuggestDialog.Target.SHARED && project != null) {
+        String existing = "";
+        try {
+          existing = project.read(Prompts.AGENTS_FILE);
+        } catch (Exception ignored) {
+          // Missing AGENTS.md starts a new one with the Do not suggest heading.
+        }
+        WorkspaceWrites.write(project.resource(), Prompts.AGENTS_FILE, Memory.appendRule(existing, dialog.rule()));
+        transcript.ignoreOffer(offerId, row);
+        append("Note", "Saved in this project's " + Prompts.AGENTS_FILE + ". It is sent with every chat in this"
+            + " project.");
+        transcript.action("Open " + Prompts.AGENTS_FILE, OPEN_AGENTS);
+      } else {
+        Memory.appendRule(Memory.userFile(), dialog.rule());
+        transcript.ignoreOffer(offerId, row);
+        append("Note", "Saved in your " + Memory.FILE_NAME + ". It is sent with every chat on this machine.");
+        transcript.action("Open " + Memory.FILE_NAME, OPEN_MEMORY);
+      }
+    } catch (Exception e) {
+      append("Error", "Could not save the rule: " + Errors.describe(e));
+    }
+  }
+
+  private void openMemoryFile() {
+    try {
+      Path file = Memory.ensureUserFile();
+      IWorkbenchPage page = getSite().getPage();
+      IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(file.toUri()));
+    } catch (Exception e) {
+      append("Error", "Could not open " + Memory.FILE_NAME + ": " + Errors.describe(e));
+    }
+  }
+
+  private void openAgentsFile() {
+    EclipseProject project = EclipseProject.find(getSite().getPage());
+    if (project == null) {
+      project = EclipseProject.named(chatProject);
+    }
+    if (project == null) {
+      append("Note", "Open a Mule project first to edit its " + Prompts.AGENTS_FILE + ".");
+      return;
+    }
+    try {
+      if (!project.resource().getFile(Prompts.AGENTS_FILE).exists()) {
+        WorkspaceWrites.write(project.resource(), Prompts.AGENTS_FILE,
+            "# Project instructions for MuleSoftForge Studio AI\n\n"
+                + Memory.DO_NOT_SUGGEST + "\n");
+      }
+      IDE.openEditor(getSite().getPage(), project.resource().getFile(Prompts.AGENTS_FILE));
+    } catch (Exception e) {
+      append("Error", "Could not open " + Prompts.AGENTS_FILE + ": " + Errors.describe(e));
+    }
+  }
+
   // "<checklist index>:<ticked indices>" from a Draft selected changes click.
   private List<ChangeOffer> pickedOffers(String value) {
     int colon = value.indexOf(':');
@@ -1283,6 +1380,14 @@ public class ChatView extends ViewPart {
   private void appendStep(String text) {
     record("Step", text);
     transcript.step(text);
+    if (text != null && text.startsWith("Following ")) {
+      if (text.contains("saved preferences")) {
+        transcript.action("Open " + Memory.FILE_NAME, OPEN_MEMORY);
+      }
+      if (text.contains(Prompts.AGENTS_FILE)) {
+        transcript.action("Open " + Prompts.AGENTS_FILE, OPEN_AGENTS);
+      }
+    }
   }
 
   // The live line is not recorded: it is replaced by the steps and the answer.

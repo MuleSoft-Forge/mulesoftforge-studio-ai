@@ -377,13 +377,17 @@ public class ChatSession {
   }
 
   // The step shown on the first message, or null when there are no instructions to follow.
-  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp, int hidden) {
+  public static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp,
+      Prompts.Capped fromMemory, int hidden) {
     List<String> parts = new ArrayList<>();
     if (!fromProject.isEmpty()) {
       parts.add(Prompts.AGENTS_FILE + " (" + size(fromProject) + ")");
     }
     if (!fromUser.isEmpty()) {
       parts.add("your instructions (" + size(fromUser) + ")");
+    }
+    if (fromMemory != null && !fromMemory.isEmpty()) {
+      parts.add("your saved preferences (" + size(fromMemory) + ")");
     }
     if (fromHttp != null && !fromHttp.isEmpty()) {
       parts.add("HTTP and docs instructions (" + size(fromHttp) + ")");
@@ -396,8 +400,12 @@ public class ChatSession {
         + " in them";
   }
 
+  static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp, int hidden) {
+    return following(fromProject, fromUser, fromHttp, null, hidden);
+  }
+
   static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, int hidden) {
-    return following(fromProject, fromUser, null, hidden);
+    return following(fromProject, fromUser, null, null, hidden);
   }
 
   private static String size(Prompts.Capped text) {
@@ -429,6 +437,9 @@ public class ChatSession {
     SecretMask.Masked projectText = secrets.mask(Prompts.AGENTS_FILE, agentsFile(project));
     SecretMask.Masked userText = secrets.mask(null, currentInstructions);
     SecretMask.Masked httpText = secrets.mask(null, currentHttpInstructions);
+    // Free text like Preferences instructions: .md is not a config extension, so path must be null for
+    // key=value lines to be masked.
+    SecretMask.Masked memoryText = secrets.mask(null, Memory.read());
     int maskedBefore = secrets.total();
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
@@ -518,8 +529,9 @@ public class ChatSession {
     Prompts.Capped fromProject = Prompts.capped(projectText.text());
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
+    Prompts.Capped fromMemory = Prompts.capped(memoryText.text());
     Prompts.SystemParts built = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
-        fromUser.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
+        fromUser.text(), fromMemory.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
         fromHttp.text());
     String from = switchedFrom;
     switchedFrom = null;
@@ -529,8 +541,8 @@ public class ChatSession {
     Prompts.SystemParts system = withNotes(built, changed);
 
     if (history.isEmpty()) {
-      String following = following(fromProject, fromUser, fromHttp,
-          projectText.count() + userText.count() + httpText.count());
+      String following = following(fromProject, fromUser, fromHttp, fromMemory,
+          projectText.count() + userText.count() + httpText.count() + memoryText.count());
       if (following != null) {
         progress.step(following);
       }
@@ -747,7 +759,8 @@ public class ChatSession {
         debugTools = new DebugTools(debug, secrets, personalMask);
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = withNotes(Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
-            fromUser.text(), true, dataWeaveTools != null, httpTools != null, false, false, fromHttp.text()), changed);
+            fromUser.text(), fromMemory.text(), true, dataWeaveTools != null, httpTools != null, false, false,
+            fromHttp.text()), changed);
         turn.set(0, current(system, text, images));
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }

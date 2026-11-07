@@ -56,6 +56,9 @@ interface Transcript {
   // ticked, since the user asked a question rather than for changes; otherwise all ticked.
   void offer(String id, List<String> items, boolean suggested);
 
+  // Greys out one offer row after the user saved a Don't suggest rule for it.
+  default void ignoreOffer(String id, int index) {}
+
   // Clarifying question with clickable answers. Click sends ask:<id>:<index>; shift-click fills the composer.
   void ask(String id, String question, List<String> choices);
 

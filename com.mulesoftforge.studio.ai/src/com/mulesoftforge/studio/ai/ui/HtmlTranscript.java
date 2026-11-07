@@ -145,6 +145,11 @@ final class HtmlTranscript implements Transcript {
   }
 
   @Override
+  public void ignoreOffer(String id, int index) {
+    run("msfIgnoreOffer(" + js(id) + "," + index + ")");
+  }
+
+  @Override
   public void ask(String id, String question, List<String> choices) {
     run("msfAsk(" + js(id) + "," + js(question) + "," + jsValue(choices) + ")");
   }

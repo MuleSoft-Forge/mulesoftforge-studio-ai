@@ -191,6 +191,16 @@ final class PlainTranscript implements Transcript {
       boxes[i] = text.getCharCount();
       text.append((suggested ? "[ ] " : "[x] ") + items.get(i));
       clickables.add(new Clickable(boxes[i], 3, BOX + index + ":" + i));
+      text.append("  ");
+      int ignoreStart = text.getCharCount();
+      text.append(HtmlPage.DONT_SUGGEST);
+      StyleRange ignore = new StyleRange();
+      ignore.start = ignoreStart;
+      ignore.length = HtmlPage.DONT_SUGGEST.length();
+      ignore.foreground = styles.muted;
+      ignore.underline = true;
+      text.setStyleRange(ignore);
+      clickables.add(new Clickable(ignoreStart, HtmlPage.DONT_SUGGEST.length(), "cmd:ignore:" + id + ":" + i));
     }
     boolean[] ticked = new boolean[items.size()];
     Arrays.fill(ticked, !suggested);

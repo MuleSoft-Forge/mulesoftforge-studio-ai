@@ -200,6 +200,13 @@ final class FunChecks {
         page.contains("window.scrollTo(0, 0);\n  lastY = 0;"));
     failed += check("a long answer opens at its first line, not its end", page.contains(
         "div.offsetHeight > window.innerHeight * 0.6") && page.contains("div.getBoundingClientRect().top + window.scrollY"));
+    failed += check("each offered change has a Don't suggest link",
+        page.contains("data-ignore") && page.contains("Don't suggest") && page.contains("msfIgnoreOffer")
+            && page.contains("cmd:ignore:"));
+    failed += check("offer rows keep the checkbox and Don't suggest on one line",
+        page.contains(".offer label .text { flex: 1 1 auto; min-width: 0; }")
+            && !page.contains(".offer label { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; padding: 3px 6px;\n"
+                + "          border-radius: 6px; cursor: pointer; flex-wrap: wrap; }"));
     failed += starterIcons(page);
     return failed;
   }
