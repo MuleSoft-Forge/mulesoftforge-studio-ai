@@ -13,6 +13,7 @@ import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.SubMonitor;
 import org.eclipse.core.runtime.jobs.Job;
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.widgets.Display;
 
 import com.mulesoftforge.studio.ai.Activator;
@@ -33,6 +34,8 @@ import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Pricing;
 import com.mulesoftforge.studio.ai.llm.Progress;
 import com.mulesoftforge.studio.ai.llm.RawCapture;
+import com.mulesoftforge.studio.ai.mcp.McpHub;
+import com.mulesoftforge.studio.ai.mcp.McpServers;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
@@ -76,6 +79,7 @@ public final class ChatJob extends Job {
   // A stream sends many small pieces; the view is updated at most every LIVE_MS with the latest of them.
   private static final int LIVE_MS = 150;
   private static final int PREVIEW_CHARS = 20_000;
+  private static McpHub sharedMcp;
   private final Object liveLock = new Object();
   private final AtomicBoolean liveQueued = new AtomicBoolean();
   private final StringBuilder livePreview = new StringBuilder();
@@ -145,6 +149,7 @@ public final class ChatJob extends Job {
       session.extensions(Extensions.load(project == null ? null : project.location(), AiSettings.disabledBuiltIns()));
       session.fixChecksBeforeFinishing(AiSettings.fixChecksBeforeFinishing());
       session.exchange(ExchangeSearch.live(StudioAnypoint::login));
+      session.mcp(mcpHub(progress));
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
       cancelled = true;
@@ -196,6 +201,19 @@ public final class ChatJob extends Job {
       progress.step("Hooks: " + hooks.problem());
     }
     return hooks;
+  }
+
+  // Kept across turns and chats so connections and tool lists are reused; replaced when the servers change.
+  private static synchronized McpHub mcpHub(Progress progress) {
+    McpServers.Loaded loaded = McpServers.load(Extensions.userDir().resolve(McpServers.FILE),
+        AiSettings.mcpPlatformEnabled());
+    for (String problem : loaded.problems()) {
+      progress.step("MCP servers: " + problem);
+    }
+    if (sharedMcp == null || !sharedMcp.config().servers().equals(loaded.servers())) {
+      sharedMcp = loaded.servers().isEmpty() ? null : McpHub.live(loaded, StudioAnypoint::login);
+    }
+    return sharedMcp;
   }
 
   private List<AutoRouter.Option> models(Connection connection, RawCapture capture) {
@@ -278,6 +296,20 @@ public final class ChatJob extends Job {
         if (!isCancelled()) {
           Ui.async(display, null, () -> listener.thought(text, millis));
         }
+      }
+
+      @Override
+      public boolean approve(String question, String detail) {
+        if (isCancelled() || display.isDisposed()) {
+          return false;
+        }
+        AtomicBoolean allowed = new AtomicBoolean();
+        display.syncExec(() -> {
+          MessageDialog dialog = new MessageDialog(display.getActiveShell(), question, null, detail,
+              MessageDialog.WARNING, 1, "Allow", "Don't allow");
+          allowed.set(dialog.open() == 0);
+        });
+        return allowed.get() && !isCancelled();
       }
 
       @Override

@@ -1,0 +1,1210 @@
+[
+ {
+  "name": "view_api_instance_policies",
+  "title": "View API Instance Policies",
+  "description": "Show the applied policies for one API instance, MuleSoft-hosted or external. A MuleSoft (Flex Gateway) instance is read from Anypoint API Manager with the same grouping UI as the web app; an EXTERNAL gateway instance (Kong / Apigee / Azure / AWS) has its native applied policies read through the Anypoint API Manager Universal API (gated per organization). Provider is deduced from the instance; pass provider only to force it. External policies expose scope and rules as reported by the Universal API; applicationTargets exposes resolved AWS HTTP methods and paths, including CORS paths derived from provenance when rules is empty. rules retains the upstream target representation. Do not infer INSTANCE scope from missing rules. To apply an external policy, choose a scope from the selected template's supportedScopes and pass target.scope and target.rules to apply_policy_to_instance. PATH requires a path, METHOD a method, OPERATION both, and INSTANCE no rules. pointcut_data is an apply argument for MuleSoft policies only. To edit an external policy's configuration, use edit_applied_policy with the policyId listed here.",
+  "inputSchema": {
+   "properties": {
+    "organization_id": {
+     "title": "Organization Id",
+     "type": "string"
+    },
+    "asset_id": {
+     "title": "Asset Id",
+     "type": "string"
+    },
+    "instance_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Instance Id"
+    },
+    "environment": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Environment"
+    },
+    "api_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Api Version"
+    },
+    "asset_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Asset Version"
+    },
+    "instance": {
+     "anyOf": [
+      {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Instance"
+    },
+    "provider": {
+     "default": "",
+     "description": "Optional gateway provider of the instance: 'kong', 'apigee', 'azure', or 'aws' for an external gateway, or 'mulesoft' (default). Leave empty to deduce it from the instance. For an external provider the native applied policies (with each policy's policyId, current configurationData, readOnly flag, and Exchange coordinates for edit_applied_policy) are read through the Anypoint API Manager Universal API; this routing is gated per organization.",
+     "title": "Provider",
+     "type": "string"
+    }
+   },
+   "required": [
+    "organization_id",
+    "asset_id"
+   ],
+   "title": "view_api_instance_policiesArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "create_omni_gateway",
+  "title": "Create Omni Gateway",
+  "description": "Launch the managed Omni Gateway creation wizard for the active MuleSoft provider. When fully configured, creates the gateway in Anypoint Platform.",
+  "inputSchema": {
+   "$defs": {
+    "FlexGatewayConfiguration": {
+     "additionalProperties": true,
+     "description": "Top-level configuration block in the Omni Gateway create payload.",
+     "properties": {
+      "ingress": {
+       "anyOf": [
+        {
+         "$ref": "#/$defs/FlexGatewayIngress"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      },
+      "properties": {
+       "anyOf": [
+        {
+         "$ref": "#/$defs/FlexGatewayProperties"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      },
+      "logging": {
+       "anyOf": [
+        {
+         "$ref": "#/$defs/FlexGatewayLogging"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      }
+     },
+     "title": "FlexGatewayConfiguration",
+     "type": "object"
+    },
+    "FlexGatewayCreatePayload": {
+     "additionalProperties": true,
+     "description": "Payload forwarded to Anypoint ``POST /gateways`` when provisioning an Omni Gateway.\n\nMirrors the payload built by the wizard UI (``app.js:createPayload``).\n``extra='allow'`` preserves forward compatibility with new Anypoint\nfields while keeping the tool's input schema structured for clients.",
+     "properties": {
+      "name": {
+       "description": "Human-readable gateway name (required).",
+       "title": "Name",
+       "type": "string"
+      },
+      "targetId": {
+       "description": "Deployment target ID (private space or cluster).",
+       "title": "Targetid",
+       "type": "string"
+      },
+      "runtimeVersion": {
+       "description": "Flex Gateway runtime version to deploy (required by the Anypoint gateway-create API, e.g. '1.9.0'). Omitting it makes the API reject the request with HTTP 400.",
+       "title": "Runtimeversion",
+       "type": "string"
+      },
+      "releaseChannel": {
+       "default": "lts",
+       "description": "Release channel for the gateway runtime. Valid values: 'lts', 'edge' (managed gateways) or 'lts', 'edge', 'dev' (flex). Defaults to 'lts'.",
+       "title": "Releasechannel",
+       "type": "string"
+      },
+      "size": {
+       "default": "small",
+       "description": "Gateway size tier (e.g. 'small'). Defaults to 'small'.",
+       "title": "Size",
+       "type": "string"
+      },
+      "configuration": {
+       "$ref": "#/$defs/FlexGatewayConfiguration",
+       "description": "Gateway configuration block (ingress, properties, logging). The Anypoint API requires this for managed gateways. Sensible defaults are provided if omitted."
+      }
+     },
+     "required": [
+      "name",
+      "targetId",
+      "runtimeVersion"
+     ],
+     "title": "FlexGatewayCreatePayload",
+     "type": "object"
+    },
+    "FlexGatewayIngress": {
+     "additionalProperties": true,
+     "description": "Ingress block of a managed Omni Gateway create payload.",
+     "properties": {
+      "publicUrl": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Publicurl"
+      },
+      "internalUrl": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Internalurl"
+      },
+      "lastMileSecurity": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Lastmilesecurity"
+      },
+      "forwardSslSession": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Forwardsslsession"
+      }
+     },
+     "title": "FlexGatewayIngress",
+     "type": "object"
+    },
+    "FlexGatewayLogging": {
+     "additionalProperties": true,
+     "description": "Logging configuration block for a managed Omni Gateway.",
+     "properties": {
+      "level": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Level"
+      },
+      "forwardLogs": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Forwardlogs"
+      }
+     },
+     "title": "FlexGatewayLogging",
+     "type": "object"
+    },
+    "FlexGatewayProperties": {
+     "additionalProperties": true,
+     "description": "Runtime property toggles for a managed Omni Gateway.",
+     "properties": {
+      "upstreamResponseTimeout": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Upstreamresponsetimeout"
+      },
+      "connectionIdleTimeout": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Connectionidletimeout"
+      }
+     },
+     "title": "FlexGatewayProperties",
+     "type": "object"
+    }
+   },
+   "properties": {
+    "provider_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Provider Id"
+    },
+    "organization_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Organization Id"
+    },
+    "environment_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Environment Id"
+    },
+    "payload": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/FlexGatewayCreatePayload"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "environment_name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Environment Name"
+    },
+    "environment_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Environment Type"
+    },
+    "target_type": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Target Type"
+    },
+    "governance_override_warnings": {
+     "default": false,
+     "title": "Governance Override Warnings",
+     "type": "boolean"
+    }
+   },
+   "title": "create_flex_gatewayArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "idempotentHint": false,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "apply_policy_to_instance",
+  "title": "Apply Policy To Asset Instance",
+  "description": "Apply the selected policy to a SINGLE target asset instance using the provided configuration data. This is the tool for a provider-NATIVE policy (a Kong plugin name or an Apigee template ID, as selected via prepare_policy_creation) \u2014 those are NOT canonical templates and can only be applied one instance at a time, so loop this tool per instance if a native policy targets several. It is also the right choice for a single MuleSoft/Anypoint instance when you need fine per-instance control (order, pointcut, disabled). ONLY for a CANONICAL (Universal) policy \u2014 one returned by 'list_universal_policies' \u2014 that must be applied to MORE THAN ONE API instance at once, or across instances spanning different providers (mulesoft/anypoint, kong, apigee, azure, aws), prefer 'apply_universal_policy' instead: it fans the canonical template out across every instance in one call and creates the native policy on each provider's control plane. Do NOT route a native plugin/template id to 'apply_universal_policy' \u2014 it only accepts canonical template names. For a non-MuleSoft external gateway (provider='kong'/'apigee'/'azure'/'aws'), set provider and pass the numeric api_instance_id plus the template's Exchange coordinates via asset (group_id + asset_id + asset_version, from get_policy_template_form) \u2014 the policy is applied through the Anypoint API Manager Universal API (gateway_id is not used on this path). injection_point is optional; omit it to let APIM default it from the template. This routing is gated per organization; a closed gate returns a structured error. Follow this order: select the native policy using prepare_policy_creation, load its detail using get_policy_template_form, then offer only the scopes returned in template.supportedScopes. Do not ask for scope before the selected template is loaded. After the user chooses a scope, collect its required path/method and the configuration fields from the template schema. Pass target={scope: 'INSTANCE'} for the whole instance, target={scope: 'PATH', rules: [{path: '/orders'}]} for a path, target={scope: 'METHOD', rules: [{method: 'GET'}]} for a method, or target={scope: 'OPERATION', rules: [{method: 'GET', path: '/orders'}]} for an operation. For external native policies, omit pointcut_data entirely: that argument is MuleSoft-only. Use target.scope and target.rules; do not reuse methodRegex/uriTemplateRegex from view_api_instance_policies as apply arguments. The tool sends scope and rules to the Universal API. When choosing a scope, pass it explicitly in target.scope. INSTANCE needs no targets. Omitted target preserves APIM defaults for templates that only support INSTANCE or declare no supportedScopes; templates supporting other scopes require target. For a non-INSTANCE scope, do not call apply until the user has supplied its required targets, even when it is the template's only scope. CORS allowMethods config does not select the application path or method. Use the targets selected by the user; never silently choose a scope or endpoint.",
+  "inputSchema": {
+   "$defs": {
+    "PolicyApplicationTarget": {
+     "additionalProperties": false,
+     "description": "User-selected scope and targets, separate from policy configuration.",
+     "properties": {
+      "scope": {
+       "enum": [
+        "INSTANCE",
+        "PATH",
+        "METHOD",
+        "OPERATION"
+       ],
+       "title": "Scope",
+       "type": "string"
+      },
+      "rules": {
+       "items": {
+        "$ref": "#/$defs/PolicyTargetRule"
+       },
+       "title": "Rules",
+       "type": "array"
+      }
+     },
+     "required": [
+      "scope"
+     ],
+     "title": "PolicyApplicationTarget",
+     "type": "object"
+    },
+    "PolicyApplyAssetRef": {
+     "description": "Optional Exchange asset coordinates for a policy template.\n\nCarrying these as a single bundle keeps ``apply_policy_to_instance``\nunder the architectural parameter cap while preserving the\n``group_id`` / ``asset_id`` / ``asset_version`` triple that callers\nmust keep in sync.",
+     "properties": {
+      "group_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Group Id"
+      },
+      "asset_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Asset Id"
+      },
+      "asset_version": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Asset Version"
+      }
+     },
+     "title": "PolicyApplyAssetRef",
+     "type": "object"
+    },
+    "PolicyConfigurationData": {
+     "additionalProperties": true,
+     "description": "Open-shape configuration object passed to API Manager when applying a policy.\n\nThe exact key set is policy-template-specific (e.g. rate-limiting uses\n``rateLimits``; OAuth2 uses ``tokenUrl``). ``extra='allow'`` preserves\ntemplate-defined keys; clients can still receive a structured JSON schema\nin the tool spec instead of an unconstrained ``dict``.",
+     "properties": {},
+     "title": "PolicyConfigurationData",
+     "type": "object"
+    },
+    "PolicyPointcutData": {
+     "additionalProperties": true,
+     "description": "Open-shape pointcut filter that scopes a policy to subset of requests.\n\nShape is defined by the resource-level policy template. ``extra='allow'``\nkeeps the envelope typed without pinning template-specific keys.",
+     "properties": {},
+     "title": "PolicyPointcutData",
+     "type": "object"
+    },
+    "PolicyTargetRule": {
+     "additionalProperties": false,
+     "description": "One API Manager Universal API request target.",
+     "properties": {
+      "method": {
+       "anyOf": [
+        {
+         "minLength": 1,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Method"
+      },
+      "path": {
+       "anyOf": [
+        {
+         "minLength": 1,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Path"
+      }
+     },
+     "title": "PolicyTargetRule",
+     "type": "object"
+    }
+   },
+   "properties": {
+    "organization_id": {
+     "description": "Anypoint organization (business group) ID that owns the instance.",
+     "title": "Organization Id",
+     "type": "string"
+    },
+    "environment_id": {
+     "default": "",
+     "description": "Anypoint environment ID. Optional on the external-gateway (Universal API) path, where api_instance_id alone identifies the instance.",
+     "title": "Environment Id",
+     "type": "string"
+    },
+    "api_instance_id": {
+     "default": "",
+     "description": "Numeric API Manager instance ID of the target instance.",
+     "title": "Api Instance Id",
+     "type": "string"
+    },
+    "configuration_data": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyConfigurationData"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Policy configuration matching the template schema from get_policy_template_form. Validated by APIM against the template."
+    },
+    "policy_template_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Policy template ID being applied.",
+     "title": "Policy Template Id"
+    },
+    "asset": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyApplyAssetRef"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Exchange coordinates of the policy template (group_id / asset_id / asset_version) from get_policy_template_form. Required on the external-gateway Universal API path."
+    },
+    "disabled": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Apply the policy in a disabled state. Omit to apply it enabled.",
+     "title": "Disabled"
+    },
+    "order": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Explicit position of the policy in the chain. Omit to let APIM assign the next order.",
+     "title": "Order"
+    },
+    "pointcut_data": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyPointcutData"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "MuleSoft/Anypoint ONLY: optional pointcut (method / URI) scoping. Do not use for external native policies; use target.scope and target.rules instead. For a PATH scope pass target={scope: 'PATH', rules: [{path: <user-selected path>}]} and omit pointcut_data. methodRegex/uriTemplateRegex from policy listings are read fields, not external apply arguments."
+    },
+    "provider": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "External gateway provider: 'kong', 'apigee', 'azure', or 'aws'. Set for a non-MuleSoft gateway to apply through the APIM Universal API. Omit for MuleSoft.",
+     "title": "Provider"
+    },
+    "gateway_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Gateway ID. Not used on the external-gateway Universal API path.",
+     "title": "Gateway Id"
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional human-readable label for the applied policy.",
+     "title": "Label"
+    },
+    "injection_point": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Optional injection point. Omit to let APIM default it from the template.",
+     "title": "Injection Point"
+    },
+    "target": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyApplicationTarget"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "External gateway apply scope chosen by the user from template.supportedScopes. INSTANCE has no rules; PATH rules contain path; METHOD rules contain method; OPERATION rules contain both method and path. First select the native policy and load get_policy_template_form; only then offer the scopes returned in template.supportedScopes. After the scope is chosen, collect its concrete targets before applying. Never ask for scope before loading the selected template. Required when an external template does not support INSTANCE. Omission preserves APIM instance defaults when INSTANCE is supported or supportedScopes is not declared. If INSTANCE is the only supported scope, pass target={scope: INSTANCE} without asking for a path or method. For any non-INSTANCE scope, collect its required destinations even if it is the only supported scope."
+    }
+   },
+   "required": [
+    "organization_id"
+   ],
+   "title": "apply_policy_to_instanceArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "toggle_applied_policy",
+  "title": "Enable Or Disable Applied Policy",
+  "description": "Enable or disable one already-applied policy on a MuleSoft or external gateway instance. Call only when the user explicitly asks to change the policy state. Use the provider and policyId returned by view_api_instance_policies for the selected instance. MuleSoft instances also require environment_id. External providers are kong, apigee, azure-apim, and aws-apigw. External gateway writes are asynchronous; poll list_instance_policy_operations until the operation is COMPLETED or FAILED.",
+  "inputSchema": {
+   "properties": {
+    "organization_id": {
+     "description": "Anypoint organization (business group) ID that owns the instance.",
+     "title": "Organization Id",
+     "type": "string"
+    },
+    "api_instance_id": {
+     "description": "ID of the API Manager instance that owns the applied policy.",
+     "title": "Api Instance Id",
+     "type": "string"
+    },
+    "policy_id": {
+     "description": "ID of the applied policy to enable or disable.",
+     "title": "Policy Id",
+     "type": "string"
+    },
+    "enabled": {
+     "description": "True to enable the policy; false to disable it.",
+     "title": "Enabled",
+     "type": "boolean"
+    },
+    "provider": {
+     "description": "Provider of the target instance: mulesoft, kong, apigee, azure-apim, or aws-apigw.",
+     "title": "Provider",
+     "type": "string"
+    },
+    "environment_id": {
+     "default": "",
+     "description": "Anypoint environment ID. Required for MuleSoft instances and omitted for external instances.",
+     "title": "Environment Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "organization_id",
+    "api_instance_id",
+    "policy_id",
+    "enabled",
+    "provider"
+   ],
+   "title": "toggle_applied_policyArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "remove_applied_policy",
+  "title": "Remove Applied Policy",
+  "description": "Permanently remove one already-applied policy from a MuleSoft or external gateway instance. Set confirmed=true only after the user explicitly confirms removal. Use the provider and policyId returned by view_api_instance_policies for the selected instance. MuleSoft instances also require environment_id. External providers are kong, apigee, azure-apim, and aws-apigw. External gateway writes are asynchronous; poll list_instance_policy_operations until the REMOVE operation is COMPLETED or FAILED.",
+  "inputSchema": {
+   "properties": {
+    "organization_id": {
+     "description": "Anypoint organization (business group) ID that owns the instance.",
+     "title": "Organization Id",
+     "type": "string"
+    },
+    "api_instance_id": {
+     "description": "ID of the API Manager instance that owns the applied policy.",
+     "title": "Api Instance Id",
+     "type": "string"
+    },
+    "policy_id": {
+     "description": "ID of the applied policy to remove.",
+     "title": "Policy Id",
+     "type": "string"
+    },
+    "provider": {
+     "description": "Provider of the target instance: mulesoft, kong, apigee, azure-apim, or aws-apigw.",
+     "title": "Provider",
+     "type": "string"
+    },
+    "confirmed": {
+     "description": "Must be true after the user explicitly confirms permanent removal.",
+     "title": "Confirmed",
+     "type": "boolean"
+    },
+    "environment_id": {
+     "default": "",
+     "description": "Anypoint environment ID. Required for MuleSoft instances and omitted for external instances.",
+     "title": "Environment Id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "organization_id",
+    "api_instance_id",
+    "policy_id",
+    "provider",
+    "confirmed"
+   ],
+   "title": "remove_applied_policyArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": true,
+   "idempotentHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "check_policy_conformance",
+  "title": "Check Policy Conformance",
+  "description": "Convert the selected policy application payload to JSON-LD and print it in backend logs.",
+  "inputSchema": {
+   "$defs": {
+    "PolicyConfigurationData": {
+     "additionalProperties": true,
+     "description": "Open-shape configuration object passed to API Manager when applying a policy.\n\nThe exact key set is policy-template-specific (e.g. rate-limiting uses\n``rateLimits``; OAuth2 uses ``tokenUrl``). ``extra='allow'`` preserves\ntemplate-defined keys; clients can still receive a structured JSON schema\nin the tool spec instead of an unconstrained ``dict``.",
+     "properties": {},
+     "title": "PolicyConfigurationData",
+     "type": "object"
+    },
+    "PolicyPointcutData": {
+     "additionalProperties": true,
+     "description": "Open-shape pointcut filter that scopes a policy to subset of requests.\n\nShape is defined by the resource-level policy template. ``extra='allow'``\nkeeps the envelope typed without pinning template-specific keys.",
+     "properties": {},
+     "title": "PolicyPointcutData",
+     "type": "object"
+    }
+   },
+   "properties": {
+    "organization_id": {
+     "title": "Organization Id",
+     "type": "string"
+    },
+    "environment_id": {
+     "title": "Environment Id",
+     "type": "string"
+    },
+    "api_instance_id": {
+     "title": "Api Instance Id",
+     "type": "string"
+    },
+    "configuration_data": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyConfigurationData"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "policy_template_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Policy Template Id"
+    },
+    "group_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Group Id"
+    },
+    "asset_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Asset Id"
+    },
+    "asset_version": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Asset Version"
+    },
+    "disabled": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Disabled"
+    },
+    "order": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Order"
+    },
+    "pointcut_data": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/PolicyPointcutData"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "label": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Label"
+    }
+   },
+   "required": [
+    "organization_id",
+    "environment_id",
+    "api_instance_id"
+   ],
+   "title": "check_policy_conformanceArguments",
+   "type": "object"
+  }
+ },
+ {
+  "name": "list_environments",
+  "title": "List Environments",
+  "description": "Use this tool to list the Anypoint environments in a business group, with each environment's type reliably resolved to sandbox / production / unknown (field `environmentType`). Read-only: it does NOT change the active-environment context (that is `select_active_environment`). Resolves the org from the session when `organization_id` is omitted. Use for prompts like 'list the environments in my sandbox business group', 'which environments does org X have?', 'do I have a production environment?'. Example: list_environments(organization_id=<organization_id>).",
+  "inputSchema": {
+   "properties": {
+    "organization_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Anypoint organization / business-group ID whose environments to list. Resolves from the active session when omitted.",
+     "title": "Organization Id"
+    }
+   },
+   "title": "list_environmentsArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "create_environment",
+  "title": "Create Environment",
+  "description": "Use this tool to create a new Anypoint **environment** (sandbox or production) in a business group. Write operation. `environment_type` must be 'sandbox' or 'production'. Resolves the org from the session when `organization_id` is omitted. Use for prompts like 'create a sandbox environment called QA', 'add a production environment to org X'. Example: create_environment(name=QA, environment_type=sandbox).",
+  "inputSchema": {
+   "properties": {
+    "name": {
+     "default": "",
+     "description": "Name for the new environment (alphanumeric, 2-65 characters).",
+     "title": "Name",
+     "type": "string"
+    },
+    "environment_type": {
+     "default": "sandbox",
+     "description": "Environment type: 'sandbox' or 'production'.",
+     "title": "Environment Type",
+     "type": "string"
+    },
+    "organization_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Anypoint organization / business-group ID to create the environment in. Resolves from the active session when omitted.",
+     "title": "Organization Id"
+    }
+   },
+   "title": "create_environmentArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": false,
+   "destructiveHint": false,
+   "idempotentHint": false,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "get_my_profile",
+  "title": "Get My Profile",
+  "description": "Use this tool to view the current user's own profile / personal settings. Read-only. Returns the caller's identity (username, email, name) and the business groups they belong to. Sensitive fields (phone, last-login, IdP linkage) and permission grants are deliberately omitted \u2014 this does NOT report roles or permissions. Use for prompts like 'show my profile', 'what's my email on file?', 'which business groups am I in?'. Example: get_my_profile().",
+  "inputSchema": {
+   "properties": {},
+   "title": "get_my_profileArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "list_apis",
+  "title": "List APIs",
+  "description": "List APIs from the MuleSoft Platform catalog for a given organization. Presents an interactive UI for browsing, filtering, and selecting APIs. Paginated: pass offset/limit; if the response has has_more=true, request the next page with the returned next_offset. To find a specific API by name or topic, prefer find_assets over paging through the whole list. If the user has not said whether public catalog assets should be included, ask them to clarify before searching, then pass include_public explicitly.",
+  "inputSchema": {
+   "properties": {
+    "organization_id": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Organization Id"
+    },
+    "api_category": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Api Category"
+    },
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "provider": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Provider"
+    },
+    "include_public": {
+     "default": true,
+     "description": "Whether to include MuleSoft public-catalog APIs alongside private organization assets. Ask the user to clarify this scope when their request does not specify it, then pass the choice explicitly.",
+     "title": "Include Public",
+     "type": "boolean"
+    },
+    "offset": {
+     "default": 0,
+     "title": "Offset",
+     "type": "integer"
+    },
+    "limit": {
+     "default": 50,
+     "title": "Limit",
+     "type": "integer"
+    }
+   },
+   "title": "list_apisArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "list_business_groups",
+  "title": "List Business Groups",
+  "description": "List available business groups, optionally filtering by name. Paginated: pass offset/limit; if the response has has_more=true, request the next page with the returned next_offset.",
+  "inputSchema": {
+   "properties": {
+    "name": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Name"
+    },
+    "offset": {
+     "default": 0,
+     "title": "Offset",
+     "type": "integer"
+    },
+    "limit": {
+     "default": 50,
+     "title": "Limit",
+     "type": "integer"
+    }
+   },
+   "title": "list_business_groupsArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ },
+ {
+  "name": "find_assets",
+  "title": "Find Assets",
+  "description": "\ud83d\udd0d Discover assets in your portfolio + the public catalog.\n\nUse this tool for any of:\n  \u2713 'find [thing]' / 'search for [thing]' / 'discover [thing]'\n  \u2713 'do you have [thing]?' / 'is there a [thing]?'\n  \u2713 'show me [thing]' / 'list [thing]' / 'what [things] exist?'\n  \u2713 Data catalog discovery ('show my data assets', 'find Informatica sources')\n  \u2713 '[type] for [capability]' (e.g. 'APIs for payments', 'agents for invoices')\n  \u2713 'similar to [thing]' / 'alternatives to [thing]'\n  \u2713 Resolving a user-supplied display name or slug to an asset id\n    before navigating or fetching detail.\n\nInternally runs the same lexical (literal slug / short query / id-token /\nprefix) discovery the catalog UI and cmd-k use, so results match what a\nuser sees on screen for the same words. One call covers literal pastes\n('pet-store-api'), partial names ('Pet Store'), and single tokens\n('store'). It does NOT do concept/synonym matching \u2014 a paraphrase that\nshares no words with the asset's name/description/tags may not match.\n\nSEARCH DISCIPLINE (prefer one natural-language call):\n  Lexical search already handles slug / hyphen / spacing variants, so a\n  phrase like 'batch processing agent' already matches \u2014 slugging\n  the same intent into 'batch-processing' or 'batch processing' and re-calling\n  rarely surfaces anything new. Aim for ~3 calls at most, with at least one\n  using ASSET_TYPE=\"\" (no filter). Empty results usually mean nothing matched;\n  slug/spacing rewrites of the same intent seldom help \u2014 though rephrasing for\n  a genuinely different angle (e.g. a broader or analytical query) is fine.\n\nReturns userOrgAssets (your portfolio) + publicOrgAssets (MuleSoft public\ncatalog), each ranked by relevance.\n\nUSER_QUERY parameter (always pass it):\n  The user's verbatim, untrimmed message. Used only to tell a single named\n  lookup ('the NTO Recommendations API' \u2192 collapse the card to that asset)\n  from a set/category ('all finance APIs', 'APIs similar to Stripe' \u2192 keep\n  the whole set). Never sent to the search backend; pass even when you also\n  trim QUERY down to the key search terms.\n\nASSET_TYPE parameter (optional):\n  Leave empty (\"\") to search ALL types (recommended for discovery).\n  Pass when the user clearly names ONE kind:\n    'api' / 'apis' \u2192 expands to 'rest-api', 'http-api', 'graphql', 'soap-api', 'grpc-api', 'evented-api' (EXCLUDES 'mcp', 'agent', 'llm', 'model', 'vector-database', 'gateway')\n    'mcp', 'agent', 'llm' for those kinds\n    'data' for Informatica/CDGC data assets and catalog sources\n\nAPPLIED POLICIES (INCLUDE_APPLIED_POLICIES + POLICY_NAME_FILTER):\n  Set INCLUDE_APPLIED_POLICIES=true to answer 'which of my APIs have / are\n  missing policy X?' in ONE call. Each of your portfolio results then also\n  carries the policies currently APPLIED to its managed instances (MuleSoft\n  and external Kong/Apigee/Azure). Pass POLICY_NAME_FILTER='rate-limiting'\n  (name or substring) to report the found/missing split directly \u2014 do NOT\n  loop view_api_instance_policies over every hit. For the apply flow key on\n  policyCoverage ('all'/'partial'/'none'/'unknown') + instancesMissingPolicy\n  (the instances still lacking it), NOT hasPolicy alone: hasPolicy is\n  any-instance, so a partially-protected API reads True and would be skipped.\n  Off by default; the fan-out is bounded (top matched APIs, production-first\n  instances) and the meta block says what was capped.\n\nDO NOT USE FOR:\n  \u2717 Performance metrics (use fetch_monitoring_*)\n  \u2717 Cost analysis (use fetch_cost_*)\n  \u2717 Governance findings / conformance reports (use fetch_governance_*) \u2014 but\n    for APPLIED policies across a set of APIs, use INCLUDE_APPLIED_POLICIES\n    above rather than calling view_api_instance_policies per asset.\n  \u2717 Applied policies for ONE already-known instance (use view_api_instance_policies)\n  \u2717 Already-selected asset details (use asset-specific tools)\n  \u2717 Typed catalog listings (use fetch_services)\n  \u2717 Catalog facets / aggregates (use fetch_service_facets)\n",
+  "inputSchema": {
+   "properties": {
+    "query": {
+     "title": "Query",
+     "type": "string"
+    },
+    "asset_type": {
+     "default": "",
+     "title": "Asset Type",
+     "type": "string"
+    },
+    "max_results": {
+     "default": 20,
+     "title": "Max Results",
+     "type": "integer"
+    },
+    "user_query": {
+     "default": "",
+     "title": "User Query",
+     "type": "string"
+    },
+    "for_policy_application": {
+     "default": false,
+     "title": "For Policy Application",
+     "type": "boolean"
+    },
+    "include_applied_policies": {
+     "default": false,
+     "title": "Include Applied Policies",
+     "type": "boolean"
+    },
+    "policy_name_filter": {
+     "default": "",
+     "title": "Policy Name Filter",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "title": "find_assetsArguments",
+   "type": "object"
+  },
+  "annotations": {
+   "readOnlyHint": true,
+   "openWorldHint": true
+  }
+ }
+]

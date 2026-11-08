@@ -63,6 +63,8 @@ import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.CodeBlocks;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Memory;
+import com.mulesoftforge.studio.ai.mcp.McpHub;
+import com.mulesoftforge.studio.ai.mcp.McpServers;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.Progress;
@@ -102,7 +104,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  *   java Harness test-connection [provider...]
  *   java Harness list-models [provider...]
- *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] "prompt"
+ *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
  *   java Harness check-tools
  *   java Harness check-mule
  *   java Harness check-project /path/to/mule-app [studio-workspace]
@@ -120,6 +122,9 @@ public class Harness {
   // --app-running run|debug: a fake Studio launcher that reports the project's app already running in that mode.
   private static String appRunning;
   private static boolean munitFails;
+  // --mcp-platform: the hosted MuleSoft Platform MCP server, signed in as mulesoft.username from
+  // .credentials/credentials.json. Approvals are printed and declined, so a live run never changes the account.
+  private static boolean mcpPlatform;
   private static final List<String> launcherCalls = new CopyOnWriteArrayList<>();
   private static final Path DEFAULT_WORKSPACE = Path.of(System.getProperty("user.home"),
       "AnypointStudio", "studio-workspace-728");
@@ -179,6 +184,7 @@ public class Harness {
             case "--then" -> then.add(args[++i]);
             case "--app-running" -> appRunning = args[++i];
             case "--munit-fails" -> munitFails = true;
+            case "--mcp-platform" -> mcpPlatform = true;
             case "--auto" -> {
               String[] pair = args[++i].split(",", 2);
               autoPair = new AutoRouter.Models(pair[0], pair[1]);
@@ -237,6 +243,7 @@ public class Harness {
       case "check-extend" -> ExtendChecks.run();
       case "check-gate" -> GateChecks.run();
       case "check-exchange" -> ExchangeChecks.run();
+      case "check-mcp" -> McpChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -374,6 +381,12 @@ public class Harness {
       }
 
       @Override
+      public boolean approve(String question, String detail) {
+        System.out.println("  · APPROVAL ASKED, declined by the harness: " + question);
+        return false;
+      }
+
+      @Override
       public boolean isCancelled() {
         return false;
       }
@@ -382,6 +395,11 @@ public class Harness {
     // As Studio loads them each turn: the built-in skills, ~/.mulesoftforge/studio-ai and the project's own.
     session.extensions(Extensions.load(projectDir, Set.of()));
     session.exchange(ExchangeSearch.live(() -> null));
+    if (mcpPlatform) {
+      ExchangeSearch.Login login = anypointLogin();
+      System.out.println("  MCP  mulesoft-platform, " + (login == null ? "NOT signed in" : "signed in"));
+      session.mcp(McpHub.live(McpServers.load(null, true), () -> login));
+    }
     if (appRunning != null) {
       session.appLauncher(runningLauncher(appRunning));
     }
@@ -437,6 +455,26 @@ public class Harness {
         System.out.println("APPLIED  " + change.path());
       }
     }
+  }
+
+  // An Anypoint access token from a username and password login, the kind Studio holds; null when it fails.
+  // Kept in memory only.
+  private static ExchangeSearch.Login anypointLogin() throws Exception {
+    Path file = Path.of("..", "..", ".credentials", "credentials.json");
+    if (!Files.isRegularFile(file)) {
+      return null;
+    }
+    JsonNode creds = new ObjectMapper().readTree(Files.readString(file)).path("mulesoft");
+    String host = creds.path("host").asText("anypoint.mulesoft.com").replaceFirst("^https?://", "")
+        .replaceAll("/+$", "");
+    String body = new ObjectMapper().writeValueAsString(Map.of("username", creds.path("username").asText(),
+        "password", creds.path("password").asText()));
+    HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
+        URI.create("https://" + host + "/accounts/login")).header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    String token = response.statusCode() == 200
+        ? new ObjectMapper().readTree(response.body()).path("access_token").asText(null) : null;
+    return token == null ? null : new ExchangeSearch.Login("https://" + host, token, null, null);
   }
 
   // search_files: grouped matches, filters, the cap, staged proposals, and secrets neither shown nor searchable.
@@ -3076,7 +3114,7 @@ public class Harness {
         Usage:
           java Harness test-connection [provider...]
           java Harness list-models [provider...]
-          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] "prompt"
+          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
           java Harness check-munit

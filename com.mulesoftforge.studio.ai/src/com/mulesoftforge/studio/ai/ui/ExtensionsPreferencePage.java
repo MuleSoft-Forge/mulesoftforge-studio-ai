@@ -17,6 +17,7 @@ import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.preference.PreferencePage;
 import org.eclipse.jface.resource.JFaceResources;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.BusyIndicator;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -43,9 +44,11 @@ import com.mulesoftforge.studio.ai.extend.Frontmatter;
 import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Prompts;
+import com.mulesoftforge.studio.ai.mcp.McpHub;
+import com.mulesoftforge.studio.ai.mcp.McpServers;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 
-// Preferences > MuleSoftForge Studio AI > Rules, Skills, Workflows and Hooks. Each kind has built-in, global
+// Preferences > MuleSoftForge Studio AI > Rules, Skills, Workflows, Hooks and MCP. Each kind has built-in, global
 // (~/.mulesoftforge/studio-ai) and project (.mulesoftforge) levels; every level may be empty. Turning a file on or
 // off writes disabled: true into its frontmatter, as Cline does, so the choice travels with the file.
 public class ExtensionsPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
@@ -54,6 +57,7 @@ public class ExtensionsPreferencePage extends PreferencePage implements IWorkben
 
   private Button fixChecks;
   private Button hooksEnabled;
+  private Button mcpPlatform;
   private EclipseProject project;
 
   @Override
@@ -105,7 +109,92 @@ public class ExtensionsPreferencePage extends PreferencePage implements IWorkben
         + " A PreToolUse hook can block a tool call, including use_skill. <a>Open hooks file</a>");
     hooksFile.setLayoutData(wide());
     hooksFile.addListener(SWT.Selection, e -> openHooksFile());
+
+    TabItem mcpTab = new TabItem(tabs, SWT.NONE);
+    mcpTab.setText("MCP servers");
+    Composite mcp = new Composite(tabs, SWT.NONE);
+    mcp.setLayout(new GridLayout(1, false));
+    mcpTab.setControl(mcp);
+    fillMcp(mcp);
     return body;
+  }
+
+  private void fillMcp(Composite mcp) {
+    wrapped(mcp, "The AI looks up the tools it needs with mcp_find_tools and calls them with mcp_call. Tools that"
+        + " only read run when the AI asks. Tools that change something run only in Agent mode, and Studio asks"
+        + " you to allow each call. Your hooks run around every call.");
+    mcpPlatform = new Button(mcp, SWT.CHECK);
+    mcpPlatform.setText("MuleSoft Platform (hosted by MuleSoft)");
+    mcpPlatform.setSelection(AiSettings.mcpPlatformEnabled());
+    GridData platformData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    platformData.verticalIndent = 8;
+    mcpPlatform.setLayoutData(platformData);
+    wrapped(mcp, "Your APIs and their instances, policies, governance, monitoring, environments, Exchange assets,"
+        + " agents and LLMs. It signs in with Studio's Anypoint login (Preferences > Anypoint Studio >"
+        + " Authentication) and follows its region. Nothing is installed: no Node.js, no local server.");
+    Link file = new Link(mcp, SWT.WRAP);
+    file.setText("Your own remote servers are read from " + mcpFile() + " (\"mcpServers\", as in Cline and"
+        + " Roo-Code; Streamable HTTP only). Write a token as ${env:NAME} to keep it out of the file."
+        + " <a>Open mcp.json</a>");
+    GridData fileData = wide();
+    fileData.verticalIndent = 8;
+    file.setLayoutData(fileData);
+    file.addListener(SWT.Selection, e -> openMcpFile());
+    Button test = new Button(mcp, SWT.PUSH);
+    test.setText("Test connections");
+    Label status = new Label(mcp, SWT.WRAP);
+    status.setLayoutData(wide());
+    status.setText(mcpSummary(McpServers.load(mcpFile(), AiSettings.mcpPlatformEnabled())));
+    test.addListener(SWT.Selection, e -> {
+      McpServers.Loaded loaded = McpServers.load(mcpFile(), mcpPlatform.getSelection());
+      String[] text = new String[1];
+      BusyIndicator.showWhile(getShell().getDisplay(), () -> text[0] = testMcp(loaded));
+      status.setText(text[0]);
+      mcp.layout(true, true);
+    });
+  }
+
+  private static Path mcpFile() {
+    return Extensions.userDir().resolve(McpServers.FILE);
+  }
+
+  private static String mcpSummary(McpServers.Loaded loaded) {
+    StringBuilder out = new StringBuilder(loaded.servers().isEmpty() ? "No MCP servers are on."
+        : "On: " + String.join(", ", loaded.servers().stream().map(McpServers.Server::name).toList()) + ".");
+    loaded.problems().forEach(p -> out.append("\n").append(p));
+    return out.toString();
+  }
+
+  private static String testMcp(McpServers.Loaded loaded) {
+    if (loaded.servers().isEmpty()) {
+      return mcpSummary(loaded);
+    }
+    McpHub.Listing listing = McpHub.live(loaded, StudioAnypoint::login).tools(null);
+    StringBuilder out = new StringBuilder();
+    for (McpServers.Server server : loaded.servers()) {
+      List<McpHub.Tool> tools = listing.tools().stream().filter(t -> t.server().equals(server.name())).toList();
+      if (!tools.isEmpty()) {
+        long changing = tools.stream().filter(McpHub.Tool::changes).count();
+        out.append(server.name()).append(": ").append(tools.size()).append(" tools (").append(changing)
+            .append(" change something and ask you first)\n");
+      }
+    }
+    listing.problems().forEach(p -> out.append(p).append('\n'));
+    loaded.problems().forEach(p -> out.append(p).append('\n'));
+    return out.toString().strip();
+  }
+
+  private void openMcpFile() {
+    Path file = mcpFile();
+    try {
+      if (!Files.exists(file)) {
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, McpServers.template());
+      }
+      open(file);
+    } catch (IOException e) {
+      setErrorMessage("Could not open " + file + ": " + Errors.describe(e));
+    }
   }
 
   @Override
@@ -113,6 +202,7 @@ public class ExtensionsPreferencePage extends PreferencePage implements IWorkben
     try {
       AiSettings.saveFixChecksBeforeFinishing(fixChecks.getSelection());
       AiSettings.saveHooksEnabled(hooksEnabled.getSelection());
+      AiSettings.saveMcpPlatformEnabled(mcpPlatform.getSelection());
       return true;
     } catch (Exception e) {
       setErrorMessage("Could not save: " + Errors.describe(e));
@@ -124,6 +214,7 @@ public class ExtensionsPreferencePage extends PreferencePage implements IWorkben
   protected void performDefaults() {
     fixChecks.setSelection(true);
     hooksEnabled.setSelection(false);
+    mcpPlatform.setSelection(false);
     super.performDefaults();
   }
 

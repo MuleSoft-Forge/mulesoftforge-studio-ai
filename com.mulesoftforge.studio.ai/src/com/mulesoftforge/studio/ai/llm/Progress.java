@@ -50,6 +50,12 @@ public interface Progress {
   // Latest task list from update_todo_list; empty clears it. Called on the worker thread.
   default void todos(List<TodoItem> items) {}
 
+  // Asks the user to allow one call that changes something outside the project, and waits for the answer. Without
+  // anyone to ask, the answer is no.
+  default boolean approve(String question, String detail) {
+    return false;
+  }
+
   boolean isCancelled();
 
   default void checkCancelled() {

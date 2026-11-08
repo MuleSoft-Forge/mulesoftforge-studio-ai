@@ -249,7 +249,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
     Link extensions = new Link(group, SWT.WRAP);
     extensions.setText("Hooks, rule files, skills, workflows and the correctness checks are on the"
-        + " <a>Rules, Skills, Workflows and Hooks</a> page.");
+        + " <a>Rules, Skills, Workflows, Hooks and MCP</a> page.");
     GridData extensionsData = span(2);
     extensionsData.widthHint = 420;
     extensions.setLayoutData(extensionsData);

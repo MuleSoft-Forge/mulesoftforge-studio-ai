@@ -52,6 +52,7 @@ public final class AiSettings {
   private static final String HOOKS_ENABLED = "hooks.enabled";
   private static final String BUILT_INS_DISABLED = "extensions.builtInsDisabled";
   private static final String FIX_CHECKS_DISABLED = "chat.fixChecksDisabled";
+  private static final String MCP_PLATFORM = "mcp.platformEnabled";
   private static final String GITHUB_LOGIN = "github.login";
   private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
@@ -208,6 +209,17 @@ public final class AiSettings {
   public static void saveHooksEnabled(boolean hooks) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(HOOKS_ENABLED, hooks);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // The hosted MuleSoft Platform MCP server, signed in with Studio's Anypoint login; off until turned on.
+  public static boolean mcpPlatformEnabled() {
+    return store().getBoolean(MCP_PLATFORM);
+  }
+
+  public static void saveMcpPlatformEnabled(boolean on) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(MCP_PLATFORM, on);
     ((ScopedPreferenceStore) prefs).save();
   }
 

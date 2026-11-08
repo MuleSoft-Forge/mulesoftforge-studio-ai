@@ -18,7 +18,7 @@
         class="com.mulesoftforge.studio.ai.ui.AiPreferencePage"/>
     <page
         id="com.mulesoftforge.studio.ai.prefs.extensions"
-        name="Rules, Skills, Workflows and Hooks"
+        name="Rules, Skills, Workflows, Hooks and MCP"
         category="com.mulesoftforge.studio.ai.prefs"
         class="com.mulesoftforge.studio.ai.ui.ExtensionsPreferencePage"/>
   </extension>

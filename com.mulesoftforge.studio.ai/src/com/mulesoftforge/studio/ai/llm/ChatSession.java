@@ -40,6 +40,8 @@ import com.mulesoftforge.studio.ai.extend.Extensions;
 import com.mulesoftforge.studio.ai.extend.SkillTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.hooks.Hooks;
+import com.mulesoftforge.studio.ai.mcp.McpHub;
+import com.mulesoftforge.studio.ai.mcp.McpTools;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.launch.AppLauncher;
@@ -178,6 +180,18 @@ public class ChatSession {
       if (exchangeSearches > 0) {
         parts.add("searched Exchange for connectors " + (exchangeSearches == 1 ? "once" : exchangeSearches + " times"));
       }
+      int found = toolCounts.getOrDefault(McpTools.FIND, 0);
+      if (found > 0) {
+        parts.add("looked up MCP tools " + (found == 1 ? "once" : found + " times"));
+      }
+      int mcpCalls = toolCounts.getOrDefault(McpTools.CALL, 0);
+      if (mcpCalls > 0) {
+        parts.add("called MCP tools " + (mcpCalls == 1 ? "once" : mcpCalls + " times"));
+      }
+      int declined = toolCounts.getOrDefault(McpTools.DECLINED, 0);
+      if (declined > 0) {
+        parts.add("you declined " + plural(declined, "MCP change"));
+      }
       int skills = toolCounts.getOrDefault(SkillTools.USE, 0);
       if (skills > 0) {
         parts.add("loaded skills " + (skills == 1 ? "once" : skills + " times"));
@@ -298,6 +312,7 @@ public class ChatSession {
   private volatile Hooks hooks = Hooks.NONE;
   private volatile Extensions extensions = Extensions.NONE;
   private volatile ExchangeSearch exchange;
+  private volatile McpHub mcp;
   private volatile boolean fixChecks = true;
   private final String sessionId = UUID.randomUUID().toString();
   private volatile String instructions = "";
@@ -330,6 +345,11 @@ public class ChatSession {
   // Anypoint Exchange, so the model can find the connector for a system with search_connectors; null without.
   public void exchange(ExchangeSearch search) {
     exchange = search;
+  }
+
+  // The user's MCP servers, offered as mcp_find_tools and mcp_call; null or empty offers neither.
+  public void mcp(McpHub hub) {
+    mcp = hub;
   }
 
   // On: a turn that proposed changes is not finished while the project checks fail on them; the model is sent the
@@ -653,6 +673,12 @@ public class ChatSession {
     if (skillTools != null) {
       specifications.add(SkillTools.SPECIFICATION);
     }
+    McpHub hub = mcp;
+    // Offered in every mode, like the edit tools; Ask, Plan and Diagnose refuse the tools that change something.
+    McpTools mcpTools = hub == null || hub.isEmpty() ? null : new McpTools(hub, secrets, mode, progress);
+    if (mcpTools != null) {
+      specifications.addAll(mcpTools.specifications());
+    }
     // Tool calls and results go back only to a request that offers tools; without, history is text only.
     boolean withTools = !specifications.isEmpty();
     List<CallUsage> calls = new ArrayList<>();
@@ -801,10 +827,12 @@ public class ChatSession {
         boolean munitCall = MunitTools.handles(call.name());
         boolean skillCall = SkillTools.handles(call.name());
         boolean exchangeCall = ExchangeTools.handles(call.name());
+        boolean mcpCall = McpTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
             : httpCall ? HttpTools.describe(call) : launchCall ? LaunchTools.describe(call)
             : munitCall ? MunitTools.describe(call) : skillCall ? SkillTools.describe(call)
-            : exchangeCall ? ExchangeTools.describe(call) : ProjectTools.describe(call));
+            : exchangeCall ? ExchangeTools.describe(call) : mcpCall ? McpTools.describe(call)
+            : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         boolean editCall = ProjectTools.isEdit(call.name());
@@ -824,10 +852,11 @@ public class ChatSession {
             : munitCall && munitTools != null ? munitTools.execute(call)
             : skillCall && skillTools != null ? skillTools.execute(call)
             : exchangeCall && exchangeTools != null ? secrets.mask(null, exchangeTools.execute(call)).text()
+            : mcpCall && mcpTools != null ? mcpTools.execute(call)
             : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot run or"
                 + " stop the app or run tests. Agent or Diagnose mode can.")
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall && !skillCall
-                && !exchangeCall ? tools.execute(call)
+                && !exchangeCall && !mcpCall ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         if (runs && blocked == null) {
           result = postToolUse(userHooks, call, result, hookDir, progress);
@@ -838,6 +867,7 @@ public class ChatSession {
         // A refused call did nothing, so it counts as what stopped it rather than as a call that failed.
         String countedAs = blocked != null ? HOOK_BLOCKED
             : result.startsWith(ChatMode.REFUSED) ? MODE_REFUSED
+            : result.equals(McpTools.DECLINED_RESULT) ? McpTools.DECLINED
             : result.startsWith(REPEATED_START) ? REPEATED : call.name();
         toolCounts.merge(countedAs, 1, Integer::sum);
         int hidden = secrets.total() - before;
