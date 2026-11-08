@@ -37,6 +37,8 @@ import org.eclipse.ui.model.WorkbenchLabelProvider;
 
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.edit.ProjectPaths;
+import com.mulesoftforge.studio.ai.extend.Extension;
+import com.mulesoftforge.studio.ai.extend.Extensions;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
 import com.mulesoftforge.studio.ai.llm.Errors;
@@ -626,8 +628,32 @@ public final class Composer {
       item.setEnabled(!Consoles.isEmpty(console));
       item.addListener(SWT.Selection, e -> attach(Consoles.attach(console)));
     }
+
+    new MenuItem(menu, SWT.SEPARATOR);
+    slashMenu(menu, project);
     menu.setLocation(where);
     menu.setVisible(true);
+  }
+
+  // Workflows and skills by name; picking one starts the message with /name, which the session expands.
+  private void slashMenu(Menu menu, EclipseProject project) {
+    Extensions loaded = Extensions.load(project == null ? null : project.location(), AiSettings.disabledBuiltIns());
+    List<Extension> items = new ArrayList<>(loaded.enabled(Extension.Kind.WORKFLOW));
+    items.addAll(loaded.enabled(Extension.Kind.SKILL));
+    MenuItem cascade = new MenuItem(menu, SWT.CASCADE);
+    cascade.setText(items.isEmpty() ? "Workflow or skill (none yet)" : "Workflow or skill");
+    cascade.setEnabled(!items.isEmpty());
+    Menu sub = new Menu(cascade);
+    cascade.setMenu(sub);
+    for (Extension item : items) {
+      MenuItem entry = new MenuItem(sub, SWT.PUSH);
+      entry.setText(("/" + item.name() + "  (" + item.source().label + " " + item.kind().noun + ")").replace("&", "&&"));
+      entry.addListener(SWT.Selection, e -> {
+        String current = ui.text().replaceFirst("^/\\S+\\s*", "");
+        ui.setText("/" + item.name() + " " + current);
+        ui.focus();
+      });
+    }
   }
 
   private void pickResources() {

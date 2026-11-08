@@ -106,6 +106,7 @@ public class ChatView extends ViewPart {
   private static final String IGNORE = "ignore:";
   private static final String OPEN_MEMORY = "open-memory";
   private static final String OPEN_AGENTS = "open-agents";
+  private static final String OPEN_EXTENSIONS = "open-extensions";
   private static final String ASK = "ask:";
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
@@ -576,6 +577,9 @@ public class ChatView extends ViewPart {
         openMemoryFile();
       } else if (OPEN_AGENTS.equals(id)) {
         openAgentsFile();
+      } else if (OPEN_EXTENSIONS.equals(id)) {
+        PreferencesUtil.createPreferenceDialogOn(getSite().getShell(), ExtensionsPreferencePage.ID, null, null)
+            .open();
       } else if (id.startsWith(DATAWEAVE_DIFF)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_DIFF.length()));
         if (proposal != null) {
@@ -950,10 +954,12 @@ public class ChatView extends ViewPart {
               appendMarkdown("AI", result.text());
               appendStep("Done in " + seconds + " s · " + result.activity() + spent);
               if (!result.problems().isEmpty()) {
-                append("Note", "The project checks still find problems in these proposals. Look at them before you"
-                    + " accept, or ask the AI to fix them:\n" + MuleChecks.describe(result.problems()));
+                int failing = result.problems().size();
+                append("Note", "Checks still fail (" + failing + (failing == 1 ? " problem" : " problems") + ")."
+                    + " Accepting these files asks you to confirm first. Ask the AI to fix them, or look at"
+                    + " them yourself:\n" + MuleChecks.describe(result.problems()));
               }
-              changes.add(project, result.changes().all());
+              changes.add(project, result.changes().all(), result.problems());
               int drafted = result.changes().all().size();
               if (drafted > 0) {
                 appendStep("Drafted changes to " + drafted + (drafted == 1 ? " file" : " files")
@@ -1386,6 +1392,9 @@ public class ChatView extends ViewPart {
       }
       if (text.contains(Prompts.AGENTS_FILE)) {
         transcript.action("Open " + Prompts.AGENTS_FILE, OPEN_AGENTS);
+      }
+      if (text.contains(" rule file") || text.contains(" skill")) {
+        transcript.action("Rules and skills", OPEN_EXTENSIONS);
       }
     }
   }

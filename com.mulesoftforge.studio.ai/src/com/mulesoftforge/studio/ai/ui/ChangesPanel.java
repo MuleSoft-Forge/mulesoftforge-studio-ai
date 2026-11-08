@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.compare.CompareUI;
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -18,6 +19,8 @@ import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.ui.IWorkbenchPage;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.check.MuleChecks;
+import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.render.ChangesPage;
@@ -35,7 +38,8 @@ final class ChangesPanel {
     void resolved();
   }
 
-  private record Pending(EclipseProject project, FileChange change) {}
+  // failing: what the project checks still reported on this file when the turn ended.
+  private record Pending(EclipseProject project, FileChange change, List<Problem> failing) {}
 
   private final Composite root;
   private final IWorkbenchPage page;
@@ -127,7 +131,7 @@ final class ChangesPanel {
     refresh();
   }
 
-  void add(EclipseProject project, List<FileChange> changes) {
+  void add(EclipseProject project, List<FileChange> changes, List<Problem> failing) {
     if (changes.isEmpty()) {
       return;
     }
@@ -135,7 +139,8 @@ final class ChangesPanel {
     for (FileChange change : changes) {
       // A newer proposal for the same file replaces the older, unreviewed one.
       pending.removeIf(p -> p.project().name().equals(project.name()) && p.change().path().equals(change.path()));
-      pending.add(new Pending(project, change));
+      pending.add(new Pending(project, change,
+          failing.stream().filter(problem -> problem.path().equals(change.path())).toList()));
       text.append("\n  ").append(change.summary());
     }
     listener.note("Proposed", changes.size() + " file(s), review below:" + text);
@@ -186,6 +191,13 @@ final class ChangesPanel {
       listener.note("Review", String.join("\n", done));
       refresh();
       listener.resolved();
+      return;
+    }
+
+    List<Problem> failing = chosen.stream().flatMap(p -> p.failing().stream()).toList();
+    if (!failing.isEmpty() && !MessageDialog.openQuestion(root.getShell(), "Checks still fail",
+        "The project checks still fail on what you are accepting:\n\n" + MuleChecks.describe(failing)
+            + "\nAccept anyway? You can also reject it, or ask the AI to fix these first.")) {
       return;
     }
 

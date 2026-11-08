@@ -19,6 +19,7 @@ import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.check.MunitSchemas;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
+import com.mulesoftforge.studio.ai.extend.Extensions;
 import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.llm.Attachment;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
@@ -140,6 +141,8 @@ public final class ChatJob extends Job {
           ResourcesPlugin.getWorkspace().getRoot().getLocation().toFile().toPath()));
       session.dataWeave(DataWeaveCli.lookup(AiSettings.dataWeaveCli(), false).cli());
       session.hooks(hooks(progress));
+      session.extensions(Extensions.load(project == null ? null : project.location(), AiSettings.disabledBuiltIns()));
+      session.fixChecksBeforeFinishing(AiSettings.fixChecksBeforeFinishing());
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);
     } catch (CancellationException e) {
       cancelled = true;

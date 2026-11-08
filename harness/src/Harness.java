@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Stream;
 
@@ -35,6 +36,7 @@ import com.mulesoftforge.studio.ai.connector.ConnectorCatalog;
 import com.mulesoftforge.studio.ai.edit.AttachmentReader;
 import com.mulesoftforge.studio.ai.edit.ChangeOffer;
 import com.mulesoftforge.studio.ai.edit.ChangeSet;
+import com.mulesoftforge.studio.ai.extend.Extensions;
 import com.mulesoftforge.studio.ai.edit.FileChange;
 import com.mulesoftforge.studio.ai.edit.LineDiff;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
@@ -231,6 +233,8 @@ public class Harness {
       case "check-cache" -> CacheChecks.run();
       case "check-hooks" -> HookChecks.run();
       case "check-fun" -> FunChecks.run();
+      case "check-extend" -> ExtendChecks.run();
+      case "check-gate" -> GateChecks.run();
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -373,6 +377,8 @@ public class Harness {
       }
     };
     ChatSession session = new ChatSession();
+    // As Studio loads them each turn: the built-in skills, ~/.mulesoftforge/studio-ai and the project's own.
+    session.extensions(Extensions.load(projectDir, Set.of()));
     if (appRunning != null) {
       session.appLauncher(runningLauncher(appRunning));
     }

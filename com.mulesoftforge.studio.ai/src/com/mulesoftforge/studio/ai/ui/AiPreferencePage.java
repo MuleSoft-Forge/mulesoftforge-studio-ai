@@ -34,9 +34,9 @@ import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchPreferencePage;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.ide.IDE;
+import org.eclipse.ui.preferences.IWorkbenchPreferenceContainer;
 
 import com.mulesoftforge.studio.ai.Activator;
-import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
@@ -82,7 +82,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button alertWhenDone;
   private Button alertSound;
   private Combo loadingPhrases;
-  private Button hooksEnabled;
   private DataWeaveCliGroup dataWeaveCli;
   private Text instructions;
   private Text docsHosts;
@@ -224,7 +223,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   private void createAlertsGroup(Composite body) {
     Group group = new Group(body, SWT.NONE);
-    group.setText("Alerts, loading phrases and hooks");
+    group.setText("Alerts and loading phrases");
     group.setLayout(new GridLayout(2, false));
     GridData groupData = new GridData(SWT.FILL, SWT.TOP, true, false);
     groupData.horizontalSpan = 2;
@@ -248,40 +247,23 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     }
     loadingPhrases.select(AiSettings.loadingPhrases().ordinal());
 
-    hooksEnabled = new Button(group, SWT.CHECK);
-    hooksEnabled.setText("Run my hooks: commands for UserPromptSubmit, PreToolUse, PostToolUse, Stop and"
-        + " Notification");
-    hooksEnabled.setSelection(AiSettings.hooksEnabled());
-    hooksEnabled.setLayoutData(span(2));
-    Link hooksFile = new Link(group, SWT.WRAP);
-    hooksFile.setText("Read from " + Hooks.userFile() + ", in the format Codex and Copilot use for hooks.json."
-        + " They run on your machine with your permissions, and see what the model sees, secrets masked."
-        + " A PreToolUse hook can block a tool call. <a>Open hooks file</a>");
-    GridData hooksData = span(2);
-    hooksData.widthHint = 420;
-    hooksFile.setLayoutData(hooksData);
-    hooksFile.addListener(SWT.Selection, e -> openHooksFile());
+    Link extensions = new Link(group, SWT.WRAP);
+    extensions.setText("Hooks, rule files, skills, workflows and the correctness checks are on the"
+        + " <a>Rules, Skills, Workflows and Hooks</a> page.");
+    GridData extensionsData = span(2);
+    extensionsData.widthHint = 420;
+    extensions.setLayoutData(extensionsData);
+    extensions.addListener(SWT.Selection, e -> {
+      if (getContainer() instanceof IWorkbenchPreferenceContainer container) {
+        container.openPage(ExtensionsPreferencePage.ID, null);
+      }
+    });
   }
 
   private static GridData span(int columns) {
     GridData data = new GridData(SWT.FILL, SWT.TOP, true, false);
     data.horizontalSpan = columns;
     return data;
-  }
-
-  // Creates the file with every event empty and two examples when it does not exist yet.
-  private void openHooksFile() {
-    Path file = Hooks.userFile();
-    try {
-      if (!Files.exists(file)) {
-        Files.createDirectories(file.getParent());
-        Files.writeString(file, Hooks.template());
-      }
-      IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
-      IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(file.toUri()));
-    } catch (Exception e) {
-      setErrorMessage("Could not open " + file + ": " + Errors.describe(e));
-    }
   }
 
   private void openMemoryFile() {
@@ -583,7 +565,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveMaskPersonalData(maskPersonal.getSelection());
       int phrases = loadingPhrases.getSelectionIndex();
       AiSettings.saveChatExtras(LoadingPhrases.Mode.values()[Math.max(0, phrases)], alertWhenDone.getSelection(),
-          alertSound.getSelection(), hooksEnabled.getSelection());
+          alertSound.getSelection());
       AiSettings.saveDataWeaveCli(dataWeaveCli.path());
       AiSettings.saveInstructions(instructions.getText());
       try {

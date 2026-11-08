@@ -20,6 +20,7 @@ import java.util.regex.Pattern;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mulesoftforge.studio.ai.check.MuleChecks;
 import com.mulesoftforge.studio.ai.check.Problem;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveCli;
 import com.mulesoftforge.studio.ai.dataweave.DataWeaveTools;
@@ -32,6 +33,9 @@ import com.mulesoftforge.studio.ai.edit.FollowUpAsk;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.edit.TodoItem;
+import com.mulesoftforge.studio.ai.extend.Extension;
+import com.mulesoftforge.studio.ai.extend.Extensions;
+import com.mulesoftforge.studio.ai.extend.SkillTools;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.hooks.Hooks;
 import com.mulesoftforge.studio.ai.http.AppConsole;
@@ -70,6 +74,14 @@ public class ChatSession {
   static final String CLAIM_NUDGE = "You said you proposed changes, but you called no edit tool, so nothing was"
       + " proposed and the user has nothing to accept. Propose them now with edit_file or write_file, then finish"
       + " with a short answer that matches what you proposed.";
+  // Sent when the model finishes while the project checks still fail on what it proposed this turn; at most
+  // MAX_CHECK_NUDGES times, then the user sees the problems with the answer.
+  static final String CHECKS_NUDGE = "Before you finish: the project checks still fail on the changes you proposed"
+      + " this turn:\n%s\nFix these in the proposed files with edit_file or write_file, then answer again. If one"
+      + " cannot be fixed from here, such as a connector the project does not depend on yet or a value only the"
+      + " user knows, say so in your answer and what the user must do.";
+  static final int MAX_CHECK_NUDGES = 2;
+  public static final String CHECKS_SENT_BACK = "(checks sent back)";
   // A reply that reached the output limit was cut off, so its tool calls lost their arguments: they are not run,
   // and the model is told why instead of getting "missing argument", which it answers by resending the same call.
   static final String CUT_OFF_CALL = "ERROR: not run. Your response reached the output limit and was cut off, so"
@@ -159,6 +171,14 @@ public class ChatSession {
       }
       if (toolCounts.getOrDefault("check_project", 0) > 0) {
         parts.add("ran the project checks");
+      }
+      int skills = toolCounts.getOrDefault(SkillTools.USE, 0);
+      if (skills > 0) {
+        parts.add("loaded skills " + (skills == 1 ? "once" : skills + " times"));
+      }
+      int sentBack = toolCounts.getOrDefault(CHECKS_SENT_BACK, 0);
+      if (sentBack > 0) {
+        parts.add("sent failing checks back to the AI " + (sentBack == 1 ? "once" : sentBack + " times"));
       }
       int evaluated = toolCounts.getOrDefault(DebugTools.EVALUATE, 0);
       if (evaluated > 0) {
@@ -270,6 +290,8 @@ public class ChatSession {
   private volatile AppLauncher appLauncher;
   private volatile MunitRunner munitRunner;
   private volatile Hooks hooks = Hooks.NONE;
+  private volatile Extensions extensions = Extensions.NONE;
+  private volatile boolean fixChecks = true;
   private final String sessionId = UUID.randomUUID().toString();
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
@@ -291,6 +313,17 @@ public class ChatSession {
   // The user's hooks for the next turns; Hooks.NONE runs nothing.
   public void hooks(Hooks userHooks) {
     hooks = userHooks == null ? Hooks.NONE : userHooks;
+  }
+
+  // The rules, skills and workflows for the next turns; Extensions.NONE has none.
+  public void extensions(Extensions loaded) {
+    extensions = loaded == null ? Extensions.NONE : loaded;
+  }
+
+  // On: a turn that proposed changes is not finished while the project checks fail on them; the model is sent the
+  // problems up to MAX_CHECK_NUDGES times.
+  public void fixChecksBeforeFinishing(boolean on) {
+    fixChecks = on;
   }
 
   // Passed to hooks as session_id, so a hook can tell chats apart.
@@ -379,6 +412,12 @@ public class ChatSession {
   // The step shown on the first message, or null when there are no instructions to follow.
   public static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp,
       Prompts.Capped fromMemory, int hidden) {
+    return following(fromProject, fromUser, fromHttp, fromMemory, null, hidden);
+  }
+
+  // extensions is Extensions.summary(), e.g. "2 rule files (team, naming) and 3 skills", or null.
+  public static String following(Prompts.Capped fromProject, Prompts.Capped fromUser, Prompts.Capped fromHttp,
+      Prompts.Capped fromMemory, String extensions, int hidden) {
     List<String> parts = new ArrayList<>();
     if (!fromProject.isEmpty()) {
       parts.add(Prompts.AGENTS_FILE + " (" + size(fromProject) + ")");
@@ -391,6 +430,9 @@ public class ChatSession {
     }
     if (fromHttp != null && !fromHttp.isEmpty()) {
       parts.add("HTTP and docs instructions (" + size(fromHttp) + ")");
+    }
+    if (extensions != null && !extensions.isBlank()) {
+      parts.add(extensions);
     }
     if (parts.isEmpty()) {
       return null;
@@ -440,9 +482,17 @@ public class ChatSession {
     // Free text like Preferences instructions: .md is not a config extension, so path must be null for
     // key=value lines to be masked.
     SecretMask.Masked memoryText = secrets.mask(null, Memory.read());
+    Extensions ext = extensions;
+    SecretMask.Masked rulesText = secrets.mask(null, ext.rulesText());
+    String skillsCatalog = secrets.mask(null, ext.skillsCatalog()).text();
     int maskedBefore = secrets.total();
     int personalBefore = personal.total();
     PersonalData personalMask = maskPersonal ? personal : null;
+    Extensions.Expanded expanded = ext.expand(prompt);
+    if (expanded != null) {
+      progress.step(expanded.step());
+      prompt = expanded.prompt();
+    }
     prompt = secrets.mask(null, prompt).text();
     Hooks userHooks = hooks;
     Path hookDir = project == null ? null : project.location();
@@ -530,9 +580,10 @@ public class ChatSession {
     Prompts.Capped fromUser = Prompts.capped(userText.text());
     Prompts.Capped fromHttp = httpTools == null ? new Prompts.Capped("", 0, false) : Prompts.capped(httpText.text());
     Prompts.Capped fromMemory = Prompts.capped(memoryText.text());
+    Prompts.Capped fromRules = Prompts.capped(rulesText.text(), Prompts.MAX_RULES);
     Prompts.SystemParts built = Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
         fromUser.text(), fromMemory.text(), debugTools != null, dataWeaveTools != null, httpTools != null, false, false,
-        fromHttp.text());
+        fromHttp.text(), fromRules.text(), skillsCatalog);
     String from = switchedFrom;
     switchedFrom = null;
     ChatMode previousMode = lastMode;
@@ -541,10 +592,14 @@ public class ChatSession {
     Prompts.SystemParts system = withNotes(built, changed);
 
     if (history.isEmpty()) {
-      String following = following(fromProject, fromUser, fromHttp, fromMemory,
-          projectText.count() + userText.count() + httpText.count() + memoryText.count());
+      String following = following(fromProject, fromUser, fromHttp, fromMemory, ext.summary(),
+          projectText.count() + userText.count() + httpText.count() + memoryText.count() + rulesText.count());
       if (following != null) {
         progress.step(following);
+      }
+      if (fromRules.cut()) {
+        progress.step(String.format(Locale.ROOT, "Your rule files hold %,d characters; only the first %,d are sent",
+            fromRules.chars(), Prompts.MAX_RULES));
       }
     }
 
@@ -577,6 +632,10 @@ public class ChatSession {
     if (project != null && tester != null) {
       specifications.addAll(MunitTools.SPECIFICATIONS);
     }
+    SkillTools skillTools = ext.enabled(Extension.Kind.SKILL).isEmpty() ? null : new SkillTools(ext, secrets);
+    if (skillTools != null) {
+      specifications.add(SkillTools.SPECIFICATION);
+    }
     // Tool calls and results go back only to a request that offers tools; without, history is text only.
     boolean withTools = !specifications.isEmpty();
     List<CallUsage> calls = new ArrayList<>();
@@ -600,6 +659,7 @@ public class ChatSession {
     // Models often write the whole answer in the message that calls offer_changes, then only a closing line.
     String offeredWith = null;
     boolean claimNudged = false;
+    int checkNudges = 0;
     int cutOffs = 0;
     boolean overflowCompacted = false;
     // Edits that failed this turn, by tool and exact arguments, so an identical retry is refused, not re-run.
@@ -693,6 +753,18 @@ public class ChatSession {
           turn.add(UserMessage.from(CLAIM_NUDGE));
           continue;
         }
+        List<Problem> failing = fixChecks && mode.canEdit && tools != null && !changes.isEmpty()
+            && checkNudges < MAX_CHECK_NUDGES ? tools.problemsIntroduced() : List.of();
+        if (!failing.isEmpty()) {
+          checkNudges++;
+          toolCounts.merge(CHECKS_SENT_BACK, 1, Integer::sum);
+          answer = null;
+          progress.step("The project checks still fail on the proposals (" + failing.size()
+              + (failing.size() == 1 ? " problem" : " problems") + "); asking the AI to fix them before it"
+              + " finishes…");
+          turn.add(UserMessage.from(CHECKS_NUDGE.formatted(secrets.mask(null, MuleChecks.describe(failing)).text())));
+          continue;
+        }
         break;
       }
       if (reply.text() != null && !reply.text().isBlank() && reply.toolExecutionRequests().stream()
@@ -710,9 +782,11 @@ public class ChatSession {
         boolean httpCall = HttpTools.handles(call.name());
         boolean launchCall = LaunchTools.handles(call.name());
         boolean munitCall = MunitTools.handles(call.name());
+        boolean skillCall = SkillTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
             : httpCall ? HttpTools.describe(call) : launchCall ? LaunchTools.describe(call)
-            : munitCall ? MunitTools.describe(call) : ProjectTools.describe(call));
+            : munitCall ? MunitTools.describe(call) : skillCall ? SkillTools.describe(call)
+            : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         boolean editCall = ProjectTools.isEdit(call.name());
@@ -730,9 +804,10 @@ public class ChatSession {
             : httpCall && httpTools != null ? httpTools.execute(call)
             : launchCall && launchTools != null ? launchTools.execute(call)
             : munitCall && munitTools != null ? munitTools.execute(call)
+            : skillCall && skillTools != null ? skillTools.execute(call)
             : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot run or"
                 + " stop the app or run tests. Agent or Diagnose mode can.")
-            : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall
+            : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall && !skillCall
                 ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         if (runs && blocked == null) {
@@ -760,7 +835,7 @@ public class ChatSession {
         specifications.addAll(DebugTools.SPECIFICATIONS);
         system = withNotes(Prompts.systemParts(mode, project == null ? null : project.name(), fromProject.text(),
             fromUser.text(), fromMemory.text(), true, dataWeaveTools != null, httpTools != null, false, false,
-            fromHttp.text()), changed);
+            fromHttp.text(), fromRules.text(), skillsCatalog), changed);
         turn.set(0, current(system, text, images));
         progress.step("Studio's debugger stopped during the call; the AI can now look at the event");
       }

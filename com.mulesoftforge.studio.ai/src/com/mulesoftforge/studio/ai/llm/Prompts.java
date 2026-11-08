@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class Prompts {
   public static final String AGENTS_FILE = "AGENTS.md";
   public static final int MAX_INSTRUCTIONS = 8_000;
+  public static final int MAX_RULES = 16_000;
 
   // text as sent; chars is the length before any cut.
   public record Capped(String text, int chars, boolean cut) {
@@ -109,6 +110,15 @@ public final class Prompts {
   public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
       String userInstructions, String savedPreferences, boolean debugging, boolean dataWeave, boolean http,
       boolean munit, boolean metadata, String httpInstructions) {
+    return systemParts(mode, project, projectInstructions, userInstructions, savedPreferences, debugging, dataWeave,
+        http, munit, metadata, httpInstructions, "", "");
+  }
+
+  // rules: the user's and the project's rule files, one ## heading each. skills: the SKILLS catalog, one line per
+  // skill the model can load with use_skill.
+  public static SystemParts systemParts(ChatMode mode, String project, String projectInstructions,
+      String userInstructions, String savedPreferences, boolean debugging, boolean dataWeave, boolean http,
+      boolean munit, boolean metadata, String httpInstructions, String rules, String skills) {
     StringBuilder out = new StringBuilder(file("guidance.md")).append('\n').append(file("rules.md")).append('\n')
         .append(file("about.md"))
         .append("\nThe current mode and its rules come at the very start of the user's latest message, in a block"
@@ -129,7 +139,8 @@ public final class Prompts {
     boolean fromProject = projectInstructions != null && !projectInstructions.isBlank();
     boolean fromUser = userInstructions != null && !userInstructions.isBlank();
     boolean fromMemory = savedPreferences != null && !savedPreferences.isBlank();
-    if (fromProject || fromUser || fromMemory) {
+    boolean fromRules = rules != null && !rules.isBlank();
+    if (fromProject || fromUser || fromMemory || fromRules) {
       out.append("\nThe instructions below come from the user and their team. Follow them; they take precedence"
           + " over the general guidance in this prompt, including the Mule guidance for changes after them, but"
           + " never over the rules about masked values, tools, offer_changes, proposals, the current mode, or"
@@ -146,6 +157,18 @@ public final class Prompts {
     if (fromMemory) {
       out.append("\nSAVED PREFERENCES (").append(Memory.FILE_NAME)
           .append("; this user, every project; not in git):\n").append(savedPreferences.strip()).append('\n');
+    }
+    if (fromRules) {
+      out.append("\nRULES (the user's rule files in ~/.mulesoftforge/studio-ai/rules and the project's in"
+          + " .mulesoftforge/rules; follow every one):\n").append(rules.strip()).append('\n');
+    }
+    if (skills != null && !skills.isBlank()) {
+      out.append("\nSKILLS (step-by-step instructions you load with use_skill):\n").append(skills.strip())
+          .append("\nBefore you read files or propose changes for a task, check this list. When a skill's"
+              + " description matches the task, call use_skill with its name first and follow what it returns;"
+              + " when the user names a skill, use it. Load only the skills that match, never all of them. A"
+              + " skill adds to these instructions and never overrides the rules about masked values, tools,"
+              + " offer_changes, proposals or the current mode.\n");
     }
     StringBuilder perRequest = new StringBuilder("Current mode: ").append(mode.label).append(".\n");
     if (project != null) {
@@ -211,16 +234,22 @@ public final class Prompts {
         + "\nWhen the request is about metadata or Studio's type warnings (always applies)\n\n" + metadata()
         + "\nThen any HTTP and docs instructions from Preferences, then " + AGENTS_FILE
         + " from the project root, your instructions from Preferences, and saved preferences from "
-        + Memory.FILE_NAME + ", each up to " + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters.";
+        + Memory.FILE_NAME + ", each up to " + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters;"
+        + " then your rule files (up to " + String.format(Locale.ROOT, "%,d", MAX_RULES) + " characters in all)"
+        + " and the list of skills, whose text is loaded only when the AI uses one.";
   }
 
   public static Capped capped(String text) {
+    return capped(text, MAX_INSTRUCTIONS);
+  }
+
+  public static Capped capped(String text, int limit) {
     String value = text == null ? "" : text.strip();
-    if (value.length() <= MAX_INSTRUCTIONS) {
+    if (value.length() <= limit) {
       return new Capped(value, value.length(), false);
     }
-    return new Capped(value.substring(0, MAX_INSTRUCTIONS) + "\n[cut at "
-        + String.format(Locale.ROOT, "%,d", MAX_INSTRUCTIONS) + " characters]", value.length(), true);
+    return new Capped(value.substring(0, limit) + "\n[cut at "
+        + String.format(Locale.ROOT, "%,d", limit) + " characters]", value.length(), true);
   }
 
   static String file(String name) {

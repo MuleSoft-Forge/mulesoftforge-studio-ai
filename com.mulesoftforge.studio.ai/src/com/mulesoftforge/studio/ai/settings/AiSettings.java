@@ -1,6 +1,8 @@
 package com.mulesoftforge.studio.ai.settings;
 
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Consumer;
 
 import org.eclipse.core.runtime.preferences.InstanceScope;
@@ -48,6 +50,8 @@ public final class AiSettings {
   private static final String ALERT_DISABLED = "chat.alertDisabled";
   private static final String ALERT_SOUND = "chat.alertSound";
   private static final String HOOKS_ENABLED = "hooks.enabled";
+  private static final String BUILT_INS_DISABLED = "extensions.builtInsDisabled";
+  private static final String FIX_CHECKS_DISABLED = "chat.fixChecksDisabled";
   private static final String GITHUB_LOGIN = "github.login";
   private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
@@ -193,13 +197,46 @@ public final class AiSettings {
     return store().getBoolean(HOOKS_ENABLED);
   }
 
-  public static void saveChatExtras(LoadingPhrases.Mode phrases, boolean alert, boolean sound, boolean hooks)
-      throws Exception {
+  public static void saveChatExtras(LoadingPhrases.Mode phrases, boolean alert, boolean sound) throws Exception {
     IPreferenceStore prefs = store();
     prefs.setValue(LOADING_PHRASES, phrases.name());
     prefs.setValue(ALERT_DISABLED, !alert);
     prefs.setValue(ALERT_SOUND, sound);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  public static void saveHooksEnabled(boolean hooks) throws Exception {
+    IPreferenceStore prefs = store();
     prefs.setValue(HOOKS_ENABLED, hooks);
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Built-in skills turned off in Preferences, as Extensions.builtInKey values.
+  public static Set<String> disabledBuiltIns() {
+    String value = store().getString(BUILT_INS_DISABLED);
+    return value.isBlank() ? Set.of() : Set.of(value.split("\n"));
+  }
+
+  public static void saveBuiltInEnabled(String key, boolean enabled) throws Exception {
+    Set<String> keys = new TreeSet<>(disabledBuiltIns());
+    if (enabled) {
+      keys.remove(key);
+    } else {
+      keys.add(key);
+    }
+    IPreferenceStore prefs = store();
+    prefs.setValue(BUILT_INS_DISABLED, String.join("\n", keys));
+    ((ScopedPreferenceStore) prefs).save();
+  }
+
+  // Whether a turn that proposed changes goes back to the AI while the project checks fail on them. On by default.
+  public static boolean fixChecksBeforeFinishing() {
+    return !store().getBoolean(FIX_CHECKS_DISABLED);
+  }
+
+  public static void saveFixChecksBeforeFinishing(boolean on) throws Exception {
+    IPreferenceStore prefs = store();
+    prefs.setValue(FIX_CHECKS_DISABLED, !on);
     ((ScopedPreferenceStore) prefs).save();
   }
 
