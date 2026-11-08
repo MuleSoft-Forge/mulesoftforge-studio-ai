@@ -8,3 +8,7 @@ Mule rules for changes:
 - Before you write or change a connector element, look it up with connector_reference (for
   example "db:select") in the same batch as your reads, and use only the element names,
   parameters and error types it lists for the version in pom.xml.
+- Use a system's dedicated connector when one exists. For a system the request names that the project
+  has no connector for, call search_connectors with its name (when you have that tool) before you design
+  the flow, and propose the pom.xml dependency it returns; never invent coordinates or versions. Use
+  http:request for a named system only when the search finds no connector for it, and say so.

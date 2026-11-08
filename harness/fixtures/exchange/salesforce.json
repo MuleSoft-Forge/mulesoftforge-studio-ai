@@ -1,0 +1,402 @@
+[
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-salesforce-pubsub-connector",
+  "version": "1.5.0",
+  "type": "extension",
+  "name": "Salesforce Pub/Sub API Connector - Mule 4",
+  "description": "Mule4 connector to interface with the Salesforce Pub/Sub API.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-salesforce-connector",
+  "version": "12.1.0",
+  "type": "extension",
+  "name": "Salesforce Connector - Mule 4",
+  "description": "Accelerate your Salesforce integrations across Sales Cloud, Service Cloud, Salesforce Platform, and Force.com",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-salesforce-composite-connector",
+  "version": "3.2.0",
+  "type": "extension",
+  "name": "Salesforce Composite Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sfdc-analytics-connector",
+  "version": "4.1.0",
+  "type": "extension",
+  "name": "Salesforce Einstein Analytics Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-sdc-connector",
+  "version": "1.5.1",
+  "type": "extension",
+  "name": "Salesforce Data Cloud Connector - Mule 4",
+  "description": "This is the connector for the Salesforce Data Cloud APIs.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sfdc-marketing-cloud-connector",
+  "version": "5.0.5",
+  "type": "extension",
+  "name": "Salesforce Marketing Cloud Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-sfdc-marketing-cloud-rest-connector",
+  "version": "1.2.4",
+  "type": "extension",
+  "name": "Salesforce Marketing Cloud REST Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "commerce-cloud-dataapi",
+  "version": "1.0.1",
+  "type": "extension",
+  "name": "Salesforce B2C Commerce Cloud Data Connector - Mule 4",
+  "description": "Management API for Commerce Cloud's B2C Data API.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.connectors",
+  "assetId": "mule-sfdc-connector",
+  "version": "9.0.0",
+  "type": "extension",
+  "name": "Salesforce Connector (Deprecated)",
+  "description": "",
+  "isPublic": false,
+  "status": "deprecated"
+ },
+ {
+  "groupId": "org.mule.examples",
+  "assetId": "sdc-ingest-common-library",
+  "version": "1.0.9",
+  "type": "extension",
+  "name": "Salesforce Data Cloud Ingestion Common Library",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "commerce-cloud-shopperapi",
+  "version": "2.1.2",
+  "type": "extension",
+  "name": "Commerce Cloud B2C Shop Connector - Mule 4",
+  "description": "Commerce Cloud Shopper API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-tableau-specialist-connector",
+  "version": "1.1.6",
+  "type": "extension",
+  "name": "Anypoint Connector for Tableau - Mule 4",
+  "description": "Tableau Connector enables you to integrate and transform data from applications to build visualizations",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-slack-connector",
+  "version": "2.0.3",
+  "type": "extension",
+  "name": "Slack Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-caqh-connector",
+  "version": "1.0.1",
+  "type": "extension",
+  "name": "CAQH Connector - Mule 4",
+  "description": "This Anypoint connector facilitates building integration with CAQH to enable real-time access to provider information. CAQH is used by over 1.5 million providers to self-report and share a wide range of demographic.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-roostify-connector",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "Roostify Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sap-connector",
+  "version": "5.9.14",
+  "type": "extension",
+  "name": "SAP Connector - Mule 4",
+  "description": "Integrate different on-premise and cloud-based business applications with SAP ERP Central Component (ECC) or SAP S/4HANA on-premises, via RFC",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.modules",
+  "assetId": "azure-storage-connector",
+  "version": "4.0.0",
+  "type": "extension",
+  "name": "Microsoft Azure Storage Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.plektonlabs.mulesoft.connectors",
+  "assetId": "mule-ejb-connector",
+  "version": "1.1.0",
+  "type": "extension",
+  "name": "Ejb Connector - Mule 4",
+  "description": "MuleSoft's EJB Connector helps you to establish communication between your Mule app and EJB.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-workday-connector",
+  "version": "17.0.0",
+  "type": "extension",
+  "name": "Workday Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-stripe-connector",
+  "version": "1.0.19",
+  "type": "extension",
+  "name": "Stripe Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-xero-accounting-connector",
+  "version": "1.1.9",
+  "type": "extension",
+  "name": "Xero Accounting Connector - Mule 4",
+  "description": "The Xero Accounting API exposes accounting and related functions of the main Xero application.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-agentforce-connector",
+  "version": "1.3.0",
+  "type": "extension",
+  "name": "Agentforce Connector - Mule 4",
+  "description": "Bring the power of Agentforce to any application or process",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-thoughtmachine-connector",
+  "version": "2.1.2",
+  "type": "extension",
+  "name": "Thought Machine Vault Core Connector - Mule 4",
+  "description": "The Vault Core Connector unlocks the ability to use the full range of Vault Core API RESTful endpoints within the MuleSoft Anypoint platform",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.vigience.overcast.mule",
+  "assetId": "overcastconnector",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "Vigience Overcast SAP Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-netsuite-connector",
+  "version": "12.0.4",
+  "type": "extension",
+  "name": "NetSuite Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-inference-connector",
+  "version": "1.2.2",
+  "type": "extension",
+  "name": "Inference Connector - Mule 4",
+  "description": "Seamless LLM integration powering innovative workflows",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-google-sheets-connector",
+  "version": "1.1.16",
+  "type": "extension",
+  "name": "Google Sheets Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-webcrawler-connector",
+  "version": "1.0.2",
+  "type": "extension",
+  "name": "Mule WebCrawler Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-zendesk-connector",
+  "version": "1.1.14",
+  "type": "extension",
+  "name": "Zendesk Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-vectors-connector",
+  "version": "1.1.1",
+  "type": "extension",
+  "name": "Vectors Connector - Mule 4",
+  "description": "Generate, store, and query vector embeddings of your data to supercharge AI applications",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-microsoft-teams-connector",
+  "version": "1.1.6",
+  "type": "extension",
+  "name": "Microsoft Teams Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-powerbi-connector",
+  "version": "1.0.7",
+  "type": "extension",
+  "name": "Power BI Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-netsuite-restlet-connector",
+  "version": "1.0.11",
+  "type": "extension",
+  "name": "NetSuite Restlet Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-intercom-connector",
+  "version": "1.0.7",
+  "type": "extension",
+  "name": "Intercom Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-google-drive-connector",
+  "version": "1.1.4",
+  "type": "extension",
+  "name": "Google Drive Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-microsoft-excel-online-connector",
+  "version": "1.1.1",
+  "type": "extension",
+  "name": "Microsoft Excel Online Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.plektonlabs.mulesoft.connectors",
+  "assetId": "plekton-batch-manager",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "Batch Manager Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.examples",
+  "assetId": "accelerator-retail-config-module",
+  "version": "1.1.0",
+  "type": "extension",
+  "name": "Accelerator Retail Config Module",
+  "description": "Configuration extension for MuleSoft Accelerators",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-k2view-rest-api-connector",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "K2View Telco BSS/OSS Connector - Mule 4",
+  "description": "Extend MuleSoft to liberate, integrate, and pipeline enterprise data from BSS and OSS legacy systems into Salesforce, in real time",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-servicenow-connector",
+  "version": "7.0.0",
+  "type": "extension",
+  "name": "ServiceNow Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ }
+]

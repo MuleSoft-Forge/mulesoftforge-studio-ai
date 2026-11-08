@@ -664,7 +664,7 @@ public final class ProjectTools {
     if (connectors == null) {
       return "Connector models are not available: Studio has not generated any in this workspace yet (it does"
           + " when it resolves a project's dependencies). Do not guess operations or parameters; say you could"
-          + " not check them.";
+          + " not check them. To find which connector to use for a system, call search_connectors.";
     }
     return connectors.reference(current("pom.xml"), text(args, "component", false));
   }

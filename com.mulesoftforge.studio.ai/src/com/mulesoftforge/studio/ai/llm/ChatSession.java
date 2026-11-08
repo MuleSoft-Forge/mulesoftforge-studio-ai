@@ -33,6 +33,8 @@ import com.mulesoftforge.studio.ai.edit.FollowUpAsk;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectTools;
 import com.mulesoftforge.studio.ai.edit.TodoItem;
+import com.mulesoftforge.studio.ai.exchange.ExchangeSearch;
+import com.mulesoftforge.studio.ai.exchange.ExchangeTools;
 import com.mulesoftforge.studio.ai.extend.Extension;
 import com.mulesoftforge.studio.ai.extend.Extensions;
 import com.mulesoftforge.studio.ai.extend.SkillTools;
@@ -172,6 +174,10 @@ public class ChatSession {
       if (toolCounts.getOrDefault("check_project", 0) > 0) {
         parts.add("ran the project checks");
       }
+      int exchangeSearches = toolCounts.getOrDefault(ExchangeTools.SEARCH, 0);
+      if (exchangeSearches > 0) {
+        parts.add("searched Exchange for connectors " + (exchangeSearches == 1 ? "once" : exchangeSearches + " times"));
+      }
       int skills = toolCounts.getOrDefault(SkillTools.USE, 0);
       if (skills > 0) {
         parts.add("loaded skills " + (skills == 1 ? "once" : skills + " times"));
@@ -291,6 +297,7 @@ public class ChatSession {
   private volatile MunitRunner munitRunner;
   private volatile Hooks hooks = Hooks.NONE;
   private volatile Extensions extensions = Extensions.NONE;
+  private volatile ExchangeSearch exchange;
   private volatile boolean fixChecks = true;
   private final String sessionId = UUID.randomUUID().toString();
   private volatile String instructions = "";
@@ -318,6 +325,11 @@ public class ChatSession {
   // The rules, skills and workflows for the next turns; Extensions.NONE has none.
   public void extensions(Extensions loaded) {
     extensions = loaded == null ? Extensions.NONE : loaded;
+  }
+
+  // Anypoint Exchange, so the model can find the connector for a system with search_connectors; null without.
+  public void exchange(ExchangeSearch search) {
+    exchange = search;
   }
 
   // On: a turn that proposed changes is not finished while the project checks fail on them; the model is sent the
@@ -632,6 +644,11 @@ public class ChatSession {
     if (project != null && tester != null) {
       specifications.addAll(MunitTools.SPECIFICATIONS);
     }
+    ExchangeSearch search = exchange;
+    ExchangeTools exchangeTools = search == null ? null : new ExchangeTools(search, project);
+    if (exchangeTools != null) {
+      specifications.add(ExchangeTools.SPECIFICATION);
+    }
     SkillTools skillTools = ext.enabled(Extension.Kind.SKILL).isEmpty() ? null : new SkillTools(ext, secrets);
     if (skillTools != null) {
       specifications.add(SkillTools.SPECIFICATION);
@@ -783,10 +800,11 @@ public class ChatSession {
         boolean launchCall = LaunchTools.handles(call.name());
         boolean munitCall = MunitTools.handles(call.name());
         boolean skillCall = SkillTools.handles(call.name());
+        boolean exchangeCall = ExchangeTools.handles(call.name());
         progress.step(debugCall ? DebugTools.describe(call) : dataWeaveCall ? DataWeaveTools.describe(call)
             : httpCall ? HttpTools.describe(call) : launchCall ? LaunchTools.describe(call)
             : munitCall ? MunitTools.describe(call) : skillCall ? SkillTools.describe(call)
-            : ProjectTools.describe(call));
+            : exchangeCall ? ExchangeTools.describe(call) : ProjectTools.describe(call));
         int before = secrets.total();
         int personalBeforeCall = personal.total();
         boolean editCall = ProjectTools.isEdit(call.name());
@@ -805,10 +823,11 @@ public class ChatSession {
             : launchCall && launchTools != null ? launchTools.execute(call)
             : munitCall && munitTools != null ? munitTools.execute(call)
             : skillCall && skillTools != null ? skillTools.execute(call)
+            : exchangeCall && exchangeTools != null ? secrets.mask(null, exchangeTools.execute(call)).text()
             : (launchCall || munitCall) && !mode.canChangeApp ? ChatMode.refused(mode.label + " mode cannot run or"
                 + " stop the app or run tests. Agent or Diagnose mode can.")
             : tools != null && !debugCall && !dataWeaveCall && !httpCall && !launchCall && !munitCall && !skillCall
-                ? tools.execute(call)
+                && !exchangeCall ? tools.execute(call)
             : "ERROR: " + call.name() + " is not available now.";
         if (runs && blocked == null) {
           result = postToolUse(userHooks, call, result, hookDir, progress);

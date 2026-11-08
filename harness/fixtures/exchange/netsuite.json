@@ -1,0 +1,192 @@
+[
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-netsuite-rest-connector",
+  "version": "1.0.1",
+  "type": "extension",
+  "name": "NetSuite REST Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-netsuite-connector",
+  "version": "12.0.4",
+  "type": "extension",
+  "name": "NetSuite Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-netsuite-restlet-connector",
+  "version": "1.0.11",
+  "type": "extension",
+  "name": "NetSuite Restlet Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.connectors",
+  "assetId": "mule-netsuite-connector",
+  "version": "8.0.0",
+  "type": "extension",
+  "name": "NetSuite v8.0 (Deprecated)",
+  "description": "",
+  "isPublic": false,
+  "status": "deprecated"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-netsuite-openair-connector",
+  "version": "2.0.14",
+  "type": "extension",
+  "name": "NetSuite OpenAir Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-workday-connector",
+  "version": "17.0.0",
+  "type": "extension",
+  "name": "Workday Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-salesforce-connector",
+  "version": "12.1.0",
+  "type": "extension",
+  "name": "Salesforce Connector - Mule 4",
+  "description": "Accelerate your Salesforce integrations across Sales Cloud, Service Cloud, Salesforce Platform, and Force.com",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-microsoft-teams-connector",
+  "version": "1.1.6",
+  "type": "extension",
+  "name": "Microsoft Teams Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sfdc-analytics-connector",
+  "version": "4.1.0",
+  "type": "extension",
+  "name": "Salesforce Einstein Analytics Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-sfdc-marketing-cloud-rest-connector",
+  "version": "1.2.4",
+  "type": "extension",
+  "name": "Salesforce Marketing Cloud REST Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-gmail-connector",
+  "version": "1.1.4",
+  "type": "extension",
+  "name": "Gmail Connector - Mule 4",
+  "description": "The Gmail API lets you view and manage Gmail mailbox data like threads, messages, and labels.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sfdc-marketing-cloud-connector",
+  "version": "5.0.5",
+  "type": "extension",
+  "name": "Salesforce Marketing Cloud Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-oracle-siebel-jdb-connector",
+  "version": "4.0.12",
+  "type": "extension",
+  "name": "Oracle Siebel Connector - Mule 4",
+  "description": "The Anypoint Siebel connector allows users to synchronize data between on-premise CRMs (Siebel to MS Dynamics CRM) or migrate customer data from Siebel to cloud based CRMs such as Salesforce or NetSuite",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-stripe-connector",
+  "version": "1.0.19",
+  "type": "extension",
+  "name": "Stripe Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-docusign-connector",
+  "version": "1.1.5",
+  "type": "extension",
+  "name": "DocuSign Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-xero-accounting-connector",
+  "version": "1.1.9",
+  "type": "extension",
+  "name": "Xero Accounting Connector - Mule 4",
+  "description": "The Xero Accounting API exposes accounting and related functions of the main Xero application.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.plektonlabs.mulesoft.connectors",
+  "assetId": "plekton-batch-manager",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "Batch Manager Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.plektonlabs.mulesoft.connectors",
+  "assetId": "mule-ejb-connector",
+  "version": "1.1.0",
+  "type": "extension",
+  "name": "Ejb Connector - Mule 4",
+  "description": "MuleSoft's EJB Connector helps you to establish communication between your Mule app and EJB.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.connectors",
+  "assetId": "mule-siebel-connector",
+  "version": "4.0.0",
+  "type": "extension",
+  "name": "Oracle Siebel Connector - Mule 4 (Deprecated)",
+  "description": "",
+  "isPublic": false,
+  "status": "deprecated"
+ }
+]

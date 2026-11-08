@@ -1,0 +1,172 @@
+[
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-servicenow-connector",
+  "version": "7.0.0",
+  "type": "extension",
+  "name": "ServiceNow Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-docusign-connector",
+  "version": "1.1.5",
+  "type": "extension",
+  "name": "DocuSign Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-jira-connector",
+  "version": "1.2.17",
+  "type": "extension",
+  "name": "Jira Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-workday-connector",
+  "version": "17.0.0",
+  "type": "extension",
+  "name": "Workday Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-salesforce-connector",
+  "version": "12.1.0",
+  "type": "extension",
+  "name": "Salesforce Connector - Mule 4",
+  "description": "Accelerate your Salesforce integrations across Sales Cloud, Service Cloud, Salesforce Platform, and Force.com",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-sfdc-analytics-connector",
+  "version": "4.1.0",
+  "type": "extension",
+  "name": "Salesforce Einstein Analytics Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-google-sheets-connector",
+  "version": "1.1.16",
+  "type": "extension",
+  "name": "Google Sheets Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-zendesk-connector",
+  "version": "1.1.14",
+  "type": "extension",
+  "name": "Zendesk Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-microsoft-teams-connector",
+  "version": "1.1.6",
+  "type": "extension",
+  "name": "Microsoft Teams Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-smartsheet-connector",
+  "version": "1.2.9",
+  "type": "extension",
+  "name": "Smartsheet Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-google-drive-connector",
+  "version": "1.1.4",
+  "type": "extension",
+  "name": "Google Drive Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-microsoft-excel-online-connector",
+  "version": "1.1.1",
+  "type": "extension",
+  "name": "Microsoft Excel Online Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.examples",
+  "assetId": "accelerator-common-core",
+  "version": "3.0.2",
+  "type": "extension",
+  "name": "Accelerator Common Core Library",
+  "description": "Core library extension for MuleSoft Accelerators",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.examples",
+  "assetId": "accelerator-retail-config-module",
+  "version": "1.1.0",
+  "type": "extension",
+  "name": "Accelerator Retail Config Module",
+  "description": "Configuration extension for MuleSoft Accelerators",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.examples",
+  "assetId": "accelerator-common-config-module",
+  "version": "1.1.0",
+  "type": "extension",
+  "name": "Accelerator Common Config Module",
+  "description": "Configuration extension for MuleSoft Accelerators",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.cloudblue",
+  "assetId": "connect-mulesoft-extension",
+  "version": "1.0.0",
+  "type": "extension",
+  "name": "CloudBlue Connect Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule-bmc-remedy-connector",
+  "version": "3.0.3",
+  "type": "extension",
+  "name": "BMC Remedy AR System Connector - Mule 4",
+  "description": "",
+  "isPublic": false,
+  "status": "deprecated"
+ }
+]

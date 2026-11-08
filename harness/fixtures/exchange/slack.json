@@ -1,0 +1,102 @@
+[
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-slack-connector",
+  "version": "2.0.3",
+  "type": "extension",
+  "name": "Slack Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "org.mule.connectors",
+  "assetId": "mule-slack-connector",
+  "version": "4.3.2",
+  "type": "extension",
+  "name": "Slack Connector - Mule 4 - Community Version",
+  "description": "",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-smartsheet-connector",
+  "version": "1.2.9",
+  "type": "extension",
+  "name": "Smartsheet Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-asana-connector",
+  "version": "1.0.10",
+  "type": "extension",
+  "name": "Asana Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-xero-accounting-connector",
+  "version": "1.1.9",
+  "type": "extension",
+  "name": "Xero Accounting Connector - Mule 4",
+  "description": "The Xero Accounting API exposes accounting and related functions of the main Xero application.",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-zendesk-connector",
+  "version": "1.1.14",
+  "type": "extension",
+  "name": "Zendesk Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-tableau-specialist-connector",
+  "version": "1.1.6",
+  "type": "extension",
+  "name": "Anypoint Connector for Tableau - Mule 4",
+  "description": "Tableau Connector enables you to integrate and transform data from applications to build visualizations",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-intercom-connector",
+  "version": "1.0.7",
+  "type": "extension",
+  "name": "Intercom Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-jira-connector",
+  "version": "1.2.17",
+  "type": "extension",
+  "name": "Jira Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ },
+ {
+  "groupId": "com.mulesoft.connectors",
+  "assetId": "mule4-google-drive-connector",
+  "version": "1.1.4",
+  "type": "extension",
+  "name": "Google Drive Connector - Mule 4",
+  "description": "Mule modules that augment the core Mule functionality through the Mule Extension API",
+  "isPublic": false,
+  "status": "published"
+ }
+]

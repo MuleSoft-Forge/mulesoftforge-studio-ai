@@ -21,10 +21,11 @@ the build must pass the project checks before you finish.
 2. **Name every system.** List each external system the request names (Salesforce, SAP, a database, a queue,
    an HTTP API) and the trigger: an HTTP listener, a scheduler, a connector's listener, or a flow called by
    another flow.
-3. **Use a dedicated connector when one exists.** For each system, call `connector_reference` with the
-   connector's prefix or the system's name. If the project already depends on that connector, use its exact
-   operations and parameters from the result. If `search_connectors` is offered, search for systems the project
-   does not depend on yet. Use `http:request` only for a system that has no dedicated connector, and say so.
+3. **Use a dedicated connector when one exists.** For each system, call `search_connectors` with its name
+   (all of them in one batch). It returns the best Exchange connectors with their latest release, and says
+   which the project already uses. Never pre-judge that a system has no connector; search it. Use
+   `http:request` only for a system the search finds no connector for, and say so. Then call
+   `connector_reference` for a connector the project already depends on, to get its exact operations.
 4. **Pick operations and connection providers from the reference**, not from memory: element names,
    required attributes and the connection type (basic, OAuth, token) as `connector_reference` lists them.
 5. **For a new integration, or a change across several flows, confirm the design first.** Call
@@ -39,8 +40,10 @@ the build must pass the project checks before you finish.
    `global.xml`). Put hosts, ports, user names and paths in the property file with `${...}` references; put
    passwords and keys in secure properties, never as literal values.
 8. **Dependencies.** A connector the project does not depend on yet needs its dependency in `pom.xml`. Propose
-   that edit too, with the group, artifact and version the connector search or the user gave; never invent a
-   version.
+   that edit too, exactly as `search_connectors` gave it (group, artifact, version, `mule-plugin` classifier);
+   never invent a version. Until the user accepts it and Studio downloads the connector, `connector_reference`
+   cannot list its operations: take names from its documentation with `fetch_docs` and say which you could
+   not check.
 9. **Flows.** Generate complete flows: source, processors, transforms, and an error handler that logs and
    either propagates or continues on purpose. Use the namespace and schema location of every prefix you use.
    Keep DataWeave in `ee:transform` with an explicit `output` directive.
