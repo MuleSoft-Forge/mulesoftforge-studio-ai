@@ -7,10 +7,11 @@ import com.mulesoftforge.studio.ai.llm.CostMeter;
 
 // One saved chat. entries is what the transcript showed; history is the compact model memory used to
 // resume. Open-file contents and proposal bodies are deliberately not stored. auto is the model Auto last used
-// in this chat, null when it never did.
+// in this chat, null when it never did. workspace is the Studio workspace folder the chat was started in, null in
+// chats saved before chats could be shared across workspaces.
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ChatRecord(int schema, String id, String title, String project, String created, String updated,
-    List<Entry> entries, List<Message> history, CostMeter.Snapshot cost, int pending, String auto) {
+    List<Entry> entries, List<Message> history, CostMeter.Snapshot cost, int pending, String auto, String workspace) {
 
   public static final int SCHEMA = 1;
 
@@ -24,11 +25,21 @@ public record ChatRecord(int schema, String id, String title, String project, St
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record Summary(String id, String title, String project, String updated, double usd, int calls,
-      boolean estimated) {}
+      boolean estimated, String workspace) {}
 
   public Summary summary() {
     CostMeter.Totals all = cost == null ? null : cost.all();
     return new Summary(id, title, project, updated, all == null ? 0 : all.usd(), all == null ? 0 : all.calls(),
-        all != null && all.estimated());
+        all != null && all.estimated(), workspace);
+  }
+
+  public ChatRecord withTitle(String newTitle) {
+    return new ChatRecord(schema, id, newTitle, project, created, updated, entries, history, cost, pending, auto,
+        workspace);
+  }
+
+  public ChatRecord withWorkspace(String newWorkspace) {
+    return new ChatRecord(schema, id, title, project, created, updated, entries, history, cost, pending, auto,
+        newWorkspace);
   }
 }

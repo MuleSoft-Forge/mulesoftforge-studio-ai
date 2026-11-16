@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -90,6 +91,17 @@ public final class RawLog {
     Files.deleteIfExists(dir.resolve(checked(id) + READABLE));
   }
 
+  // Moves a chat's log to another folder, as its chat moves between this workspace and the shared folder.
+  public synchronized void moveTo(RawLog target, String id) throws IOException {
+    if (!exists(id)) {
+      return;
+    }
+    Files.createDirectories(target.dir);
+    restrictOwner(target.dir);
+    Files.move(file(id), target.file(id), StandardCopyOption.REPLACE_EXISTING);
+    Files.deleteIfExists(dir.resolve(checked(id) + READABLE));
+  }
+
   public synchronized int deleteAll() throws IOException {
     int deleted = 0;
     for (Path p : files()) {
@@ -122,7 +134,7 @@ public final class RawLog {
     return id;
   }
 
-  // Owner-only on POSIX so raw request bodies are not world-readable under the workspace metadata folder.
+  // Owner-only on POSIX so raw request bodies are not world-readable, in the workspace or the shared folder.
   private static void restrictOwner(Path path) {
     try {
       java.util.Set<java.nio.file.attribute.PosixFilePermission> perms = new java.util.HashSet<>();

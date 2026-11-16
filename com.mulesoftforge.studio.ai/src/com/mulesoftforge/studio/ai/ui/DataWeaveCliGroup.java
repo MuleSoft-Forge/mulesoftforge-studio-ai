@@ -50,7 +50,6 @@ final class DataWeaveCliGroup {
     path = new Text(group, SWT.BORDER);
     path.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     path.setMessage("Found automatically when empty");
-    path.setText(AiSettings.dataWeaveCli());
     Button browse = new Button(group, SWT.PUSH);
     browse.setText("Browse…");
     browse.addListener(SWT.Selection, e -> {
@@ -84,11 +83,15 @@ final class DataWeaveCliGroup {
         : "Download MuleSoft's DataWeave CLI for " + asset.platform() + " from GitHub, check its published"
             + " checksum, and use it");
     download.addListener(SWT.Selection, e -> download());
-    detect();
   }
 
   String path() {
     return path.getText().trim();
+  }
+
+  void reload() {
+    path.setText(AiSettings.dataWeaveCli());
+    detect();
   }
 
   private void detect() {

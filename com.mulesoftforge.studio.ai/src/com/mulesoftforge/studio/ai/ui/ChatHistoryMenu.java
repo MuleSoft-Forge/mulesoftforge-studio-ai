@@ -75,17 +75,38 @@ final class ChatHistoryMenu {
       action(menu, "Open raw log of this chat", true, () -> openRaw(current));
     }
     new MenuItem(menu, SWT.SEPARATOR);
-    if (chats.isEmpty()) {
-      action(menu, AiSettings.saveChats() ? "No saved chats yet" : "Saving chats is off (Settings)", false, null);
+    List<ChatRecord.Summary> mine = chats.stream().filter(Stores::mine).toList();
+    List<ChatRecord.Summary> others = chats.stream().filter(c -> !Stores.mine(c)).toList();
+    if (mine.isEmpty()) {
+      action(menu, AiSettings.saveChats() ? "No saved chats in this workspace yet" : "Saving chats is off (Settings)",
+          false, null);
     }
+    addChats(menu, mine, current, busy, false);
+    if (!others.isEmpty()) {
+      new MenuItem(menu, SWT.SEPARATOR);
+      MenuItem item = new MenuItem(menu, SWT.CASCADE);
+      item.setText("Other workspaces (" + others.size() + ")");
+      Menu sub = new Menu(item);
+      item.setMenu(sub);
+      addChats(sub, others, current, busy, true);
+    }
+    Point location = anchor.toDisplay(0, anchor.getSize().y);
+    menu.setLocation(location);
+    menu.setVisible(true);
+  }
+
+  private void addChats(Menu menu, List<ChatRecord.Summary> chats, String current, boolean busy,
+      boolean showWorkspace) {
     DateTimeFormatter when = DateTimeFormatter.ofPattern("d MMM HH:mm");
     for (ChatRecord.Summary chat : chats.subList(0, Math.min(chats.size(), SHOWN))) {
       MenuItem item = new MenuItem(menu, SWT.CASCADE);
       String date = chat.updated() == null ? "" : LocalDateTime.ofInstant(Instant.parse(chat.updated()),
           ZoneId.systemDefault()).format(when);
       String cost = chat.calls() == 0 ? "" : "  ·  " + (chat.estimated() ? "~" : "") + CostMeter.usd(chat.usd());
+      String where = showWorkspace && chat.workspace() != null
+          ? Path.of(chat.workspace()).getFileName() + " / " : "";
       boolean isCurrent = chat.id().equals(current);
-      item.setText((isCurrent ? "● " : "") + chat.title() + "  —  "
+      item.setText((isCurrent ? "● " : "") + chat.title() + "  —  " + where
           + (chat.project() == null ? "no project" : chat.project()) + "  ·  " + date + cost);
       Menu actions = new Menu(item);
       item.setMenu(actions);
@@ -100,9 +121,6 @@ final class ChatHistoryMenu {
     if (chats.size() > SHOWN) {
       action(menu, "(" + (chats.size() - SHOWN) + " older chats not shown)", false, null);
     }
-    Point location = anchor.toDisplay(0, anchor.getSize().y);
-    menu.setLocation(location);
-    menu.setVisible(true);
   }
 
   private static void action(Menu menu, String text, boolean enabled, Runnable action) {

@@ -37,6 +37,7 @@ import org.eclipse.ui.ide.IDE;
 import org.eclipse.ui.preferences.IWorkbenchPreferenceContainer;
 
 import com.mulesoftforge.studio.ai.Activator;
+import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
@@ -50,6 +51,7 @@ import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
+import com.mulesoftforge.studio.ai.settings.UserFolder;
 
 public class AiPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
   public static final String ID = "com.mulesoftforge.studio.ai.prefs";
@@ -89,6 +91,10 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button useSystemCerts;
   private Text caPem;
   private Text retentionDays;
+  private Button shareChats;
+  private Label chatFolder;
+  private Button workspaceOnly;
+  private Label scopeInfo;
 
   @Override
   public void init(IWorkbench workbench) {
@@ -99,6 +105,15 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   protected Control createContents(Composite parent) {
     Composite body = new Composite(parent, SWT.NONE);
     body.setLayout(new GridLayout(2, false));
+
+    workspaceOnly = new Button(body, SWT.CHECK);
+    workspaceOnly.setText("Use these settings in this workspace only");
+    workspaceOnly.setLayoutData(span(2));
+    workspaceOnly.addListener(SWT.Selection, e -> switchScope());
+    scopeInfo = new Label(body, SWT.WRAP);
+    GridData scopeData = span(2);
+    scopeData.widthHint = 420;
+    scopeInfo.setLayoutData(scopeData);
 
     label(body, "Provider:");
     provider = new Combo(body, SWT.READ_ONLY);
@@ -183,13 +198,68 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     dataWeaveCli = new DataWeaveCliGroup(body);
     createHistoryGroup(body);
 
+    loadValues();
+    return body;
+  }
+
+  // Fills every field from the settings in use, shared or this workspace's own.
+  private void loadValues() {
+    drafts.clear();
+    autoDrafts.clear();
+    workspaceOnly.setSelection(AiSettings.workspaceOnly());
+    showScope();
+    richTranscript.setSelection(AiSettings.richTranscript());
+    checkUpdates.setSelection(AiSettings.checkForUpdates());
+    maskSecrets.setSelection(AiSettings.maskSecrets());
+    maskPersonal.setSelection(AiSettings.maskPersonalData());
+    alertWhenDone.setSelection(AiSettings.alertWhenDone());
+    alertSound.setSelection(AiSettings.alertSound());
+    loadingPhrases.select(AiSettings.loadingPhrases().ordinal());
+    instructions.setText(AiSettings.instructions());
+    docsHosts.setText(AiSettings.docsHostsText());
+    httpInstructions.setText(AiSettings.httpInstructions());
+    Network.Trust trust = AiSettings.trust();
+    useSystemCerts.setSelection(trust.useSystem());
+    caPem.setText(trust.caPemPath());
+    dataWeaveCli.reload();
+    saveChats.setSelection(AiSettings.saveChats());
+    retentionDays.setText(Integer.toString(AiSettings.retentionDays()));
+    rawLog.setSelection(AiSettings.rawLog());
+    shareChats.setSelection(AiSettings.shareChats());
+    showChatFolder();
+
     Provider current = AiSettings.provider();
     if (!current.shownInUi()) {
       current = Provider.OPENROUTER;
     }
     provider.select(Provider.shownInUiValues().indexOf(current));
     load(current);
-    return body;
+  }
+
+  // Takes effect at once, like Eclipse's project-specific settings. Ticking copies the shared settings, so the
+  // fields keep their values; unticking shows the shared settings again and drops edits not yet applied.
+  private void switchScope() {
+    boolean on = workspaceOnly.getSelection();
+    try {
+      AiSettings.saveWorkspaceOnly(on);
+    } catch (Exception e) {
+      workspaceOnly.setSelection(!on);
+      setErrorMessage("Could not change where settings are kept: " + Errors.describe(e));
+      return;
+    }
+    if (on) {
+      showScope();
+    } else {
+      loadValues();
+    }
+  }
+
+  private void showScope() {
+    scopeInfo.setText(workspaceOnly.getSelection()
+        ? "This workspace keeps its own settings. Untick to go back to the settings every workspace shares."
+        : "Shared by every workspace, saved in " + AiSettings.sharedFile() + ". Tick to give this workspace its"
+            + " own settings, starting from these. API keys are shared either way (Eclipse secure storage).");
+    scopeInfo.getParent().layout(true, true);
   }
 
   private void createDisplayGroup(Composite body) {
@@ -202,21 +272,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     group.setLayoutData(groupData);
     richTranscript = new Button(group, SWT.CHECK);
     richTranscript.setText("Rich chat view (uses Eclipse's built-in browser; turn off if it shows blank)");
-    richTranscript.setSelection(AiSettings.richTranscript());
     label(group, "Takes effect when the MuleSoftForge Studio AI view is reopened.");
     checkUpdates = new Button(group, SWT.CHECK);
     checkUpdates.setText("Check for updates (reads " + Updates.LATEST_URL + " once per Studio session)");
-    checkUpdates.setSelection(AiSettings.checkForUpdates());
     label(group, "Installed version " + Activator.getDefault().getBundle().getVersion() + ".");
     maskSecrets = new Button(group, SWT.CHECK);
     maskSecrets.setText("Hide passwords, keys and tokens from the model (recommended)");
-    maskSecrets.setSelection(AiSettings.maskSecrets());
     label(group, "Values in properties and YAML files, Mule XML, URLs, console output and your messages are sent"
         + " as «masked-N». Edits the AI proposes get the real values back. Files such as .env and private keys are"
         + " never sent, whatever this is set to. Screenshots are sent as they are.");
     maskPersonal = new Button(group, SWT.CHECK);
     maskPersonal.setText("Hide email addresses and phone numbers in live debug events (recommended)");
-    maskPersonal.setSelection(AiSettings.maskPersonalData());
     label(group, "When you ask about an event Studio's debugger is stopped at, its real data is sent. With this on,"
         + " email addresses and phone numbers in it become «email-N» and «phone-N».");
   }
@@ -233,11 +299,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     alertWhenDone = new Button(group, SWT.CHECK);
     alertWhenDone.setText("When an answer or a question is waiting and you are elsewhere, highlight the chat tab"
         + " and badge the Dock or taskbar icon");
-    alertWhenDone.setSelection(AiSettings.alertWhenDone());
     alertWhenDone.setLayoutData(span(2));
     alertSound = new Button(group, SWT.CHECK);
     alertSound.setText("Play a sound with the badge (untick for silence; off by default)");
-    alertSound.setSelection(AiSettings.alertSound());
     alertSound.setLayoutData(span(2));
 
     label(group, "While the model works, show:");
@@ -245,7 +309,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     for (LoadingPhrases.Mode mode : LoadingPhrases.Mode.values()) {
       loadingPhrases.add(mode.label);
     }
-    loadingPhrases.select(AiSettings.loadingPhrases().ordinal());
 
     Link extensions = new Link(group, SWT.WRAP);
     extensions.setText("Hooks, rule files, skills, workflows and the correctness checks are on the"
@@ -309,7 +372,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     textData.heightHint = 80;
     instructions.setLayoutData(textData);
     instructions.setMessage("For example: Use British English. Log with the JSON Logger connector.");
-    instructions.setText(AiSettings.instructions());
     Label info = new Label(group, SWT.WRAP);
     GridData infoData = new GridData(SWT.FILL, SWT.TOP, true, false);
     infoData.widthHint = 420;
@@ -355,7 +417,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     hostsData.horizontalSpan = 2;
     docsHosts.setLayoutData(hostsData);
     docsHosts.setMessage("docs.mulesoft.com");
-    docsHosts.setText(AiSettings.docsHostsText());
 
     Button resetHosts = new Button(group, SWT.PUSH);
     resetHosts.setText("Reset hosts to defaults");
@@ -377,7 +438,6 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     httpData.horizontalSpan = 2;
     httpInstructions.setLayoutData(httpData);
     httpInstructions.setMessage("For example: Always show curl with -i. Prefer our /api/v1 paths.");
-    httpInstructions.setText(AiSettings.httpInstructions());
     Label httpInfo = new Label(group, SWT.WRAP);
     GridData httpInfoData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
     httpInfoData.widthHint = 420;
@@ -427,17 +487,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     groupData.verticalIndent = 10;
     group.setLayoutData(groupData);
 
-    Network.Trust trust = AiSettings.trust();
     useSystemCerts = new Button(group, SWT.CHECK);
     useSystemCerts.setText("Trust the operating system's certificates (needed behind Zscaler and similar proxies)");
     useSystemCerts.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 3, 1));
-    useSystemCerts.setSelection(trust.useSystem());
 
     label(group, "Corporate CA (PEM):");
     caPem = new Text(group, SWT.BORDER);
     caPem.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
     caPem.setMessage("Optional: file or folder of .pem / .crt files from IT");
-    caPem.setText(trust.caPemPath());
     Button browse = new Button(group, SWT.PUSH);
     browse.setText("Browse…");
     browse.addListener(SWT.Selection, e -> {
@@ -487,19 +544,27 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     saveChats = new Button(group, SWT.CHECK);
     saveChats.setText("Save chats automatically");
     saveChats.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-    saveChats.setSelection(AiSettings.saveChats());
 
     label(group, "Keep chats for (days, 0 = forever):");
     retentionDays = new Text(group, SWT.BORDER);
     GridData daysData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
     daysData.widthHint = 60;
     retentionDays.setLayoutData(daysData);
-    retentionDays.setText(Integer.toString(AiSettings.retentionDays()));
+
+    shareChats = new Button(group, SWT.CHECK);
+    shareChats.setText("Show saved chats in every workspace");
+    shareChats.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+    Label shareInfo = new Label(group, SWT.WRAP);
+    GridData shareData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
+    shareData.widthHint = 420;
+    shareInfo.setLayoutData(shareData);
+    shareInfo.setText("Off by default, because chats hold flows, DataWeave and payloads, and many people keep one"
+        + " workspace per client. When on, this workspace's chats move to the shared folder, History lists them"
+        + " first and the rest under Other workspaces. Turning it off moves this workspace's chats back.");
 
     rawLog = new Button(group, SWT.CHECK);
     rawLog.setText("Keep a raw log of every request and response");
     rawLog.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
-    rawLog.setSelection(AiSettings.rawLog());
     Label rawInfo = new Label(group, SWT.WRAP);
     GridData rawData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
     rawData.widthHint = 420;
@@ -510,29 +575,38 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         + " response as LangChain4j sees them. Headers and API keys are never written. Files can be large; they are"
         + " deleted with their chat.");
 
-    Label where = new Label(group, SWT.WRAP);
+    chatFolder = new Label(group, SWT.WRAP);
     GridData whereData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
     whereData.widthHint = 420;
-    where.setLayoutData(whereData);
-    where.setText("Stored privately in this workspace, never in your Mule projects: " + Stores.root()
-        + "\nOpen-file contents and API keys are not saved. The cost ledger (usage.jsonl) keeps only token counts"
-        + " and amounts, and is kept when chats are deleted.");
+    chatFolder.setLayoutData(whereData);
 
     Button deleteAll = new Button(group, SWT.PUSH);
-    deleteAll.setText("Delete all chat history…");
+    deleteAll.setText("Delete this workspace's chat history…");
     deleteAll.addListener(SWT.Selection, e -> {
-      if (!MessageDialog.openConfirm(getShell(), "Delete all chat history",
-          "Delete every saved MuleSoftForge Studio AI chat and raw log in this workspace? This cannot be undone.")) {
+      if (!MessageDialog.openConfirm(getShell(), "Delete chat history",
+          "Delete every saved MuleSoftForge Studio AI chat and raw log from this workspace? Chats from other"
+              + " workspaces are kept. This cannot be undone.")) {
         return;
       }
       try {
-        int deleted = Stores.chats().deleteAll();
-        Stores.raw().deleteAll();
-        MessageDialog.openInformation(getShell(), "Chat history", "Deleted " + deleted + " chat(s).");
+        List<String> deleted = Stores.chats().deleteWhere(Stores::mine);
+        for (String id : deleted) {
+          Stores.raw().delete(id);
+        }
+        MessageDialog.openInformation(getShell(), "Chat history", "Deleted " + deleted.size() + " chat(s).");
       } catch (Exception ex) {
         setErrorMessage("Could not delete chats: " + Errors.describe(ex));
       }
     });
+  }
+
+  private void showChatFolder() {
+    chatFolder.setText((AiSettings.shareChats() ? "Chats are in the folder every workspace shares, never in your"
+        + " Mule projects: " : "Chats are stored privately in this workspace, never in your Mule projects: ")
+        + Stores.root() + "\nOpen-file contents and API keys are not saved. The cost ledger ("
+        + UserFolder.path().resolve(UsageLog.FILE_NAME) + ") is shared by every workspace, keeps only token counts"
+        + " and amounts, and is kept when chats are deleted.");
+    chatFolder.getParent().layout(true, true);
   }
 
   @Override
@@ -557,7 +631,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         setErrorMessage("Keep chats for: enter a number of days (0 = forever).");
         return false;
       }
-      AiSettings.saveHistorySettings(saveChats.getSelection(), days, rawLog.getSelection());
+      AiSettings.saveHistorySettings(saveChats.getSelection(), days, rawLog.getSelection(),
+          shareChats.getSelection());
       AiSettings.saveTrust(trustFromFields());
       AiSettings.saveRichTranscript(richTranscript.getSelection());
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
@@ -576,6 +651,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       }
       docsHosts.setText(AiSettings.docsHostsText());
       AiSettings.saveHttpInstructions(httpInstructions.getText());
+      showChatFolder();
       return true;
     } catch (StorageException e) {
       setErrorMessage(e.getErrorCode() == StorageException.NO_PASSWORD

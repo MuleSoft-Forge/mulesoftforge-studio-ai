@@ -13,8 +13,11 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -65,13 +68,17 @@ public final class ChatStore {
     writeIndex(index);
   }
 
-  // Newest first.
+  // Newest first. When the folder is shared, another Studio window may have saved or deleted a chat while this
+  // one rewrote the index, so an index that does not match the chat files is rebuilt from them.
   public synchronized List<Summary> list() throws IOException {
     Path index = dir.resolve(INDEX);
     List<Summary> summaries;
     if (Files.isRegularFile(index)) {
       try {
         summaries = JSON.readValue(index.toFile(), new TypeReference<List<Summary>>() {});
+        if (!ids(summaries).equals(chatIds())) {
+          summaries = rebuildIndex();
+        }
       } catch (IOException e) {
         summaries = rebuildIndex();
       }
@@ -88,9 +95,7 @@ public final class ChatStore {
   }
 
   public synchronized void rename(String id, String title) throws IOException {
-    ChatRecord r = load(id);
-    save(new ChatRecord(r.schema(), r.id(), title.strip(), r.project(), r.created(), r.updated(), r.entries(),
-        r.history(), r.cost(), r.pending(), r.auto()));
+    save(load(id).withTitle(title.strip()));
   }
 
   public synchronized void delete(String id) throws IOException {
@@ -108,6 +113,36 @@ public final class ChatStore {
     }
     Files.deleteIfExists(dir.resolve(INDEX));
     return deleted;
+  }
+
+  // Returns the ids deleted.
+  public synchronized List<String> deleteWhere(Predicate<Summary> which) throws IOException {
+    List<String> deleted = new ArrayList<>();
+    for (Summary s : list()) {
+      if (which.test(s)) {
+        Files.deleteIfExists(file(s.id()));
+        deleted.add(s.id());
+      }
+    }
+    if (!deleted.isEmpty()) {
+      rebuildIndex();
+    }
+    return deleted;
+  }
+
+  // Moves the chats that match into target, tagging any saved before chats had a workspace. Returns the ids moved.
+  public List<String> moveTo(ChatStore target, Predicate<Summary> which, String workspace) throws IOException {
+    List<String> moved = new ArrayList<>();
+    for (Summary s : list()) {
+      if (!which.test(s)) {
+        continue;
+      }
+      ChatRecord record = load(s.id());
+      target.save(record.workspace() == null ? record.withWorkspace(workspace) : record);
+      delete(s.id());
+      moved.add(s.id());
+    }
+    return moved;
   }
 
   // Deletes chats not updated within the last `days` days. Returns how many were removed.
@@ -154,18 +189,39 @@ public final class ChatStore {
     if (!Files.isDirectory(dir)) {
       return summaries;
     }
-    try (Stream<Path> files = Files.list(dir)) {
-      for (Path p : files.filter(p -> p.toString().endsWith(".json") && !p.getFileName().toString().equals(INDEX))
-          .toList()) {
-        try {
-          summaries.add(JSON.readValue(p.toFile(), ChatRecord.class).summary());
-        } catch (IOException e) {
-          // Skip unreadable chat files rather than losing the whole history.
-        }
+    for (Path p : chatFiles()) {
+      try {
+        summaries.add(JSON.readValue(p.toFile(), ChatRecord.class).summary());
+      } catch (IOException e) {
+        // Skip unreadable chat files rather than losing the whole history.
       }
     }
     writeIndex(summaries);
     return summaries;
+  }
+
+  private List<Path> chatFiles() throws IOException {
+    if (!Files.isDirectory(dir)) {
+      return List.of();
+    }
+    try (Stream<Path> files = Files.list(dir)) {
+      return files.filter(p -> p.toString().endsWith(".json") && !p.getFileName().toString().equals(INDEX)).toList();
+    }
+  }
+
+  private Set<String> chatIds() throws IOException {
+    Set<String> ids = new HashSet<>();
+    for (Path p : chatFiles()) {
+      String name = p.getFileName().toString();
+      ids.add(name.substring(0, name.length() - ".json".length()));
+    }
+    return ids;
+  }
+
+  private static Set<String> ids(List<Summary> summaries) {
+    Set<String> ids = new HashSet<>();
+    summaries.forEach(s -> ids.add(s.id()));
+    return ids;
   }
 
   private void writeIndex(List<Summary> index) throws IOException {
@@ -181,13 +237,18 @@ public final class ChatStore {
     return dir.resolve(id + ".json");
   }
 
+  // A temp name of its own, so two Studio windows writing the same file cannot interleave in one temp file.
   private static void write(Path target, String content) throws IOException {
-    Path temp = target.resolveSibling(target.getFileName() + ".tmp");
-    Files.writeString(temp, content, StandardCharsets.UTF_8);
+    Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
     try {
-      Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-    } catch (AtomicMoveNotSupportedException e) {
-      Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+      Files.writeString(temp, content, StandardCharsets.UTF_8);
+      try {
+        Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      } catch (AtomicMoveNotSupportedException e) {
+        Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+      }
+    } finally {
+      Files.deleteIfExists(temp);
     }
   }
 }

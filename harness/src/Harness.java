@@ -83,6 +83,7 @@ import com.mulesoftforge.studio.ai.render.MarkdownRenderer.Rendered;
 import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.render.Span;
 import com.mulesoftforge.studio.ai.settings.Provider;
+import com.mulesoftforge.studio.ai.settings.UserFolder;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -244,6 +245,8 @@ public class Harness {
       case "check-gate" -> GateChecks.run();
       case "check-exchange" -> ExchangeChecks.run();
       case "check-mcp" -> McpChecks.run();
+      case "check-shared" -> SharedChecks.run();
+      case "shared-writer" -> SharedChecks.writer(Path.of(args[1]), args[2]);
       case "evals" -> Evals.run(env, tail(args));
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
@@ -1851,7 +1854,7 @@ public class Harness {
         "employees-app", now, now,
         List.of(new ChatRecord.Entry("You", "hello"), new ChatRecord.Entry("AI", "```xml\n<flow/>\n```"),
             new ChatRecord.Entry("Step", "Done in 3 s")),
-        session.savedHistory(), meter.snapshot(), 1, "strong-model");
+        session.savedHistory(), meter.snapshot(), 1, "strong-model", null);
     store.save(record);
     ledger.append(id, "employees-app", "OPENAI", cost);
 
@@ -2734,7 +2737,7 @@ public class Harness {
 
   private static void listChats(Path state) throws Exception {
     ChatStore store = new ChatStore(state.resolve("chats"));
-    UsageLog ledger = new UsageLog(state.resolve("usage.jsonl"));
+    UsageLog ledger = new UsageLog(UserFolder.path().resolve(UsageLog.FILE_NAME));
     System.out.println("CHATS  " + store.directory());
     for (ChatRecord.Summary s : store.list()) {
       System.out.println("  " + s.id() + "  " + s.updated() + "  " + (s.project() == null ? "-" : s.project())
@@ -3118,6 +3121,7 @@ public class Harness {
           java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
           java Harness check-munit
+          java Harness check-shared                                               (offline: settings, cost and chats shared across workspaces)
           java Harness evals [--provider name] [--model id] [--runs n] [--list] [case...]   (live model, costs tokens)
         Providers: openrouter openai anthropic gemini azure bedrock mulesoft ollama custom
         Reads ../.env — never prints key values.

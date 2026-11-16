@@ -147,6 +147,8 @@ public class ChatView extends ViewPart {
   private String chatTitle;
   private String chatCreated;
   private String chatProject;
+  // The workspace the chat was started in; a chat opened from another workspace keeps its own.
+  private String chatWorkspace;
   // The model Auto used for this chat's last message.
   private String chatAuto;
   // The model call in progress, shown in the transcript's live line and ticked every second.
@@ -664,6 +666,7 @@ public class ChatView extends ViewPart {
     chatTitle = null;
     chatCreated = null;
     chatProject = null;
+    chatWorkspace = null;
     chatAuto = null;
     contextModel = null;
     continueMode = null;
@@ -717,7 +720,7 @@ public class ChatView extends ViewPart {
     }
     ChatRecord record = new ChatRecord(ChatRecord.SCHEMA, chatId, chatTitle, chatProject, chatCreated,
         Instant.now().toString(), new ArrayList<>(entries), session.savedHistory(), chatCost.snapshot(),
-        changes.size(), chatAuto);
+        changes.size(), chatAuto, chatWorkspace != null ? chatWorkspace : Stores.workspace());
     if (pendingSave != null) {
       pendingSave.cancel();
     }
@@ -765,6 +768,7 @@ public class ChatView extends ViewPart {
     chatTitle = record.title();
     chatCreated = record.created();
     chatProject = record.project();
+    chatWorkspace = record.workspace();
     chatAuto = record.auto();
     replaying = true;
     try {
@@ -868,6 +872,7 @@ public class ChatView extends ViewPart {
       chatTitle = ChatStore.titleFrom(prompt);
       chatCreated = Instant.now().toString();
       chatProject = project == null ? null : project.name();
+      chatWorkspace = Stores.workspace();
     }
     String usageChat = chatId;
     String usageProject = project == null ? chatProject : project.name();
@@ -1444,13 +1449,15 @@ public class ChatView extends ViewPart {
     UsageLog ledger = Stores.usage();
     String chatModels = chatCost.breakdown();
     String sessionModels = sessionCost.breakdown();
-    String project = chatProject == null ? "" : "\nProject " + chatProject + ", all time: "
+    String project = chatProject == null ? "" : "\nProject " + chatProject + ", all time, every workspace: "
         + CostMeter.describe(ledger.project(chatProject));
     status.showCost(chatCost.summary(), CostMeter.describe(ledger.today()), CostMeter.describe(ledger.thisMonth()),
         "This chat\n" + (chatModels.isEmpty() ? "nothing yet" : chatModels)
         + "\n\nStudio session (since Studio started), " + chats + (chats == 1 ? " chat" : " chats") + "\n"
         + (sessionModels.isEmpty() ? "nothing yet" : sessionModels)
-        + "\n\nAll time in this workspace: " + CostMeter.describe(ledger.allTime()) + project
+        + "\n\nToday and This month count every workspace."
+        + "\nAll time in this workspace: " + CostMeter.describe(ledger.workspace(Stores.workspace()))
+        + "\nAll time, every workspace: " + CostMeter.describe(ledger.allTime()) + project
         + "\n\nOpenRouter amounts are what OpenRouter billed. Amounts marked ~ are estimated from list prices at "
         + Pricing.PRICE_LIST_URL + ". Ollama is free.");
   }

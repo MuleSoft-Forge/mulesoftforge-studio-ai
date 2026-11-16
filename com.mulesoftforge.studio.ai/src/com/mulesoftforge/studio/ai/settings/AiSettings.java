@@ -1,17 +1,18 @@
 package com.mulesoftforge.studio.ai.settings;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
-import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.equinox.security.storage.ISecurePreferences;
 import org.eclipse.equinox.security.storage.SecurePreferencesFactory;
 import org.eclipse.equinox.security.storage.StorageException;
-import org.eclipse.jface.preference.IPreferenceStore;
-import org.eclipse.jface.util.IPropertyChangeListener;
-import org.eclipse.ui.preferences.ScopedPreferenceStore;
 
 import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.http.HttpTools;
@@ -21,8 +22,10 @@ import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 
 // Base URL and model are kept per provider so switching presets does not lose earlier values.
-// API keys live in Eclipse secure storage, never in the plain preference file.
+// Settings are shared by every workspace (UserFolder/settings.properties) unless this workspace keeps its own;
+// see SettingsLayers. API keys live in Eclipse secure storage, which is per user, never in a plain file.
 public final class AiSettings {
+  public static final String FILE_NAME = "settings.properties";
   private static final String PROVIDER = "provider";
   private static final String BASE_URL = "baseUrl.";
   private static final String MODEL = "model.";
@@ -38,6 +41,7 @@ public final class AiSettings {
   private static final String TLS_CA_PEM = "tls.caPem";
   private static final String HISTORY_DISABLED = "history.disabled";
   private static final String RETENTION_DAYS = "history.retentionDays";
+  private static final String SHARE_CHATS = "history.sharedAcrossWorkspaces";
   private static final String UPDATE_CHECK_DISABLED = "updates.checkDisabled";
   private static final String MASK_SECRETS_DISABLED = "privacy.maskSecretsDisabled";
   private static final String MASK_PERSONAL_DISABLED = "privacy.maskPersonalDataDisabled";
@@ -57,7 +61,8 @@ public final class AiSettings {
   private static final String GITHUB_TOKEN = "github.token";
   public static final int DEFAULT_RETENTION_DAYS = 90;
 
-  private static IPreferenceStore store;
+  private static final List<Consumer<String>> LISTENERS = new CopyOnWriteArrayList<>();
+  private static SettingsLayers layers;
 
   private AiSettings() {}
 
@@ -73,46 +78,87 @@ public final class AiSettings {
     }
   }
 
-  private static synchronized IPreferenceStore store() {
-    if (store == null) {
-      store = new ScopedPreferenceStore(InstanceScope.INSTANCE, Activator.PLUGIN_ID);
+  private static synchronized SettingsLayers layers() {
+    if (layers == null) {
+      layers = new SettingsLayers(new SettingsFile(sharedFile(), AiSettings::fire), new WorkspacePrefs());
+      try {
+        layers.importOnce();
+      } catch (IOException e) {
+        Activator.logFailure("Could not copy this workspace's settings to " + sharedFile(), e);
+      }
     }
-    return store;
+    return layers;
+  }
+
+  public static Path sharedFile() {
+    return UserFolder.path().resolve(FILE_NAME);
+  }
+
+  private static String text(String key) {
+    return layers().active().get(key);
+  }
+
+  private static boolean flag(String key) {
+    return Boolean.parseBoolean(text(key));
+  }
+
+  private static void save(String key, String value) throws IOException {
+    Map<String, String> change = new HashMap<>();
+    change.put(key, value);
+    save(change);
+  }
+
+  private static void save(Map<String, String> changes) throws IOException {
+    fire(layers().active().update(changes));
+  }
+
+  private static void fire(Set<String> keys) {
+    for (String key : keys) {
+      for (Consumer<String> listener : LISTENERS) {
+        listener.accept(key);
+      }
+    }
+  }
+
+  // Whether this workspace keeps its own copy of the settings instead of the shared file. API keys stay shared.
+  public static boolean workspaceOnly() {
+    return layers().workspaceOnly();
+  }
+
+  public static void saveWorkspaceOnly(boolean on) throws IOException {
+    fire(layers().setWorkspaceOnly(on));
   }
 
   public static Provider provider() {
-    Provider provider = Provider.fromName(store().getString(PROVIDER));
+    Provider provider = Provider.fromName(text(PROVIDER));
     // Prefer a visible provider if a hidden one was previously saved.
     return provider.shownInUi() ? provider : Provider.OPENROUTER;
   }
 
   public static String baseUrl(Provider provider) {
-    String value = store().getString(BASE_URL + provider.name());
+    String value = text(BASE_URL + provider.name());
     return value.isBlank() ? provider.defaultBaseUrl : value;
   }
 
   public static String model(Provider provider) {
-    String value = store().getString(MODEL + provider.name());
+    String value = text(MODEL + provider.name());
     return value.isBlank() ? provider.defaultModel : value;
   }
 
   // The models Refresh models last fetched for the provider, so the chat view's picker can offer them too.
   public static List<String> fetchedModels(Provider provider) {
-    String value = store().getString(FETCHED_MODELS + provider.name());
+    String value = text(FETCHED_MODELS + provider.name());
     return value.isBlank() ? List.of() : List.of(value.split("\n"));
   }
 
   public static void saveFetchedModels(Provider provider, List<String> models) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(FETCHED_MODELS + provider.name(), String.join("\n", models));
-    ((ScopedPreferenceStore) prefs).save();
+    save(FETCHED_MODELS + provider.name(), String.join("\n", models));
   }
 
-  // Called on the thread that changed the setting; null keys are possible for bulk changes.
+  // Called on the thread that changed the setting, or the one that first read another window's change.
   public static Runnable onChange(Consumer<String> listener) {
-    IPropertyChangeListener wrapped = event -> listener.accept(event.getProperty());
-    store().addPropertyChangeListener(wrapped);
-    return () -> store().removePropertyChangeListener(wrapped);
+    LISTENERS.add(listener);
+    return () -> LISTENERS.remove(listener);
   }
 
   public static boolean affectsModels(String key) {
@@ -124,108 +170,95 @@ public final class AiSettings {
     return key == null || key.equals(RAW_LOG);
   }
 
+  public static boolean affectsChatFolder(String key) {
+    return key == null || key.equals(SHARE_CHATS);
+  }
+
   public static void saveModel(Provider provider, String model) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(MODEL + provider.name(), model.trim());
-    ((ScopedPreferenceStore) prefs).save();
+    save(MODEL + provider.name(), model.trim());
   }
 
   // The two models Auto picks between for this provider.
   public static AutoRouter.Models autoModels(Provider provider) {
     AutoRouter.Models defaults = AutoRouter.defaults(provider);
-    String fast = store().getString(AUTO_FAST + provider.name()).trim();
-    String strong = store().getString(AUTO_STRONG + provider.name()).trim();
+    String fast = text(AUTO_FAST + provider.name()).trim();
+    String strong = text(AUTO_STRONG + provider.name()).trim();
     return new AutoRouter.Models(fast.isEmpty() ? defaults.fast() : fast, strong.isEmpty() ? defaults.strong() : strong);
   }
 
   public static void saveAutoModels(Provider provider, AutoRouter.Models models) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(AUTO_FAST + provider.name(), models.fast().trim());
-    prefs.setValue(AUTO_STRONG + provider.name(), models.strong().trim());
-    ((ScopedPreferenceStore) prefs).save();
+    save(Map.of(AUTO_FAST + provider.name(), models.fast().trim(), AUTO_STRONG + provider.name(),
+        models.strong().trim()));
   }
 
   public static ChatMode chatMode() {
-    return ChatMode.fromName(store().getString(CHAT_MODE));
+    return ChatMode.fromName(text(CHAT_MODE));
   }
 
   public static void saveChatMode(ChatMode mode) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(CHAT_MODE, mode.name());
-    ((ScopedPreferenceStore) prefs).save();
+    save(CHAT_MODE, mode.name());
   }
 
   // The HTML transcript; off falls back to the plain one. Takes effect when the view is reopened.
   public static boolean richTranscript() {
-    return !store().getBoolean(PLAIN_TRANSCRIPT);
+    return !flag(PLAIN_TRANSCRIPT);
   }
 
   public static void saveRichTranscript(boolean rich) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(PLAIN_TRANSCRIPT, !rich);
-    ((ScopedPreferenceStore) prefs).save();
+    save(PLAIN_TRANSCRIPT, Boolean.toString(!rich));
   }
 
   // Whether the chat view looks for a newer release on the MuleSoftForge site once per Studio session.
   public static boolean checkForUpdates() {
-    return !store().getBoolean(UPDATE_CHECK_DISABLED);
+    return !flag(UPDATE_CHECK_DISABLED);
   }
 
   public static void saveCheckForUpdates(boolean check) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(UPDATE_CHECK_DISABLED, !check);
-    ((ScopedPreferenceStore) prefs).save();
+    save(UPDATE_CHECK_DISABLED, Boolean.toString(!check));
   }
 
   // Tips or witty lines on the live status line while the model works. Both by default; Off is kept once chosen.
   public static LoadingPhrases.Mode loadingPhrases() {
-    return LoadingPhrases.Mode.fromName(store().getString(LOADING_PHRASES));
+    return LoadingPhrases.Mode.fromName(text(LOADING_PHRASES));
   }
 
   // Whether the view's tab and the Dock or taskbar icon show that an answer or a question is waiting while
   // Studio is in the background. On by default.
   public static boolean alertWhenDone() {
-    return !store().getBoolean(ALERT_DISABLED);
+    return !flag(ALERT_DISABLED);
   }
 
   // A system beep with that alert. Off by default.
   public static boolean alertSound() {
-    return store().getBoolean(ALERT_SOUND);
+    return flag(ALERT_SOUND);
   }
 
   // Whether the commands in Hooks.userFile() run on chat events. Off until turned on.
   public static boolean hooksEnabled() {
-    return store().getBoolean(HOOKS_ENABLED);
+    return flag(HOOKS_ENABLED);
   }
 
   public static void saveChatExtras(LoadingPhrases.Mode phrases, boolean alert, boolean sound) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(LOADING_PHRASES, phrases.name());
-    prefs.setValue(ALERT_DISABLED, !alert);
-    prefs.setValue(ALERT_SOUND, sound);
-    ((ScopedPreferenceStore) prefs).save();
+    save(Map.of(LOADING_PHRASES, phrases.name(), ALERT_DISABLED, Boolean.toString(!alert), ALERT_SOUND,
+        Boolean.toString(sound)));
   }
 
   public static void saveHooksEnabled(boolean hooks) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(HOOKS_ENABLED, hooks);
-    ((ScopedPreferenceStore) prefs).save();
+    save(HOOKS_ENABLED, Boolean.toString(hooks));
   }
 
   // The hosted MuleSoft Platform MCP server, signed in with Studio's Anypoint login; off until turned on.
   public static boolean mcpPlatformEnabled() {
-    return store().getBoolean(MCP_PLATFORM);
+    return flag(MCP_PLATFORM);
   }
 
   public static void saveMcpPlatformEnabled(boolean on) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(MCP_PLATFORM, on);
-    ((ScopedPreferenceStore) prefs).save();
+    save(MCP_PLATFORM, Boolean.toString(on));
   }
 
   // Built-in skills turned off in Preferences, as Extensions.builtInKey values.
   public static Set<String> disabledBuiltIns() {
-    String value = store().getString(BUILT_INS_DISABLED);
+    String value = text(BUILT_INS_DISABLED);
     return value.isBlank() ? Set.of() : Set.of(value.split("\n"));
   }
 
@@ -236,59 +269,49 @@ public final class AiSettings {
     } else {
       keys.add(key);
     }
-    IPreferenceStore prefs = store();
-    prefs.setValue(BUILT_INS_DISABLED, String.join("\n", keys));
-    ((ScopedPreferenceStore) prefs).save();
+    save(BUILT_INS_DISABLED, String.join("\n", keys));
   }
 
   // Whether a turn that proposed changes goes back to the AI while the project checks fail on them. On by default.
   public static boolean fixChecksBeforeFinishing() {
-    return !store().getBoolean(FIX_CHECKS_DISABLED);
+    return !flag(FIX_CHECKS_DISABLED);
   }
 
   public static void saveFixChecksBeforeFinishing(boolean on) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(FIX_CHECKS_DISABLED, !on);
-    ((ScopedPreferenceStore) prefs).save();
+    save(FIX_CHECKS_DISABLED, Boolean.toString(!on));
   }
 
   // Whether passwords, keys and tokens are replaced with placeholders before anything is sent to the model.
   public static boolean maskSecrets() {
-    return !store().getBoolean(MASK_SECRETS_DISABLED);
+    return !flag(MASK_SECRETS_DISABLED);
   }
 
   public static void saveMaskSecrets(boolean mask) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(MASK_SECRETS_DISABLED, !mask);
-    ((ScopedPreferenceStore) prefs).save();
+    save(MASK_SECRETS_DISABLED, Boolean.toString(!mask));
   }
 
   // Where the DataWeave CLI is; empty to look for dw on the PATH, in ~/.dw/bin and in Homebrew.
   public static String dataWeaveCli() {
-    return store().getString(DATAWEAVE_CLI);
+    return text(DATAWEAVE_CLI);
   }
 
   public static void saveDataWeaveCli(String path) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(DATAWEAVE_CLI, path == null ? "" : path.strip());
-    ((ScopedPreferenceStore) prefs).save();
+    save(DATAWEAVE_CLI, path == null ? "" : path.strip());
   }
 
   // Whether email addresses and phone numbers in live debug events are replaced with placeholders.
   public static boolean maskPersonalData() {
-    return !store().getBoolean(MASK_PERSONAL_DISABLED);
+    return !flag(MASK_PERSONAL_DISABLED);
   }
 
   public static void saveMaskPersonalData(boolean mask) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(MASK_PERSONAL_DISABLED, !mask);
-    ((ScopedPreferenceStore) prefs).save();
+    save(MASK_PERSONAL_DISABLED, Boolean.toString(!mask));
   }
 
   // The GitHub account bug reports and feedback are sent as. The token is in secure storage; the account name,
   // shown in the Feedback popup, is not secret.
   public static String gitHubLogin() {
-    return store().getString(GITHUB_LOGIN);
+    return text(GITHUB_LOGIN);
   }
 
   public static String gitHubToken() throws StorageException {
@@ -299,15 +322,11 @@ public final class AiSettings {
     ISecurePreferences secure = secure();
     secure.put(GITHUB_TOKEN, token, true);
     secure.flush();
-    IPreferenceStore prefs = store();
-    prefs.setValue(GITHUB_LOGIN, login);
-    ((ScopedPreferenceStore) prefs).save();
+    save(GITHUB_LOGIN, login);
   }
 
   public static void clearGitHubSignIn() throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setToDefault(GITHUB_LOGIN);
-    ((ScopedPreferenceStore) prefs).save();
+    save(GITHUB_LOGIN, null);
     ISecurePreferences secure = secure();
     secure.remove(GITHUB_TOKEN);
     secure.flush();
@@ -315,34 +334,30 @@ public final class AiSettings {
 
   // The user's own instructions, sent with every message in every project.
   public static String instructions() {
-    return store().getString(INSTRUCTIONS);
+    return text(INSTRUCTIONS);
   }
 
   public static void saveInstructions(String text) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(INSTRUCTIONS, text == null ? "" : text.strip());
-    ((ScopedPreferenceStore) prefs).save();
+    save(INSTRUCTIONS, text == null ? "" : text.strip());
   }
 
   // Extra guidance for call_endpoint and fetch_docs, appended after the built-in HTTP prompt.
   public static String httpInstructions() {
-    return store().getString(HTTP_INSTRUCTIONS);
+    return text(HTTP_INSTRUCTIONS);
   }
 
   public static void saveHttpInstructions(String text) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(HTTP_INSTRUCTIONS, text == null ? "" : text.strip());
-    ((ScopedPreferenceStore) prefs).save();
+    save(HTTP_INSTRUCTIONS, text == null ? "" : text.strip());
   }
 
   // Hosts fetch_docs may read, one per line. Empty preference means the built-in defaults.
   public static String docsHostsText() {
-    String text = store().getString(DOCS_HOSTS);
+    String text = text(DOCS_HOSTS);
     return text.isBlank() ? HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS) : text;
   }
 
   public static List<String> docsHosts() {
-    String text = store().getString(DOCS_HOSTS);
+    String text = text(DOCS_HOSTS);
     if (text.isBlank()) {
       return HttpTools.DEFAULT_DOCS_HOSTS;
     }
@@ -356,35 +371,27 @@ public final class AiSettings {
   // Saves the normalised host list. text must parse, or throws IllegalArgumentException.
   public static void saveDocsHosts(String text) throws Exception {
     List<String> hosts = HttpTools.parseDocsHosts(text);
-    IPreferenceStore prefs = store();
     String normalised = HttpTools.formatDocsHosts(hosts);
-    if (normalised.equals(HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS))) {
-      prefs.setToDefault(DOCS_HOSTS);
-    } else {
-      prefs.setValue(DOCS_HOSTS, normalised);
-    }
-    ((ScopedPreferenceStore) prefs).save();
+    save(DOCS_HOSTS, normalised.equals(HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS)) ? null : normalised);
   }
 
   public static Network.Trust trust() {
-    return new Network.Trust(!store().getBoolean(TLS_SYSTEM_DISABLED), store().getString(TLS_CA_PEM));
+    return new Network.Trust(!flag(TLS_SYSTEM_DISABLED), text(TLS_CA_PEM));
   }
 
   public static void saveTrust(Network.Trust trust) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(TLS_SYSTEM_DISABLED, !trust.useSystem());
-    prefs.setValue(TLS_CA_PEM, trust.caPemPath() == null ? "" : trust.caPemPath().trim());
-    ((ScopedPreferenceStore) prefs).save();
+    save(Map.of(TLS_SYSTEM_DISABLED, Boolean.toString(!trust.useSystem()), TLS_CA_PEM,
+        trust.caPemPath() == null ? "" : trust.caPemPath().trim()));
     Network.configure(trust);
   }
 
   public static boolean saveChats() {
-    return !store().getBoolean(HISTORY_DISABLED);
+    return !flag(HISTORY_DISABLED);
   }
 
   // 0 keeps chats forever.
   public static int retentionDays() {
-    String value = store().getString(RETENTION_DAYS).trim();
+    String value = text(RETENTION_DAYS).trim();
     try {
       return value.isEmpty() ? DEFAULT_RETENTION_DAYS : Math.max(0, Integer.parseInt(value));
     } catch (NumberFormatException e) {
@@ -394,22 +401,25 @@ public final class AiSettings {
 
   // Whether every request and response is written to a per-chat raw log. Off unless turned on.
   public static boolean rawLog() {
-    return store().getBoolean(RAW_LOG);
+    return flag(RAW_LOG);
   }
 
-  public static void saveHistorySettings(boolean saveChats, int retentionDays, boolean rawLog) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(HISTORY_DISABLED, !saveChats);
-    prefs.setValue(RETENTION_DAYS, Integer.toString(Math.max(0, retentionDays)));
-    prefs.setValue(RAW_LOG, rawLog);
-    ((ScopedPreferenceStore) prefs).save();
+  // Whether saved chats and raw logs live in the user folder, seen from every workspace, instead of in this
+  // workspace. Off by default: people often keep one workspace per client to keep their work apart.
+  public static boolean shareChats() {
+    return flag(SHARE_CHATS);
+  }
+
+  public static void saveHistorySettings(boolean saveChats, int retentionDays, boolean rawLog, boolean shareChats)
+      throws Exception {
+    save(Map.of(HISTORY_DISABLED, Boolean.toString(!saveChats), RETENTION_DAYS,
+        Integer.toString(Math.max(0, retentionDays)), RAW_LOG, Boolean.toString(rawLog), SHARE_CHATS,
+        Boolean.toString(shareChats)));
   }
 
   // The Raw toggle in the chat view.
   public static void saveRawLog(boolean rawLog) throws Exception {
-    IPreferenceStore prefs = store();
-    prefs.setValue(RAW_LOG, rawLog);
-    ((ScopedPreferenceStore) prefs).save();
+    save(RAW_LOG, Boolean.toString(rawLog));
   }
 
   public static String apiKey(Provider provider) throws StorageException {
@@ -432,11 +442,8 @@ public final class AiSettings {
 
   public static void save(Connection connection) throws Exception {
     Provider provider = connection.provider();
-    IPreferenceStore prefs = store();
-    prefs.setValue(PROVIDER, provider.name());
-    prefs.setValue(BASE_URL + provider.name(), connection.baseUrl().trim());
-    prefs.setValue(MODEL + provider.name(), connection.model().trim());
-    ((ScopedPreferenceStore) prefs).save();
+    save(Map.of(PROVIDER, provider.name(), BASE_URL + provider.name(), connection.baseUrl().trim(),
+        MODEL + provider.name(), connection.model().trim()));
 
     ISecurePreferences secure = secure();
     secure.put(API_KEY + provider.name(), connection.apiKey().trim(), true);
