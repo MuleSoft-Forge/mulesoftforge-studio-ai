@@ -123,15 +123,46 @@ final class SharedChecks {
     failed += check("the import marker stays out of the shared file", !shared.all().containsKey("settings.importedToShared"));
     failed += check("old settings stay in the workspace for an older plugin", first.get("provider").equals("OPENAI"));
     failed += check("the workspace then reads the shared file", one.active() == shared);
+    failed += check("its notice says its settings were copied", one.notice() == SettingsLayers.Notice.COPIED);
+    one.clearNotice();
+    failed += check("a notice is shown once", one.notice() == null);
 
-    MapValues second = new MapValues(Map.of("provider", "OLLAMA"));
+    MapValues differs = new MapValues(Map.of("provider", "OLLAMA", "chat.instructions", "Use British English."));
+    SettingsLayers kept = new SettingsLayers(new SettingsFile(file, null), differs);
+    kept.importOnce();
+    failed += check("a workspace set up differently keeps its own settings on update", kept.workspaceOnly()
+        && kept.active().get("provider").equals("OLLAMA")
+        && kept.active().get("chat.instructions").equals("Use British English."));
+    failed += check("and does not change the shared settings", shared.get("provider").equals("OPENAI")
+        && shared.get("chat.instructions").isEmpty());
+    failed += check("its notice says it kept its own", kept.notice() == SettingsLayers.Notice.KEPT);
+    failed += check("markers never reach the shared file",
+        shared.all().keySet().stream().noneMatch(k -> k.startsWith("settings.")));
+
+    MapValues empty = new MapValues(Map.of());
+    SettingsLayers fresh = new SettingsLayers(new SettingsFile(file, null), empty);
+    fresh.importOnce();
+    failed += check("a workspace that set nothing joins the shared settings",
+        !fresh.workspaceOnly() && fresh.active().get("provider").equals("OPENAI"));
+    failed += check("its notice says it joined", fresh.notice() == SettingsLayers.Notice.JOINED);
+    SettingsLayers firstEver = new SettingsLayers(new SettingsFile(dir.resolve("new-user.properties"), null),
+        new MapValues(Map.of()));
+    firstEver.importOnce();
+    failed += check("a brand-new user gets no notice", firstEver.notice() == null && !firstEver.workspaceOnly());
+
+    MapValues same = new MapValues(Map.of("provider", "OPENAI", "chat.mode", "ASK", "fetchedModels.OPENAI", "a\nb"));
+    SettingsLayers joins = new SettingsLayers(new SettingsFile(file, null), same);
+    joins.importOnce();
+    failed += check("one that differs only in mode or cached model lists joins too",
+        !joins.workspaceOnly() && joins.active().get("model.OPENAI").equals("gpt-5.5"));
+
+    MapValues second = new MapValues(Map.of());
     SettingsLayers two = new SettingsLayers(new SettingsFile(file, null), second);
     two.importOnce();
-    failed += check("a later workspace does not overwrite the shared settings",
-        shared.get("provider").equals("OPENAI") && two.active().get("provider").equals("OPENAI"));
-    second.update(Map.of("settings.importedToShared", "true", "provider", "BEDROCK"));
+    second.update(Map.of("provider", "BEDROCK"));
     two.importOnce();
-    failed += check("the import runs once per workspace", shared.get("provider").equals("OPENAI"));
+    failed += check("the import runs once per workspace", !two.workspaceOnly() && shared.get("provider").equals("OPENAI"));
+    second.update(Map.of("provider", ""));
 
     Set<String> changed = two.setWorkspaceOnly(true);
     failed += check("ticking workspace-only starts from the shared values", changed.isEmpty()

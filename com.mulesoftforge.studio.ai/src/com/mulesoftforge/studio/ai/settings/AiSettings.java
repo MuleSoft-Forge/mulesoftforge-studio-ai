@@ -129,6 +129,19 @@ public final class AiSettings {
     fire(layers().setWorkspaceOnly(on));
   }
 
+  // What the first start after settings became shared did to this workspace's settings, once; then null.
+  public static SettingsLayers.Notice takeUpdateNotice() {
+    SettingsLayers.Notice notice = layers().notice();
+    if (notice != null) {
+      try {
+        layers().clearNotice();
+      } catch (IOException e) {
+        Activator.logFailure("Could not clear the settings update notice", e);
+      }
+    }
+    return notice;
+  }
+
   public static Provider provider() {
     Provider provider = Provider.fromName(text(PROVIDER));
     // Prefer a visible provider if a hidden one was previously saved.

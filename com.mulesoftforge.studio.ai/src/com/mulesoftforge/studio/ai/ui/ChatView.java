@@ -86,6 +86,7 @@ import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.Provider;
+import com.mulesoftforge.studio.ai.settings.SettingsLayers;
 
 // The MuleSoftForge Studio AI view: runs each message, records the chat for saving, and tracks its cost.
 // Layout pieces live in Composer, ChangesPanel, ChatHistoryMenu and the Transcript implementations.
@@ -338,6 +339,27 @@ public class ChatView extends ViewPart {
     refreshHeader();
     refreshCost();
     pruneOldChats();
+    showSettingsNotice();
+  }
+
+  private void showSettingsNotice() {
+    SettingsLayers.Notice notice = AiSettings.takeUpdateNotice();
+    if (notice == null) {
+      return;
+    }
+    String common = " API keys and saved chats are unchanged. Today and This month on the right now add up every"
+        + " workspace.";
+    append("Note", switch (notice) {
+      case COPIED -> "Settings are now shared by every workspace. This workspace's settings were copied to "
+          + AiSettings.sharedFile() + ", so other workspaces and new ones start with the same provider, models and"
+          + " instructions. Nothing changed here." + common;
+      case KEPT -> "Settings are now shared by every workspace, but this one was set up differently from your"
+          + " others, so it keeps its own settings and nothing changed here. To use the shared ones instead, untick"
+          + " Use these settings in this workspace only in Settings." + common;
+      case JOINED -> "Settings are now shared by every workspace. This workspace uses the ones saved from your"
+          + " other workspaces (" + AiSettings.provider().label + "). To give it its own, tick Use these settings in"
+          + " this workspace only in Settings." + common;
+    });
   }
 
   private void applyTheme() {

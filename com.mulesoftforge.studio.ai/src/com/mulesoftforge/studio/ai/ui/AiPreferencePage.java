@@ -256,7 +256,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   private void showScope() {
     scopeInfo.setText(workspaceOnly.getSelection()
-        ? "This workspace keeps its own settings. Untick to go back to the settings every workspace shares."
+        ? "This workspace keeps its own settings (a workspace set up differently before settings were shared"
+            + " starts this way, so nothing changed on update). Untick to use the settings every workspace shares,"
+            + " saved in " + AiSettings.sharedFile() + "."
         : "Shared by every workspace, saved in " + AiSettings.sharedFile() + ". Tick to give this workspace its"
             + " own settings, starting from these. API keys are shared either way (Eclipse secure storage).");
     scopeInfo.getParent().layout(true, true);
