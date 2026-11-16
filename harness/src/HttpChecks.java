@@ -200,6 +200,15 @@ final class HttpChecks {
     }
   }
 
+  private static boolean refusedApp(String text) {
+    try {
+      HttpTools.parseAppHosts(text);
+      return false;
+    } catch (IllegalArgumentException e) {
+      return true;
+    }
+  }
+
   private static void respond(HttpExchange exchange, int status, String type, byte[] body) throws java.io.IOException {
     if (type != null) {
       exchange.getResponseHeaders().add("Content-Type", type);
@@ -355,9 +364,37 @@ final class HttpChecks {
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", base + "/away")));
       failed += check("redirects off this machine are not followed", out.startsWith("STATUS 302")
           && out.contains("NOT FOLLOWED: https://example.com/collect"));
+      int before = seen.size();
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", "https://example.com/")));
-      failed += check("external URLs refused before any request", out.startsWith("ERROR: only the Mule app on this"
-          + " machine") && out.contains("fetch_docs"));
+      failed += check("deployed app: without anyone to approve, the request is declined and not sent",
+          out.equals(HttpTools.DECLINED) && seen.size() == before);
+      List<String> asked = new ArrayList<>();
+      HttpTools approving = new HttpTools(project, secrets, null, true, Duration.ofSeconds(1))
+          .approver((question, detail) -> asked.add(question + "\n" + detail) && false);
+      out = approving.execute(request(HttpTools.CALL, Map.of("method", "POST",
+          "url", "https://my-app.m3jzw3-1.deu-c1.cloudhub.io/api/orders",
+          "headers", List.of(Map.of("name", "client_secret", "value", placeholder)), "body", "{\"id\":1}")));
+      failed += check("deployed app: the user is asked first, with the request still masked",
+          out.equals(HttpTools.DECLINED) && asked.size() == 1
+              && asked.get(0).startsWith("Allow POST to my-app.m3jzw3-1.deu-c1.cloudhub.io?")
+              && asked.get(0).contains("client_secret: " + placeholder) && asked.get(0).contains("{\"id\":1}")
+              && !asked.get(0).contains("Sup3r-Secret-42") && asked.get(0).contains("sent as their real values"));
+      out = approving.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", "http://example.com/")));
+      failed += check("deployed app: plain http is refused without asking", out.startsWith("ERROR: an app that is not"
+          + " on this machine is only called over https://") && asked.size() == 1);
+      out = ask.execute(request(HttpTools.CALL, Map.of("method", "DELETE", "url", "https://example.com/x")));
+      failed += check("deployed app: Ask mode still sends no DELETE", out.startsWith(ChatMode.REFUSED));
+      HttpTools listed = new HttpTools(project, secrets, null, true, Duration.ofSeconds(2))
+          .appHosts(List.of("nothing.invalid"))
+          .approver((question, detail) -> asked.add(question) && false);
+      out = listed.execute(request(HttpTools.CALL, Map.of("method", "GET", "url", "https://nothing.invalid/api")));
+      failed += check("deployed app: a host listed in Preferences is called without asking",
+          asked.size() == 1 && !out.equals(HttpTools.DECLINED) && out.startsWith("ERROR:"));
+      failed += check("app hosts: optional, URLs reduced to hosts, localhost and IPs refused",
+          HttpTools.parseAppHosts("").isEmpty()
+              && HttpTools.parseAppHosts("https://My-App.cloudhub.io\n# note\nother.example.com")
+                  .equals(List.of("my-app.cloudhub.io", "other.example.com"))
+              && refusedApp("localhost") && refusedApp("10.0.0.5"));
       out = agent.execute(request(HttpTools.CALL, Map.of("method", "GET", "url",
           "http://localhost:" + freePort() + "/api")));
       failed += check("nothing listening: tells the model to ask for the app to be run",

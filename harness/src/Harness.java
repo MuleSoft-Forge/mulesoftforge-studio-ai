@@ -3,6 +3,8 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -248,6 +250,8 @@ public class Harness {
       case "check-shared" -> SharedChecks.run();
       case "shared-writer" -> SharedChecks.writer(Path.of(args[1]), args[2]);
       case "evals" -> Evals.run(env, tail(args));
+      case "dw-bench" -> localOnly("DataWeaveBench", "run", env, tail(args));
+      case "check-dw-bench" -> localOnly("DataWeaveBench", "verify", null, null);
       case "dataweave-download" -> {
         com.mulesoftforge.studio.ai.dataweave.CliDownload.Asset asset =
             com.mulesoftforge.studio.ai.dataweave.CliDownload.current();
@@ -3106,6 +3110,31 @@ public class Harness {
   private static String shorten(String value) {
     String text = value == null ? "" : value.strip().replace('\n', ' ');
     return text.length() > 80 ? text.substring(0, 80) + "…" : text;
+  }
+
+  // Tools kept out of git (see .gitignore) are called by name, so a checkout without them still compiles.
+  private static void localOnly(String className, String method, Map<String, String> env, String[] args)
+      throws Exception {
+    Class<?> tool;
+    try {
+      tool = Class.forName(className);
+    } catch (ClassNotFoundException e) {
+      System.err.println(className + ".java is local only and is not in this checkout.");
+      System.exit(2);
+      return;
+    }
+    Method entry = env == null ? tool.getDeclaredMethod(method)
+        : tool.getDeclaredMethod(method, Map.class, String[].class);
+    entry.setAccessible(true);
+    try {
+      if (env == null) {
+        entry.invoke(null);
+      } else {
+        entry.invoke(null, env, args);
+      }
+    } catch (InvocationTargetException e) {
+      throw e.getCause() instanceof Exception cause ? cause : e;
+    }
   }
 
   private static String[] tail(String[] args) {

@@ -18,6 +18,7 @@ import com.mulesoftforge.studio.ai.Activator;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
+import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.render.LoadingPhrases;
 
@@ -50,12 +51,14 @@ public final class AiSettings {
   private static final String INSTRUCTIONS = "chat.instructions";
   private static final String HTTP_INSTRUCTIONS = "http.instructions";
   private static final String DOCS_HOSTS = "http.docsHosts";
+  private static final String APP_HOSTS = "http.appHosts";
   private static final String LOADING_PHRASES = "chat.loadingPhrases";
   private static final String ALERT_DISABLED = "chat.alertDisabled";
   private static final String ALERT_SOUND = "chat.alertSound";
   private static final String HOOKS_ENABLED = "hooks.enabled";
   private static final String BUILT_INS_DISABLED = "extensions.builtInsDisabled";
   private static final String FIX_CHECKS_DISABLED = "chat.fixChecksDisabled";
+  private static final String STEP_LIMIT = "chat.stepLimit";
   private static final String MCP_PLATFORM = "mcp.platformEnabled";
   private static final String GITHUB_LOGIN = "github.login";
   private static final String GITHUB_TOKEN = "github.token";
@@ -294,6 +297,21 @@ public final class AiSettings {
     save(FIX_CHECKS_DISABLED, Boolean.toString(!on));
   }
 
+  // Tool steps in one turn before it pauses and offers Continue.
+  public static int stepLimit() {
+    String value = text(STEP_LIMIT).trim();
+    try {
+      return value.isEmpty() ? ChatSession.DEFAULT_STEP_LIMIT
+          : Math.max(1, Math.min(ChatSession.MAX_STEP_LIMIT, Integer.parseInt(value)));
+    } catch (NumberFormatException e) {
+      return ChatSession.DEFAULT_STEP_LIMIT;
+    }
+  }
+
+  public static void saveStepLimit(int steps) throws Exception {
+    save(STEP_LIMIT, steps == ChatSession.DEFAULT_STEP_LIMIT ? null : Integer.toString(steps));
+  }
+
   // Whether passwords, keys and tokens are replaced with placeholders before anything is sent to the model.
   public static boolean maskSecrets() {
     return !flag(MASK_SECRETS_DISABLED);
@@ -386,6 +404,25 @@ public final class AiSettings {
     List<String> hosts = HttpTools.parseDocsHosts(text);
     String normalised = HttpTools.formatDocsHosts(hosts);
     save(DOCS_HOSTS, normalised.equals(HttpTools.formatDocsHosts(HttpTools.DEFAULT_DOCS_HOSTS)) ? null : normalised);
+  }
+
+  // Hosts of deployed apps call_endpoint may call without asking, one per line; empty asks for every one.
+  public static String appHostsText() {
+    return text(APP_HOSTS);
+  }
+
+  public static List<String> appHosts() {
+    try {
+      return HttpTools.parseAppHosts(text(APP_HOSTS));
+    } catch (IllegalArgumentException e) {
+      return List.of();
+    }
+  }
+
+  // text must parse, or throws IllegalArgumentException.
+  public static void saveAppHosts(String text) throws Exception {
+    List<String> hosts = HttpTools.parseAppHosts(text);
+    save(APP_HOSTS, hosts.isEmpty() ? null : HttpTools.formatDocsHosts(hosts));
   }
 
   public static Network.Trust trust() {

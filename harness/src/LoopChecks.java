@@ -180,15 +180,23 @@ final class LoopChecks {
     });
     ChatSession session = new ChatSession();
     ChatSession.Turn paused = session.send(model, ChatMode.AGENT, "keep reading", List.of(), project, Progress.NONE);
+    int limit = ChatSession.DEFAULT_STEP_LIMIT;
     failed += check("a turn that runs out of steps pauses and offers Continue", paused.stoppedAtLimit()
-        && paused.text().startsWith("Paused after 12 steps") && paused.activity().contains("paused at the step limit"));
+        && paused.text().startsWith("Paused after " + limit + " steps")
+        && paused.activity().contains("paused at the step limit"));
     int before = model.requests.size();
     ChatSession.Turn resumed = session.send(model, ChatMode.AGENT, ChatMode.CONTINUE_PROMPT, List.of(), project,
         Progress.NONE);
     List<ChatMessage> sent = model.requests.get(before).messages();
     failed += check("Continue resumes with the earlier steps still in the chat", !resumed.stoppedAtLimit()
         && resumed.text().equals("Finished.")
-        && sent.stream().filter(ToolExecutionResultMessage.class::isInstance).count() == 12);
+        && sent.stream().filter(ToolExecutionResultMessage.class::isInstance).count() == limit);
+    ChatSession shorter = new ChatSession();
+    shorter.stepLimit(3);
+    int start = model.requests.size();
+    ChatSession.Turn early = shorter.send(model, ChatMode.AGENT, "keep reading", List.of(), project, Progress.NONE);
+    failed += check("the step limit from Preferences is the one a turn pauses at", early.stoppedAtLimit()
+        && early.text().startsWith("Paused after 3 steps") && model.requests.size() - start == 3);
     return failed;
   }
 

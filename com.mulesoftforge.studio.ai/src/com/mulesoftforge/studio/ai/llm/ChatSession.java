@@ -65,7 +65,10 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 
 public class ChatSession {
-  public static final int MAX_TOOL_ROUNDS = 12;
+  // Tool rounds per turn before it pauses and offers Continue; set in Preferences. Copilot Chat's
+  // chat.agent.maxRequests caps its silent extensions at 200; identical repeated calls are refused anyway.
+  public static final int DEFAULT_STEP_LIMIT = 25;
+  public static final int MAX_STEP_LIMIT = 200;
   // Share of the model's context window at which the chat is compacted before the next message (Cline and Codex
   // use 90%; a little earlier leaves room for that message's attachments and tool output).
   public static final double COMPACT_AT = 0.85;
@@ -105,7 +108,7 @@ public class ChatSession {
   public static final String HOOK_BLOCKED = "(blocked by a hook)";
   static final String HOOK_BLOCKED_CALL = "ERROR: not run. The user's PreToolUse hook blocked this call: ";
   static final String HOOK_NOTE = "[From the user's %s hook]\n";
-  // In toolCounts when the turn stopped at MAX_TOOL_ROUNDS, so the view can offer Continue.
+  // In toolCounts when the turn stopped at the step limit, so the view can offer Continue.
   public static final String STEP_LIMIT = "(step limit)";
   // The third identical call in a turn is refused, as Roo-Code's ToolRepetitionDetector does; its result will not
   // change, and a model that repeats a call usually keeps repeating it.
@@ -278,7 +281,7 @@ public class ChatSession {
       return parts.isEmpty() ? "answered directly" : String.join(", ", parts);
     }
 
-    // The model was still working when the turn reached MAX_TOOL_ROUNDS; the user can let it continue.
+    // The model was still working when the turn reached the step limit; the user can let it continue.
     public boolean stoppedAtLimit() {
       return toolCounts.containsKey(STEP_LIMIT);
     }
@@ -314,11 +317,13 @@ public class ChatSession {
   private volatile ExchangeSearch exchange;
   private volatile McpHub mcp;
   private volatile boolean fixChecks = true;
+  private volatile int stepLimit = DEFAULT_STEP_LIMIT;
   private final String sessionId = UUID.randomUUID().toString();
   private volatile String instructions = "";
   private volatile String httpInstructions = "";
   private volatile String switchedFrom;
   private volatile List<String> docsHosts = List.of();
+  private volatile List<String> appHosts = List.of();
   // Only one send at a time per session; serialises turn starts without holding the monitor across I/O.
   private final Object sendGate = new Object();
 
@@ -356,6 +361,10 @@ public class ChatSession {
   // problems up to MAX_CHECK_NUDGES times.
   public void fixChecksBeforeFinishing(boolean on) {
     fixChecks = on;
+  }
+
+  public void stepLimit(int steps) {
+    stepLimit = Math.max(1, Math.min(MAX_STEP_LIMIT, steps));
   }
 
   // Passed to hooks as session_id, so a hook can tell chats apart.
@@ -427,6 +436,11 @@ public class ChatSession {
   // Hosts fetch_docs may read; empty means the built-in defaults.
   public void docsHosts(List<String> hosts) {
     docsHosts = hosts == null ? List.of() : List.copyOf(hosts);
+  }
+
+  // Deployed-app hosts call_endpoint may reach without asking; other hosts need the user's approval per call.
+  public void appHosts(List<String> hosts) {
+    appHosts = hosts == null ? List.of() : List.copyOf(hosts);
   }
 
   private static String agentsFile(ProjectFiles project) {
@@ -601,6 +615,7 @@ public class ChatSession {
     HttpTools httpTools = project == null ? null
         : new HttpTools(project, secrets, personalMask, mode.canChangeApp, currentDocsHosts, HttpTools.TIMEOUT,
             appConsole).debugger(debug).lateResults(lateSink()).cancelledWhen(progress::isCancelled)
+            .appHosts(appHosts).approver(progress::approve)
             .munitConsole(() -> {
               MunitRunner runner = munitRunner;
               return runner == null ? null : runner.console();
@@ -709,7 +724,8 @@ public class ChatSession {
     Map<String, String> failedEdits = new HashMap<>();
     // Every call this turn by tool and arguments, so a third identical one is refused.
     Map<String, Integer> seenCalls = new HashMap<>();
-    for (int round = 0; round < MAX_TOOL_ROUNDS && answer == null; round++) {
+    int steps = stepLimit;
+    for (int round = 0; round < steps && answer == null; round++) {
       List<ChatMessage> messages = new ArrayList<>();
       messages.add(SystemMessage.from(system.shared()));
       messages.addAll(past);
@@ -894,7 +910,7 @@ public class ChatSession {
     }
     if (answer == null) {
       toolCounts.put(STEP_LIMIT, 1);
-      answer = "Paused after " + MAX_TOOL_ROUNDS + " steps before the model finished."
+      answer = "Paused after " + steps + " steps before the model finished."
           + (changes.isEmpty() ? "" : " What it proposed so far is ready to review.")
           + " Continue to let it carry on from where it stopped.";
     }

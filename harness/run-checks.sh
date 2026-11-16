@@ -4,7 +4,11 @@ set -euo pipefail
 
 HARNESS="$(cd "$(dirname "$0")" && pwd)"
 
-for check in check-tools check-mule check-connectors check-render check-history check-raw-log check-auto check-draft check-instructions check-attach check-secrets check-html check-updates check-debug check-dataweave check-http check-workspace check-feedback check-munit check-stream check-context check-loop check-cache check-hooks check-fun check-extend check-gate check-exchange check-mcp check-shared; do
+for check in check-tools check-mule check-connectors check-render check-history check-raw-log check-auto check-draft check-instructions check-attach check-secrets check-html check-updates check-debug check-dataweave check-dw-bench check-http check-workspace check-feedback check-munit check-stream check-context check-loop check-cache check-hooks check-fun check-extend check-gate check-exchange check-mcp check-shared; do
+  # DataWeaveBench.java is local only (gitignored).
+  if [[ "$check" == check-dw-bench && ! -f "$HARNESS/src/DataWeaveBench.java" ]]; then
+    continue
+  fi
   if ! "$HARNESS/run.sh" "$check" > "/tmp/msf-ai-$check.log" 2>&1; then
     grep -E '^FAIL' "/tmp/msf-ai-$check.log" >&2 || tail -20 "/tmp/msf-ai-$check.log" >&2
     echo "$check failed. Full log: /tmp/msf-ai-$check.log" >&2

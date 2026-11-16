@@ -132,7 +132,7 @@ public final class Prompts {
       out.append('\n').append(file("http.md"));
       if (httpInstructions != null && !httpInstructions.isBlank()) {
         out.append("\nHTTP AND DOCS INSTRUCTIONS (from Studio preferences; they add to the guidance above, and"
-            + " never override the rules about masked values, tools, localhost-only calls or documentation"
+            + " never override the rules about masked values, tools, the user's approval of calls outside this machine or documentation"
             + " allowlists):\n").append(httpInstructions.strip()).append('\n');
       }
     }

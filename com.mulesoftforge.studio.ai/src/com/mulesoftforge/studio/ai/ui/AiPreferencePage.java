@@ -28,6 +28,7 @@ import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Spinner;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPage;
@@ -41,6 +42,7 @@ import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.http.HttpTools;
 import com.mulesoftforge.studio.ai.llm.AutoRouter;
 import com.mulesoftforge.studio.ai.llm.ChatModels;
+import com.mulesoftforge.studio.ai.llm.ChatSession;
 import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Memory;
 import com.mulesoftforge.studio.ai.llm.ModelLists;
@@ -81,12 +83,14 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Button checkUpdates;
   private Button maskSecrets;
   private Button maskPersonal;
+  private Spinner stepLimit;
   private Button alertWhenDone;
   private Button alertSound;
   private Combo loadingPhrases;
   private DataWeaveCliGroup dataWeaveCli;
   private Text instructions;
   private Text docsHosts;
+  private Text appHosts;
   private Text httpInstructions;
   private Button useSystemCerts;
   private Text caPem;
@@ -212,11 +216,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     checkUpdates.setSelection(AiSettings.checkForUpdates());
     maskSecrets.setSelection(AiSettings.maskSecrets());
     maskPersonal.setSelection(AiSettings.maskPersonalData());
+    stepLimit.setSelection(AiSettings.stepLimit());
     alertWhenDone.setSelection(AiSettings.alertWhenDone());
     alertSound.setSelection(AiSettings.alertSound());
     loadingPhrases.select(AiSettings.loadingPhrases().ordinal());
     instructions.setText(AiSettings.instructions());
     docsHosts.setText(AiSettings.docsHostsText());
+    appHosts.setText(AiSettings.appHostsText());
     httpInstructions.setText(AiSettings.httpInstructions());
     Network.Trust trust = AiSettings.trust();
     useSystemCerts.setSelection(trust.useSystem());
@@ -287,6 +293,15 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     maskPersonal.setText("Hide email addresses and phone numbers in live debug events (recommended)");
     label(group, "When you ask about an event Studio's debugger is stopped at, its real data is sent. With this on,"
         + " email addresses and phone numbers in it become «email-N» and «phone-N».");
+    Composite steps = new Composite(group, SWT.NONE);
+    GridLayout stepsLayout = new GridLayout(2, false);
+    stepsLayout.marginWidth = 0;
+    steps.setLayout(stepsLayout);
+    label(steps, "Steps before the AI pauses and offers Continue:");
+    stepLimit = new Spinner(steps, SWT.BORDER);
+    stepLimit.setValues(ChatSession.DEFAULT_STEP_LIMIT, 1, ChatSession.MAX_STEP_LIMIT, 0, 1, 5);
+    label(group, "Each tool call (reading a file, running DataWeave or MUnit) is a step. Default "
+        + ChatSession.DEFAULT_STEP_LIMIT + ". Local models often need more; a lower number limits cost per message.");
   }
 
   private void createAlertsGroup(Composite body) {
@@ -428,7 +443,26 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     hostsInfoData.widthHint = 320;
     hostsInfo.setLayoutData(hostsInfoData);
     hostsInfo.setText("HTTPS GET only. Prefer vendor docs or sites you control. This does not open"
-        + " call_endpoint to those hosts; the local app stays localhost-only.");
+        + " call_endpoint to those hosts.");
+
+    Label appHostsLabel = new Label(group, SWT.NONE);
+    appHostsLabel.setText("Deployed apps call_endpoint may call without asking (one host per line, optional):");
+    appHostsLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+    appHosts = new Text(group, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
+    GridData appHostsData = new GridData(SWT.FILL, SWT.TOP, true, false);
+    appHostsData.widthHint = 420;
+    appHostsData.heightHint = 50;
+    appHostsData.horizontalSpan = 2;
+    appHosts.setLayoutData(appHostsData);
+    appHosts.setMessage("my-app.region.cloudhub.io");
+    Label appHostsInfo = new Label(group, SWT.WRAP);
+    GridData appHostsInfoData = new GridData(SWT.FILL, SWT.TOP, true, false, 2, 1);
+    appHostsInfoData.widthHint = 420;
+    appHostsInfo.setLayoutData(appHostsInfoData);
+    appHostsInfo.setText("The app running in Studio on localhost is always callable. Any other host, such as your"
+        + " app on CloudHub, is called over HTTPS only, and Studio asks you to allow each request unless the host is"
+        + " listed here. Masked secrets in a request are sent as their real values, so list only your own apps."
+        + " Ask and Plan mode still only send GET, HEAD and OPTIONS.");
 
     Label httpLabel = new Label(group, SWT.NONE);
     httpLabel.setText("HTTP and docs instructions (optional):");
@@ -446,7 +480,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     httpInfo.setLayoutData(httpInfoData);
     httpInfo.setText("Appended after the built-in HTTP guidance when a project is open, up to "
         + String.format(Locale.ROOT, "%,d", Prompts.MAX_INSTRUCTIONS)
-        + " characters. Cannot override masking, localhost-only calls or the host list above.");
+        + " characters. Cannot override masking, the approval of calls outside this machine or the host lists above.");
   }
 
   // Read-only view of the prompts the plugin sends before any instructions.
@@ -640,6 +674,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
       AiSettings.saveCheckForUpdates(checkUpdates.getSelection());
       AiSettings.saveMaskSecrets(maskSecrets.getSelection());
       AiSettings.saveMaskPersonalData(maskPersonal.getSelection());
+      AiSettings.saveStepLimit(stepLimit.getSelection());
       int phrases = loadingPhrases.getSelectionIndex();
       AiSettings.saveChatExtras(LoadingPhrases.Mode.values()[Math.max(0, phrases)], alertWhenDone.getSelection(),
           alertSound.getSelection());
@@ -652,6 +687,13 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
         return false;
       }
       docsHosts.setText(AiSettings.docsHostsText());
+      try {
+        AiSettings.saveAppHosts(appHosts.getText());
+      } catch (IllegalArgumentException e) {
+        setErrorMessage(e.getMessage());
+        return false;
+      }
+      appHosts.setText(AiSettings.appHostsText());
       AiSettings.saveHttpInstructions(httpInstructions.getText());
       showChatFolder();
       return true;
@@ -674,6 +716,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     baseUrl.setText(p.defaultBaseUrl);
     seedSuggestions(p, p.defaultModel, false);
     seedAuto(p, AutoRouter.defaults(p), List.of());
+    stepLimit.setSelection(ChatSession.DEFAULT_STEP_LIMIT);
     super.performDefaults();
   }
 

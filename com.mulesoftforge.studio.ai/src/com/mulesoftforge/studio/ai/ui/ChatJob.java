@@ -137,6 +137,7 @@ public final class ChatJob extends Job {
       session.instructions(AiSettings.instructions());
       session.httpInstructions(AiSettings.httpInstructions());
       session.docsHosts(AiSettings.docsHosts());
+      session.appHosts(AiSettings.appHosts());
       StudioDebugger debugger = StudioDebugger.get();
       session.debugger(debugger.available() ? debugger : null);
       session.appConsole(Consoles.MULE_APP);
@@ -148,6 +149,7 @@ public final class ChatJob extends Job {
       session.hooks(hooks(progress));
       session.extensions(Extensions.load(project == null ? null : project.location(), AiSettings.disabledBuiltIns()));
       session.fixChecksBeforeFinishing(AiSettings.fixChecksBeforeFinishing());
+      session.stepLimit(AiSettings.stepLimit());
       session.exchange(ExchangeSearch.live(StudioAnypoint::login));
       session.mcp(mcpHub(progress));
       turnResult = AutoRouter.send(session, models, mode, prompt, attachments, project, progress);

@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -51,6 +52,7 @@ import com.mulesoftforge.studio.ai.debug.ProcessorSource;
 import com.mulesoftforge.studio.ai.edit.ProjectFiles;
 import com.mulesoftforge.studio.ai.edit.ProjectPaths;
 import com.mulesoftforge.studio.ai.llm.ChatMode;
+import com.mulesoftforge.studio.ai.llm.Errors;
 import com.mulesoftforge.studio.ai.llm.Network;
 import com.mulesoftforge.studio.ai.llm.SecretMask;
 
@@ -59,8 +61,9 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 
-// The model's HTTP tools. call_endpoint only reaches the user's own machine (loopback addresses), so a model steered
-// by something it read cannot send project content anywhere; placeholders are filled in only for those requests.
+// The model's HTTP tools. call_endpoint reaches the user's own machine (loopback addresses) freely. Any other host,
+// such as the app deployed to CloudHub, is called over HTTPS only when the user approves the call or listed the host
+// in Preferences, so a model steered by something it read cannot send project content or secrets anywhere unseen.
 // fetch_docs only reads MuleSoft's documentation sites, with GET and no headers or body of the model's choosing.
 // Everything that comes back is masked like the rest of what the model sees.
 public final class HttpTools {
@@ -112,8 +115,12 @@ public final class HttpTools {
       "<([^>]+)>\\s*;\\s*rel=\"?describedby\"?", Pattern.CASE_INSENSITIVE);
   private static final ObjectMapper JSON = new ObjectMapper();
 
+  public static final String DECLINED = "DECLINED BY THE USER (not a failure of your call): the user did not allow"
+      + " this request. Do not call it again unless the user asks; show it as a curl command instead.";
+
   private static HttpClient localClient;
   private static HttpClient docsClient;
+  private static HttpClient remoteClient;
 
   private final ProjectFiles files;
   private final SecretMask secrets;
@@ -126,6 +133,8 @@ public final class HttpTools {
   private Consumer<Late> late = result -> {};
   private BooleanSupplier cancelled = () -> false;
   private Supplier<String> munitConsole;
+  private Set<String> appHosts = Set.of();
+  private BiPredicate<String, String> approver = (question, detail) -> false;
 
   // files is null when no project is open; personal is null when personal data is sent as it is. canChange allows
   // requests that change data (POST, PUT, PATCH, DELETE), which Ask and Plan mode do not send. docsHosts is the
@@ -175,6 +184,18 @@ public final class HttpTools {
     return this;
   }
 
+  // Hosts of deployed apps the user lets call_endpoint reach without asking each time.
+  public HttpTools appHosts(Collection<String> hosts) {
+    appHosts = hosts == null ? Set.of() : Set.copyOf(hosts);
+    return this;
+  }
+
+  // Asks the user to allow a request to any other host that is not on this machine; without it the answer is no.
+  public HttpTools approver(BiPredicate<String, String> ask) {
+    approver = ask == null ? (question, detail) -> false : ask;
+    return this;
+  }
+
   // Checked while call_endpoint waits, so cancelling the turn does not wait for the app.
   public HttpTools cancelledWhen(BooleanSupplier check) {
     cancelled = check == null ? () -> false : check;
@@ -188,10 +209,23 @@ public final class HttpTools {
   // Hosts only, one per line (or a full https:// URL whose host is taken). Rejects empty lists, IPs, localhost,
   // wildcards and paths. Returns a stable, lower-case list.
   public static List<String> parseDocsHosts(String text) {
-    if (text == null || text.isBlank()) {
+    List<String> hosts = parseHosts(text, "documentation host", "docs.mulesoft.com");
+    if (hosts.isEmpty()) {
       throw new IllegalArgumentException("Enter at least one documentation host, one per line.");
     }
+    return hosts;
+  }
+
+  // Hosts of deployed apps call_endpoint may reach without asking, in the same form; may be empty.
+  public static List<String> parseAppHosts(String text) {
+    return parseHosts(text, "app host", "my-app.region.cloudhub.io");
+  }
+
+  private static List<String> parseHosts(String text, String what, String example) {
     LinkedHashSet<String> hosts = new LinkedHashSet<>();
+    if (text == null) {
+      return List.of();
+    }
     for (String raw : text.split("\\R")) {
       String line = raw.strip();
       if (line.isEmpty() || line.startsWith("#")) {
@@ -200,20 +234,18 @@ public final class HttpTools {
       String host = hostLine(line);
       if (host == null) {
         throw new IllegalArgumentException("\"" + line + "\" is not a host name. Enter hosts such as"
-            + " docs.mulesoft.com, one per line (no paths, ports or wildcards).");
+            + " " + example + ", one per line (no paths, ports or wildcards).");
       }
       if (host.equals("localhost") || host.endsWith(".localhost") || IPV4.matcher(host).matches()
           || host.contains(":")) {
-        throw new IllegalArgumentException("\"" + host + "\" cannot be a documentation host. Use a public"
-            + " https site you control or vendor docs, not localhost or an IP address.");
+        throw new IllegalArgumentException("\"" + host + "\" cannot be a " + what + ". Use a public"
+            + " https site you control" + (example.startsWith("docs") ? " or vendor docs" : "")
+            + ", not localhost or an IP address.");
       }
       if (!HOST.matcher(host).matches()) {
         throw new IllegalArgumentException("\"" + host + "\" is not a valid host name.");
       }
       hosts.add(host);
-    }
-    if (hosts.isEmpty()) {
-      throw new IllegalArgumentException("Enter at least one documentation host, one per line.");
     }
     return List.copyOf(hosts);
   }
@@ -257,8 +289,9 @@ public final class HttpTools {
         .name(CALL)
         .description("Send an HTTP request to the Mule app the user is running in Studio and get the status,"
             + " headers and body" + (console == null ? "" : ", and what the app's console printed while it ran")
-            + ". Only localhost addresses are allowed. Use it to test an endpoint, reproduce a"
-            + " bug or prove a fix. Masked values («masked-N») in the url, headers or body are sent as their real"
+            + ". Use it to test an endpoint, reproduce a bug or prove a fix. localhost addresses are called at once."
+            + " A deployed app (e.g. https://my-app.region.cloudhub.io) is called over https:// only: Studio asks"
+            + " the user to allow each such request unless its host is in the user's list. Masked values («masked-N») in the url, headers or body are sent as their real"
             + " values. Ask and Plan mode only send " + String.join(", ", READ_METHODS) + "; requests that change"
             + " data need Agent or Diagnose mode."
             + (debugger == null ? "" : " If Studio's debugger stops while the call waits, it returns PAUSED with the"
@@ -384,9 +417,16 @@ public final class HttpTools {
     } catch (IllegalArgumentException e) {
       return "ERROR: not a valid URL: " + shownUrl;
     }
-    String problem = localProblem(uri);
-    if (problem != null) {
-      return "ERROR: " + problem;
+    boolean remote = localProblem(uri) != null;
+    if (remote) {
+      String problem = loopbackName(host(uri)) ? localProblem(uri) : remoteProblem(uri);
+      if (problem != null) {
+        return "ERROR: " + problem;
+      }
+      if (!appHosts.contains(host(uri)) && !approver.test("Allow " + method + " to " + host(uri) + "?",
+          approval(method, shownUrl, args))) {
+        return DECLINED;
+      }
     }
     uri = local(uri);
 
@@ -476,9 +516,9 @@ public final class HttpTools {
     URI target = uri;
     byte[] sentBody = body;
 
-    AppConsole.Text before = consoleNow();
-    Exchange exchange = new Exchange(limit);
-    DebugSession debug = wait ? debugger : null;
+    AppConsole.Text before = remote ? null : consoleNow();
+    Exchange exchange = new Exchange(limit, remote);
+    DebugSession debug = wait && !remote ? debugger : null;
     DebugStop stoppedBefore = debug == null ? null : debug.current();
     CompletableFuture<DebugStop> paused = new CompletableFuture<>();
     // Watching starts before the request is sent, so a breakpoint it hits at once is not missed.
@@ -611,9 +651,16 @@ public final class HttpTools {
       String shownUrl, List<String> skipped, JsonNode args, AppConsole.Text before) throws Exception {
     long started = System.nanoTime();
     Received received;
+    String host = host(uri);
     try {
-      received = send(localClient(), request, uri, method, body, HttpTools::localProblem, exchange.limit, exchange);
+      received = exchange.remote
+          ? send(remoteClient(), request, uri, method, body, next -> sameHost(next, host), exchange.limit, exchange)
+          : send(localClient(), request, uri, method, body, HttpTools::localProblem, exchange.limit, exchange);
     } catch (ConnectException | HttpConnectTimeoutException e) {
+      if (exchange.remote) {
+        return masked("ERROR: could not connect to " + host + ": " + Errors.describe(e) + ". Check the URL, that the"
+            + " app is running there, and Studio's network settings (proxy and certificates) in Preferences.");
+      }
       return masked("ERROR: nothing is answering on " + uri.getHost() + ":" + port(uri) + ". The app is not"
           + " running, or listens on another port. Ask the user to run it in Studio (Run As > Mule Application) and"
           + " wait for DEPLOYED in the console" + (files == null ? "." : "; list_endpoints shows the port it uses.")
@@ -698,11 +745,13 @@ public final class HttpTools {
   // One call_endpoint request, so the turn can drop it while a worker thread waits on it.
   private static final class Exchange {
     final Duration limit;
+    final boolean remote;
     private volatile boolean abandoned;
     private volatile CompletableFuture<?> pending;
 
-    Exchange(Duration limit) {
+    Exchange(Duration limit, boolean remote) {
       this.limit = limit;
+      this.remote = remote;
     }
 
     boolean abandoned() {
@@ -1116,6 +1165,58 @@ public final class HttpTools {
     return null;
   }
 
+  // Why call_endpoint refuses uri as an app that is not on this machine, or null when it may be asked for.
+  public static String remoteProblem(URI uri) {
+    if (!"https".equalsIgnoreCase(uri.getScheme())) {
+      return "an app that is not on this machine is only called over https://, such as"
+          + " https://my-app.region.cloudhub.io/api/status.";
+    }
+    if (uri.getRawUserInfo() != null) {
+      return "user names and passwords in the URL are not sent; use an Authorization header.";
+    }
+    String host = host(uri);
+    if (!HOST.matcher(host).matches()) {
+      return "\"" + host + "\" is not a host name.";
+    }
+    if (SecretMask.hasPlaceholder(host) || host.contains("«")) {
+      return "the host cannot be a masked value.";
+    }
+    return null;
+  }
+
+  // Redirects from a deployed app are followed only on the same host, over https.
+  private static String sameHost(URI next, String host) {
+    return "https".equalsIgnoreCase(next.getScheme()) && host(next).equals(host) ? null
+        : "a redirect to another host or to http is not followed";
+  }
+
+  private static String host(URI uri) {
+    String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+    return host.startsWith("[") && host.endsWith("]") ? host.substring(1, host.length() - 1) : host;
+  }
+
+  private static boolean loopbackName(String host) {
+    return host.equals("localhost") || host.endsWith(".localhost") || host.equals("::1") || host.equals("0.0.0.0")
+        || host.matches("127(\\.\\d{1,3}){3}");
+  }
+
+  // What the approval dialog shows: the request as the model wrote it, with masked values still masked.
+  static String approval(String method, String shownUrl, JsonNode args) {
+    StringBuilder out = new StringBuilder(method).append(' ').append(shownUrl).append('\n');
+    for (JsonNode header : args.path("headers")) {
+      out.append(header.path("name").asText("")).append(": ").append(header.path("value").asText("")).append('\n');
+    }
+    if (args.hasNonNull("body")) {
+      out.append('\n').append(cap(args.get("body").asText(), 1_000)).append('\n');
+    } else if (args.hasNonNull("file")) {
+      out.append("\nBody: the project file ").append(args.get("file").asText()).append('\n');
+    } else if (args.path("parts").isArray() && !args.path("parts").isEmpty()) {
+      out.append("\nBody: a multipart form with ").append(args.path("parts").size()).append(" parts\n");
+    }
+    out.append("\nThis app is not on your machine. Values shown as «masked-N» are sent as their real values.");
+    return out.toString();
+  }
+
   // Why fetch_docs refuses uri against the built-in defaults, or null when it is allowed.
   public static String docsProblem(URI uri) {
     return docsProblem(uri, DEFAULT_DOCS_HOSTS);
@@ -1187,6 +1288,15 @@ public final class HttpTools {
       docsClient = Network.builder().followRedirects(HttpClient.Redirect.NEVER).build();
     }
     return docsClient;
+  }
+
+  // Deployed apps: Studio's proxy and certificate settings, and the server's certificate is checked.
+  private static synchronized HttpClient remoteClient() {
+    if (remoteClient == null) {
+      remoteClient = Network.builder().followRedirects(HttpClient.Redirect.NEVER)
+          .connectTimeout(Duration.ofSeconds(10)).build();
+    }
+    return remoteClient;
   }
 
   private static JsonNode arguments(ToolExecutionRequest request) {

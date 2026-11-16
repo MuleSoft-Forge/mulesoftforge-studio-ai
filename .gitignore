@@ -12,5 +12,11 @@ harness/out/
 # Local secrets
 .env
 
+# LinkedIn post drafts (local only)
+linkedin/
+
+# DataWeave model benchmark (local only)
+harness/src/DataWeaveBench.java
+
 # Copied from Maven at build time
 com.mulesoftforge.studio.ai/lib/

@@ -1001,8 +1001,7 @@ public class ChatView extends ViewPart {
               }
               if (result.stoppedAtLimit()) {
                 continueMode = mode;
-                transcript.action("Continue after " + ChatSession.MAX_TOOL_ROUNDS
-                    + " steps — let the AI carry on from where it paused", CONTINUE);
+                transcript.action("Continue — let the AI carry on from where it paused", CONTINUE);
               }
               if (checkFixAfter && drafted > 0) {
                 transcript.action("After you accept and Studio redeploys, check the fix in Diagnose mode",
