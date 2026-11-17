@@ -7,14 +7,19 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import org.eclipse.core.filesystem.EFS;
+import org.eclipse.core.runtime.Status;
+import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
@@ -49,6 +54,8 @@ final class ChatHistoryMenu {
   }
 
   private static final int SHOWN = 25;
+  // Studio's text editor holds a document several times over, and Studio's default heap is 1 GB.
+  private static final long EDITOR_LIMIT = 20_000_000;
 
   private final Shell shell;
   private final Host host;
@@ -165,18 +172,41 @@ final class ChatHistoryMenu {
   }
 
   private void openRaw(String id) {
-    try {
-      openRawLog(id);
-    } catch (Exception e) {
-      host.note("Error", "Could not open the raw log: " + Errors.describe(e));
-    }
+    openRawLog(id, shell, host::note);
   }
 
-  // A readable copy in Studio's text editor; the file is outside the workspace projects.
-  static void openRawLog(String id) throws Exception {
-    Path readable = Stores.raw().writeReadable(id);
-    IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
-    IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(readable.toUri()));
+  // Writes a readable copy off the UI thread, then opens it in Studio's text editor; the file is outside the
+  // workspace projects. A copy too large for Studio's heap opens in the system's app for .txt files instead.
+  static void openRawLog(String id, Control anchor, BiConsumer<String, String> note) {
+    Display display = anchor.getDisplay();
+    Job job = Job.create("Write MuleSoftForge Studio AI raw log", monitor -> {
+      try {
+        Path readable = Stores.raw().writeReadable(id);
+        long size = Files.size(readable);
+        Ui.async(display, anchor, () -> showRawLog(readable, size, note));
+      } catch (Exception e) {
+        Ui.async(display, anchor, () -> note.accept("Error", "Could not open the raw log: " + Errors.describe(e)));
+      }
+      return Status.OK_STATUS;
+    });
+    job.setSystem(true);
+    job.schedule();
+  }
+
+  private static void showRawLog(Path readable, long size, BiConsumer<String, String> note) {
+    try {
+      if (size > EDITOR_LIMIT) {
+        if (!Program.launch(readable.toString())) {
+          note.accept("Note", "The raw log is " + size / 1_000_000 + " MB, too large to open in Studio: "
+              + readable);
+        }
+        return;
+      }
+      IWorkbenchPage page = PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage();
+      IDE.openEditorOnFileStore(page, EFS.getLocalFileSystem().getStore(readable.toUri()));
+    } catch (Exception e) {
+      note.accept("Error", "Could not open the raw log: " + Errors.describe(e));
+    }
   }
 
   private void delete(ChatRecord.Summary chat) {

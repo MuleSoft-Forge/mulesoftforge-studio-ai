@@ -86,6 +86,7 @@ import com.mulesoftforge.studio.ai.render.Palette;
 import com.mulesoftforge.studio.ai.render.Span;
 import com.mulesoftforge.studio.ai.settings.Provider;
 import com.mulesoftforge.studio.ai.settings.UserFolder;
+import com.mulesoftforge.studio.ai.settings.WireApi;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -107,7 +108,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  *   java Harness test-connection [provider...]
  *   java Harness list-models [provider...]
- *   java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
+ *   java Harness chat [--provider name] [--model id] [--api chat-completions|responses] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
  *   java Harness check-tools
  *   java Harness check-mule
  *   java Harness check-project /path/to/mule-app [studio-workspace]
@@ -119,6 +120,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 public class Harness {
   private static final Path ENV = Path.of("..").resolve(".env").toAbsolutePath().normalize();
   private static String modelOverride;
+  private static WireApi wireApiOverride;
   private static AutoRouter.Models autoPair;
   private static final String IMAGE_SPEC = "image:";
   private static ChatMode mode = ChatMode.AGENT;
@@ -182,6 +184,7 @@ public class Harness {
             case "--project" -> project = Path.of(args[++i]);
             case "--apply" -> apply = true;
             case "--model" -> modelOverride = args[++i];
+            case "--api" -> wireApiOverride = WireApi.valueOf(args[++i].toUpperCase(Locale.ROOT).replace('-', '_'));
             case "--workspace" -> workspace = Path.of(args[++i]);
             case "--mode" -> mode = ChatMode.valueOf(args[++i].toUpperCase(Locale.ROOT));
             case "--then" -> then.add(args[++i]);
@@ -238,6 +241,7 @@ public class Harness {
       case "check-feedback" -> FeedbackChecks.run();
       case "check-munit" -> MunitOfflineChecks.run();
       case "check-stream" -> StreamChecks.run();
+      case "check-responses" -> ResponsesChecks.run();
       case "check-context" -> ContextChecks.run();
       case "check-loop" -> LoopChecks.run();
       case "check-cache" -> CacheChecks.run();
@@ -326,6 +330,9 @@ public class Harness {
     Connection connection = connectionFor(env, provider);
     if (modelOverride != null) {
       connection = connection.withModel(modelOverride);
+    }
+    if (wireApiOverride != null) {
+      connection = connection.withWireApi(wireApiOverride);
     }
     DiskProject project = projectDir == null ? null : new DiskProject(projectDir, models(workspace));
     List<Attachment> attachments = new ArrayList<>();
@@ -1768,7 +1775,8 @@ public class Harness {
   private static RawCapture wire(Connection connection) {
     return new RawCapture(0, connection.provider().name(), call -> {
       if (call.http() != null) {
-        System.out.println("  · HTTP " + call.http().status() + ", output cap " + maxCompletionTokens(call.http().request()));
+        System.out.println("  · HTTP " + call.http().status() + " " + call.http().url().replaceFirst(".*/", "/")
+            + ", output cap " + outputCap(call.http().request()));
       }
     });
   }
@@ -1776,6 +1784,16 @@ public class Harness {
   private static int maxCompletionTokens(String body) {
     try {
       return new ObjectMapper().readTree(body).path("max_completion_tokens").asInt(-1);
+    } catch (Exception e) {
+      return -1;
+    }
+  }
+
+  private static int outputCap(String body) {
+    try {
+      JsonNode request = new ObjectMapper().readTree(body);
+      return request.has("max_output_tokens") ? request.path("max_output_tokens").asInt(-1)
+          : request.path("max_completion_tokens").asInt(-1);
     } catch (Exception e) {
       return -1;
     }
@@ -1979,6 +1997,25 @@ public class Harness {
       failed += check("readable view", readable.contains("===== Turn 1 · Step 1 · POST ")
           && readable.contains("===== Turn 2 · Step 1 · POST ") && readable.contains("\"content\" : \"pong from stub\""));
       failed += check("readable view has no key", !readable.contains("sk-harness-NEVER-LOGGED-123"));
+      failed += check("streamed readable view matches", readable.equals(RawLog.readable(loaded)));
+      List<RawLog.Entry> index = raw.index(id);
+      failed += check("index has every call, by turn, with its heading", index.size() == loaded.size()
+          && index.get(0).turn() == 1 && index.get(0).heading().equals(call.heading())
+          && index.stream().allMatch(e -> e.size() > 0));
+
+      String fatId = ChatStore.newId();
+      String fatBody = "x".repeat(1_000_000);
+      for (int i = 1; i <= 40; i++) {
+        raw.append(fatId, new RawCapture.Call(i, 1, "now", "Stub", "m", 1.0,
+            new RawCapture.Http("POST", base + "/chat/completions", 200, fatBody, "{}"), "{}", "{}", null));
+      }
+      List<RawLog.Entry> fatIndex = raw.index(fatId);
+      failed += check("long chat indexed without bodies", fatIndex.size() == 40
+          && fatIndex.stream().mapToLong(RawLog.Entry::size).sum() > 40_000_000L
+          && fatIndex.stream().noneMatch(e -> e.heading().contains(fatBody.substring(0, 100))));
+      failed += check("long chat streamed to its readable copy",
+          Files.size(raw.writeReadable(fatId)) > 40_000_000L);
+      raw.delete(fatId);
 
       RawCapture.Call sdkOnly = new RawCapture.Call(3, 1, "now", "Amazon Bedrock", "claude", 1.0, null,
           "{\"messages\":[]}", "{\"message\":{}}", null);
@@ -3146,7 +3183,7 @@ public class Harness {
         Usage:
           java Harness test-connection [provider...]
           java Harness list-models [provider...]
-          java Harness chat [--provider name] [--model id] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
+          java Harness chat [--provider name] [--model id] [--api chat-completions|responses] [--file path] [--mode ask|agent|plan] [--attach path] [--lines path:a-b] [--image file.png] [--auto fast,strong] [--then mode:prompt] [--project dir [--apply]] [--mcp-platform] "prompt"
           java Harness check-tools | check-render | check-history | check-attach | check-secrets | check-html [preview.html]
           java Harness check-updates [latest.json URL]
           java Harness check-munit

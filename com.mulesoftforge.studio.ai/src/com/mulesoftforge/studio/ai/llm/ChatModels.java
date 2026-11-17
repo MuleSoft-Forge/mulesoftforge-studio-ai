@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
+import com.mulesoftforge.studio.ai.settings.WireApi;
 
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.http.client.jdk.JdkHttpClient;
@@ -24,6 +25,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
+import dev.langchain4j.model.openai.OpenAiResponsesStreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.token.credentials.SdkToken;
@@ -71,6 +73,9 @@ public final class ChatModels {
         : connection.apiKey();
     return switch (connection.provider().api) {
       case OPENAI_COMPATIBLE -> {
+        if (connection.wireApi() == WireApi.RESPONSES) {
+          yield responses(connection, apiKey, capture, inFlight, listeners);
+        }
         OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder = OpenAiStreamingChatModel.builder()
             .httpClientBuilder(http(capture, inFlight))
             .baseUrl(connection.baseUrl())
@@ -132,6 +137,26 @@ public final class ChatModels {
           .listeners(listeners)
           .build());
     };
+  }
+
+  // store=false keeps chats off the provider. The encrypted reasoning that comes back instead stays on each
+  // AiMessage and is sent again with the history, so a reasoning model keeps its line of thought across tool calls.
+  private static ChatModel responses(Connection connection, String apiKey, RawCapture capture,
+      AtomicReference<CompletableFuture<?>> inFlight, List<ChatModelListener> listeners) {
+    OpenAiResponsesStreamingChatModel.Builder builder = OpenAiResponsesStreamingChatModel.builder()
+        .httpClientBuilder(http(capture, inFlight))
+        .baseUrl(connection.baseUrl())
+        .apiKey(apiKey)
+        .modelName(connection.model())
+        .maxOutputTokens(MAX_OUTPUT_TOKENS)
+        .store(false)
+        .include(List.of("reasoning.encrypted_content"))
+        .listeners(listeners);
+    Map<String, String> headers = gatewayHeaders(connection);
+    if (!headers.isEmpty()) {
+      builder.customHeaders(headers);
+    }
+    return new StreamingChat(builder.build());
   }
 
   private static ChatModel bedrock(Connection connection, List<ChatModelListener> listeners) {

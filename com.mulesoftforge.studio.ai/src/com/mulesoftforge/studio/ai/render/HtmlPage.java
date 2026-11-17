@@ -221,7 +221,7 @@ public final class HtmlPage {
         .raw.hidden { display: none; }
         .raw summary { cursor: pointer; }
         .raw .open { margin-left: 10px; }
-        .raw details { margin: 3px 0 3px 14px; }
+        .raw details, .raw .call { margin: 3px 0 3px 14px; }
         .raw pre { white-space: pre-wrap; word-break: break-all; max-height: 420px; overflow: auto;
           border: 1px solid var(--card-border); border-radius: 8px; color: var(--fg); }
         """.formatted(themeVars(theme), quote(theme.font()), theme.fontPt(), quote(theme.mono()), theme.monoPt(),
@@ -564,6 +564,13 @@ public final class HtmlPage {
             block.querySelector('summary').appendChild(a);
           }
           calls.forEach(function (call) {
+            if (call.request == null && call.response == null) {
+              var line = document.createElement('div');
+              line.className = 'call';
+              line.textContent = call.heading;
+              block.appendChild(line);
+              return;
+            }
             var one = details(call.heading);
             [['Request', call.request], ['Response', call.response]].forEach(function (part) {
               var d = details(part[0]);

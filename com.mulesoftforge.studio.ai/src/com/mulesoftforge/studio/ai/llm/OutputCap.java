@@ -57,7 +57,8 @@ final class OutputCap {
     if (request == null) {
       return Integer.MAX_VALUE;
     }
-    int cap = Math.max(value(request, "max_completion_tokens"), value(request, "max_tokens"));
+    int cap = Math.max(Math.max(value(request, "max_completion_tokens"), value(request, "max_tokens")),
+        value(request, "max_output_tokens"));
     if (request.get("generationConfig") instanceof ObjectNode gemini) {
       cap = Math.max(cap, value(gemini, "maxOutputTokens"));
     }
@@ -70,7 +71,8 @@ final class OutputCap {
     if (request == null) {
       return body;
     }
-    boolean changed = lower(request, "max_completion_tokens", limit) | lower(request, "max_tokens", limit);
+    boolean changed = lower(request, "max_completion_tokens", limit) | lower(request, "max_tokens", limit)
+        | lower(request, "max_output_tokens", limit);
     if (request.get("generationConfig") instanceof ObjectNode gemini) {
       changed |= lower(gemini, "maxOutputTokens", limit);
     }

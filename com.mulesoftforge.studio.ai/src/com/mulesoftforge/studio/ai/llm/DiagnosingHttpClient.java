@@ -12,11 +12,15 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +41,9 @@ import dev.langchain4j.http.client.sse.ServerSentEventParser;
  */
 final class DiagnosingHttpClient implements HttpClient {
   private static final ObjectMapper JSON = new ObjectMapper();
+  private static final Set<String> RESPONSE_ENDS = Set.of("response.completed", "response.incomplete",
+      "response.failed", "response.error");
+  private static final Pattern EVENT_TYPE = Pattern.compile("^\\s*\\{\\s*\"type\"\\s*:\\s*\"([^\"]+)\"");
   // A stream is not limited in total, only in how long the model may stay silent: before the response headers,
   // and between pieces after them (including the first, which a thinking model can be slow to send).
   static volatile Duration STREAM_START = Duration.ofSeconds(120);
@@ -167,6 +174,7 @@ final class DiagnosingHttpClient implements HttpClient {
       inFlight.set(handle);
     }
     AtomicReference<Throwable> failure = new AtomicReference<>();
+    AtomicBoolean recorded = new AtomicBoolean();
     ChatStream chunks = new ChatStream();
     try {
       listener.onOpen(SuccessfulHttpResponse.builder().statusCode(response.statusCode())
@@ -193,6 +201,11 @@ final class DiagnosingHttpClient implements HttpClient {
               return;
             }
             ReportedCost.capture(data);
+            // The Responses API finishes the call on this event, before the stream closes, and the next call
+            // may start at once; recorded later, the exchange would land on that call.
+            if (!completions && endsResponse(event) && recorded.compareAndSet(false, true)) {
+              captured(request, sent, response.statusCode(), body.text());
+            }
             for (String chunk : completions ? chunks.rewrite(data) : List.of(data)) {
               listener.onEvent(new ServerSentEvent(event.event(), chunk));
             }
@@ -211,7 +224,9 @@ final class DiagnosingHttpClient implements HttpClient {
       if (inFlight != null) {
         inFlight.compareAndSet(handle, null);
       }
-      captured(request, sent, response.statusCode(), body.text());
+      if (!recorded.get()) {
+        captured(request, sent, response.statusCode(), body.text());
+      }
     }
     if (body.cancelled() && !(failure.get() instanceof ProviderHttpException)) {
       listener.onError(new CancellationException("Cancelled calling " + request.method() + " " + request.url()));
@@ -227,6 +242,15 @@ final class DiagnosingHttpClient implements HttpClient {
     } else {
       listener.onClose();
     }
+  }
+
+  private static boolean endsResponse(ServerSentEvent event) {
+    String type = event.event();
+    if (type == null) {
+      Matcher match = EVENT_TYPE.matcher(event.data() == null ? "" : event.data());
+      type = match.find() ? match.group(1) : "";
+    }
+    return RESPONSE_ENDS.contains(type);
   }
 
   // An error sent inside a 200 stream, as OpenRouter does when the upstream provider fails mid-answer.

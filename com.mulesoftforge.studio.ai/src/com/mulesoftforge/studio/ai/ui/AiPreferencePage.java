@@ -54,6 +54,7 @@ import com.mulesoftforge.studio.ai.settings.AiSettings;
 import com.mulesoftforge.studio.ai.settings.AiSettings.Connection;
 import com.mulesoftforge.studio.ai.settings.Provider;
 import com.mulesoftforge.studio.ai.settings.UserFolder;
+import com.mulesoftforge.studio.ai.settings.WireApi;
 
 public class AiPreferencePage extends PreferencePage implements IWorkbenchPreferencePage {
   public static final String ID = "com.mulesoftforge.studio.ai.prefs";
@@ -62,6 +63,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
   private Label hint;
   private Text baseUrl;
   private Combo model;
+  private Label wireApiLabel;
+  private Combo wireApi;
   private Combo autoFast;
   private Combo autoStrong;
   private Label apiKeyLabel;
@@ -146,6 +149,17 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     model.setToolTipText(
         "Curated models first. Type any id, or Refresh models for a filtered live list from the provider."
             + " Auto picks the fast or strong model below for each message.");
+
+    wireApiLabel = label(body, "API:");
+    wireApi = new Combo(body, SWT.READ_ONLY);
+    for (WireApi w : WireApi.values()) {
+      wireApi.add(w.label);
+    }
+    wireApi.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+    wireApi.setToolTipText("Chat Completions works with most gateways. Choose Responses for reasoning models that"
+        + " only call tools through it, such as GPT-5.6 and GPT-6 on OpenAI or Microsoft Foundry"
+        + " (base URL https://{resource}.openai.azure.com/openai/v1). The endpoint must serve /responses."
+        + " Keep Chat Completions for Claude behind a gateway: its prompt-cache marks are sent only there.");
 
     label(body, "Auto fast model:");
     autoFast = new Combo(body, SWT.DROP_DOWN);
@@ -716,6 +730,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     baseUrl.setText(p.defaultBaseUrl);
     seedSuggestions(p, p.defaultModel, false);
     seedAuto(p, AutoRouter.defaults(p), List.of());
+    wireApi.select(WireApi.CHAT_COMPLETIONS.ordinal());
     stepLimit.setSelection(ChatSession.DEFAULT_STEP_LIMIT);
     super.performDefaults();
   }
@@ -729,6 +744,8 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     // Do not keep the previous provider's model text (e.g. openrouter/auto on OpenAI).
     seedSuggestions(p, draft != null ? draft.model() : AiSettings.model(p), false);
     seedAuto(p, autoDrafts.getOrDefault(p, AiSettings.autoModels(p)), AiSettings.fetchedModels(p));
+    wireApi.select((draft != null ? draft.wireApi() : AiSettings.wireApi(p)).ordinal());
+    setRowVisible(wireApiLabel, wireApi, p.api == Provider.Api.OPENAI_COMPATIBLE);
     showCredentialFields(p);
     try {
       apiKey.setText(draft != null ? draft.apiKey() : AiSettings.apiKey(p));
@@ -754,7 +771,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     setRowVisible(clientSecretLabel, clientSecret, gateway);
   }
 
-  private static void setRowVisible(Label label, Text field, boolean visible) {
+  private static void setRowVisible(Label label, Control field, boolean visible) {
     label.setVisible(visible);
     field.setVisible(visible);
     ((GridData) label.getLayoutData()).exclude = !visible;
@@ -771,7 +788,7 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
     Provider p = draft.provider();
     return !draft.baseUrl().equals(AiSettings.baseUrl(p)) || !draft.model().equals(AiSettings.model(p))
         || !draft.apiKey().equals(AiSettings.apiKey(p)) || !draft.clientId().equals(AiSettings.clientId(p))
-        || !draft.clientSecret().equals(AiSettings.clientSecret(p));
+        || !draft.clientSecret().equals(AiSettings.clientSecret(p)) || draft.wireApi() != AiSettings.wireApi(p);
   }
 
   // Shows the start and end of the credentials on screen, so a value saved under the wrong provider is easy to spot.
@@ -885,8 +902,9 @@ public class AiPreferencePage extends PreferencePage implements IWorkbenchPrefer
 
   // The fields always show the provider last loaded, which is the selected one except mid-switch.
   private Connection fromFields() {
+    int api = wireApi.getSelectionIndex();
     return new Connection(shown, baseUrl.getText().trim(), model.getText().trim(), apiKey.getText().trim(),
-        clientId.getText().trim(), clientSecret.getText().trim());
+        clientId.getText().trim(), clientSecret.getText().trim(), api < 0 ? null : WireApi.values()[api]);
   }
 
   private Provider selected() {

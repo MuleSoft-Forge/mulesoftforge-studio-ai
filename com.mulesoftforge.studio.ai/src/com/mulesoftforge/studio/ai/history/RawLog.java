@@ -1,5 +1,7 @@
 package com.mulesoftforge.studio.ai.history;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -48,42 +50,71 @@ public final class RawLog {
     restrictOwner(target);
   }
 
-  // Lines that cannot be read (a crash mid-write) are skipped.
+  // One call without its bodies; size is the length of its line in the log, in characters.
+  public record Entry(int turn, String heading, long size) {}
+
+  private interface Visitor {
+    void visit(Call call, long size) throws IOException;
+  }
+
+  // Holds every body in memory: only for logs known to be small. A long chat's log can be hundreds of MB.
   public synchronized List<Call> load(String id) throws IOException {
-    if (!exists(id)) {
-      return List.of();
-    }
     List<Call> calls = new ArrayList<>();
-    for (String line : Files.readAllLines(file(id), StandardCharsets.UTF_8)) {
-      if (line.isBlank()) {
-        continue;
-      }
-      try {
-        calls.add(JSON.readValue(line, Call.class));
-      } catch (IOException e) {
-        // Partial line.
-      }
-    }
+    each(id, (call, size) -> calls.add(call));
     return calls;
   }
 
-  public Path writeReadable(String id) throws IOException {
+  // The calls without their bodies, read one line at a time, for showing a saved chat.
+  public synchronized List<Entry> index(String id) throws IOException {
+    List<Entry> entries = new ArrayList<>();
+    each(id, (call, size) -> entries.add(new Entry(call.turn(), call.heading(), size)));
+    return entries;
+  }
+
+  public synchronized Path writeReadable(String id) throws IOException {
     Path target = dir.resolve(checked(id) + READABLE);
-    Files.writeString(target, readable(load(id)), StandardCharsets.UTF_8);
+    try (BufferedWriter out = Files.newBufferedWriter(target, StandardCharsets.UTF_8)) {
+      each(id, (call, size) -> out.write(readable(call)));
+    }
     return target;
   }
 
   public static String readable(List<Call> calls) {
     StringBuilder out = new StringBuilder();
     for (Call call : calls) {
-      out.append("===== Turn ").append(call.turn()).append(" · ").append(call.heading()).append(" · ")
-          .append(call.at()).append(" =====\n");
-      out.append("----- request").append(call.http() == null ? " (as LangChain4j built it)" : " body")
-          .append(" -----\n").append(call.requestText()).append("\n");
-      out.append("----- response").append(call.http() == null ? " (as LangChain4j read it)" : " body")
-          .append(" -----\n").append(call.responseText()).append("\n\n");
+      out.append(readable(call));
     }
     return out.toString();
+  }
+
+  private static String readable(Call call) {
+    return "===== Turn " + call.turn() + " · " + call.heading() + " · " + call.at() + " =====\n"
+        + "----- request" + (call.http() == null ? " (as LangChain4j built it)" : " body") + " -----\n"
+        + call.requestText() + "\n"
+        + "----- response" + (call.http() == null ? " (as LangChain4j read it)" : " body") + " -----\n"
+        + call.responseText() + "\n\n";
+  }
+
+  // Lines that cannot be read (a crash mid-write) are skipped.
+  private void each(String id, Visitor visitor) throws IOException {
+    if (!exists(id)) {
+      return;
+    }
+    try (BufferedReader in = Files.newBufferedReader(file(id), StandardCharsets.UTF_8)) {
+      String line;
+      while ((line = in.readLine()) != null) {
+        if (line.isBlank()) {
+          continue;
+        }
+        Call call;
+        try {
+          call = JSON.readValue(line, Call.class);
+        } catch (IOException e) {
+          continue;
+        }
+        visitor.visit(call, line.length());
+      }
+    }
   }
 
   public synchronized void delete(String id) throws IOException {

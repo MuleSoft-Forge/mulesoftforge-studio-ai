@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -62,6 +63,7 @@ import com.mulesoftforge.studio.ai.edit.TodoItem;
 import com.mulesoftforge.studio.ai.feedback.LinkedInPost;
 import com.mulesoftforge.studio.ai.history.ChatRecord;
 import com.mulesoftforge.studio.ai.history.ChatStore;
+import com.mulesoftforge.studio.ai.history.RawLog;
 import com.mulesoftforge.studio.ai.history.UsageLog;
 import com.mulesoftforge.studio.ai.http.AppConsole;
 import com.mulesoftforge.studio.ai.http.HttpTools;
@@ -112,6 +114,7 @@ public class ChatView extends ViewPart {
   private static final String DATAWEAVE_DIFF = "dw-diff:";
   private static final String DATAWEAVE_APPLY = "dw-apply:";
   private static final String OPEN_RAW = "raw-log";
+  private static final int RAW_SHOWN = 100_000;
   private static final String DIAGNOSE_INSTEAD = "diagnose-instead";
   private static final String VERIFY_FIX = "verify-fix";
   private static final String CONTINUE = "continue";
@@ -434,10 +437,33 @@ public class ChatView extends ViewPart {
       return;
     }
     List<Transcript.RawCall> shown = calls.stream()
-        .map(c -> new Transcript.RawCall(c.heading(), c.requestText(), c.responseText()))
+        .map(c -> new Transcript.RawCall(c.heading(), clipRaw(c.requestText()), clipRaw(c.responseText())))
         .toList();
     transcript.raw("Raw · " + calls.size() + (calls.size() == 1 ? " call" : " calls"), shown,
         chatId == null ? null : OPEN_RAW);
+  }
+
+  // A saved turn shows only headings: its bodies stay in the raw log, which can be hundreds of MB.
+  private void showSavedRawTurn(List<RawLog.Entry> entries) {
+    if (entries == null || entries.isEmpty()) {
+      return;
+    }
+    long size = entries.stream().mapToLong(RawLog.Entry::size).sum();
+    List<Transcript.RawCall> shown = entries.stream()
+        .map(e -> new Transcript.RawCall(e.heading(), null, null))
+        .toList();
+    transcript.raw("Raw · " + entries.size() + (entries.size() == 1 ? " call" : " calls") + " · "
+        + String.format(Locale.ROOT, "%.1f MB", size / 1_000_000.0), shown, OPEN_RAW);
+  }
+
+  // Each step resends the whole history, so one turn's bodies can reach tens of MB.
+  private static String clipRaw(String text) {
+    if (text == null || text.length() <= RAW_SHOWN) {
+      return text;
+    }
+    int half = RAW_SHOWN / 2;
+    return text.substring(0, half) + "\n\n… " + (text.length() - RAW_SHOWN)
+        + " characters left out; Open raw log shows all of it …\n\n" + text.substring(text.length() - half);
   }
 
   @Override
@@ -612,11 +638,7 @@ public class ChatView extends ViewPart {
           CompareUI.openCompareDialog(ChangeCompareInput.dataWeave(proposal.where(), before, proposal.fixed()));
         }
       } else if (OPEN_RAW.equals(id) && chatId != null) {
-        try {
-          ChatHistoryMenu.openRawLog(chatId);
-        } catch (Exception e) {
-          append("Error", "Could not open the raw log: " + Errors.describe(e));
-        }
+        ChatHistoryMenu.openRawLog(chatId, transcript.control(), ChatView.this::append);
       } else if (id.startsWith(DATAWEAVE_APPLY)) {
         DataWeaveProposal proposal = dataWeaveFix(id.substring(DATAWEAVE_APPLY.length()));
         if (proposal != null) {
@@ -766,17 +788,17 @@ public class ChatView extends ViewPart {
     Display display = transcript.control().getDisplay();
     Job job = Job.create("Open MuleSoftForge Studio AI chat", monitor -> {
       ChatRecord record;
-      Map<Integer, List<RawCapture.Call>> raw;
+      Map<Integer, List<RawLog.Entry>> raw;
       try {
         record = Stores.chats().load(id);
-        raw = rawCalls(record.id());
+        raw = rawEntries(record.id());
       } catch (Exception e) {
         Ui.async(display, transcript.control(),
             () -> append("Error", "Could not open chat: " + Errors.describe(e)));
         return Status.OK_STATUS;
       }
       ChatRecord loaded = record;
-      Map<Integer, List<RawCapture.Call>> rawByTurn = raw;
+      Map<Integer, List<RawLog.Entry>> rawByTurn = raw;
       Ui.async(display, transcript.control(), () -> showLoadedChat(loaded, rawByTurn));
       return Status.OK_STATUS;
     });
@@ -784,7 +806,7 @@ public class ChatView extends ViewPart {
     job.schedule();
   }
 
-  private void showLoadedChat(ChatRecord record, Map<Integer, List<RawCapture.Call>> raw) {
+  private void showLoadedChat(ChatRecord record, Map<Integer, List<RawLog.Entry>> raw) {
     resetChat();
     chatId = record.id();
     chatTitle = record.title();
@@ -799,7 +821,7 @@ public class ChatView extends ViewPart {
           case "AI" -> appendMarkdown("AI", entry.text());
           case "You" -> {
             if (turns > 0) {
-              showRawTurn(raw.get(turns));
+              showSavedRawTurn(raw.get(turns));
             }
             turns++;
             String text = entry.text();
@@ -814,7 +836,7 @@ public class ChatView extends ViewPart {
           default -> append(entry.speaker(), entry.text());
         }
       }
-      showRawTurn(raw.get(turns));
+      showSavedRawTurn(raw.get(turns));
     } finally {
       replaying = false;
     }
@@ -829,11 +851,11 @@ public class ChatView extends ViewPart {
     refreshCost();
   }
 
-  private Map<Integer, List<RawCapture.Call>> rawCalls(String id) {
-    Map<Integer, List<RawCapture.Call>> byTurn = new TreeMap<>();
+  private Map<Integer, List<RawLog.Entry>> rawEntries(String id) {
+    Map<Integer, List<RawLog.Entry>> byTurn = new TreeMap<>();
     try {
-      for (RawCapture.Call call : Stores.raw().load(id)) {
-        byTurn.computeIfAbsent(call.turn(), t -> new ArrayList<>()).add(call);
+      for (RawLog.Entry entry : Stores.raw().index(id)) {
+        byTurn.computeIfAbsent(entry.turn(), t -> new ArrayList<>()).add(entry);
       }
     } catch (Exception e) {
       Activator.logFailure("Could not read the raw log of chat " + id, e);

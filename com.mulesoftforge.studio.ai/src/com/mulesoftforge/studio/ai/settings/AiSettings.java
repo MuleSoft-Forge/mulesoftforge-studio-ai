@@ -30,6 +30,7 @@ public final class AiSettings {
   private static final String PROVIDER = "provider";
   private static final String BASE_URL = "baseUrl.";
   private static final String MODEL = "model.";
+  private static final String WIRE_API = "wireApi.";
   private static final String FETCHED_MODELS = "fetchedModels.";
   private static final String AUTO_FAST = "auto.fast.";
   private static final String AUTO_STRONG = "auto.strong.";
@@ -70,14 +71,28 @@ public final class AiSettings {
   private AiSettings() {}
 
   // clientId / clientSecret are for MuleSoft AI Gateway (client_id / client_secret headers). Empty for others.
+  // wireApi applies to OpenAI-compatible providers only.
   public record Connection(Provider provider, String baseUrl, String model, String apiKey, String clientId,
-      String clientSecret) {
+      String clientSecret, WireApi wireApi) {
+    public Connection {
+      wireApi = wireApi == null ? WireApi.CHAT_COMPLETIONS : wireApi;
+    }
+
+    public Connection(Provider provider, String baseUrl, String model, String apiKey, String clientId,
+        String clientSecret) {
+      this(provider, baseUrl, model, apiKey, clientId, clientSecret, WireApi.CHAT_COMPLETIONS);
+    }
+
     public Connection(Provider provider, String baseUrl, String model, String apiKey) {
       this(provider, baseUrl, model, apiKey, "", "");
     }
 
     public Connection withModel(String model) {
-      return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret);
+      return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret, wireApi);
+    }
+
+    public Connection withWireApi(WireApi wireApi) {
+      return new Connection(provider, baseUrl, model, apiKey, clientId, clientSecret, wireApi);
     }
   }
 
@@ -159,6 +174,10 @@ public final class AiSettings {
   public static String model(Provider provider) {
     String value = text(MODEL + provider.name());
     return value.isBlank() ? provider.defaultModel : value;
+  }
+
+  public static WireApi wireApi(Provider provider) {
+    return WireApi.fromName(text(WIRE_API + provider.name()));
   }
 
   // The models Refresh models last fetched for the provider, so the chat view's picker can offer them too.
@@ -487,13 +506,13 @@ public final class AiSettings {
   public static Connection current() throws StorageException {
     Provider provider = provider();
     return new Connection(provider, baseUrl(provider), model(provider), apiKey(provider), clientId(provider),
-        clientSecret(provider));
+        clientSecret(provider), wireApi(provider));
   }
 
   public static void save(Connection connection) throws Exception {
     Provider provider = connection.provider();
     save(Map.of(PROVIDER, provider.name(), BASE_URL + provider.name(), connection.baseUrl().trim(),
-        MODEL + provider.name(), connection.model().trim()));
+        MODEL + provider.name(), connection.model().trim(), WIRE_API + provider.name(), connection.wireApi().name()));
 
     ISecurePreferences secure = secure();
     secure.put(API_KEY + provider.name(), connection.apiKey().trim(), true);

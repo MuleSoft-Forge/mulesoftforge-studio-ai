@@ -49,7 +49,8 @@ public enum Provider {
       "Runs on this machine. No API key needed. Refresh models lists local tags.",
       List.of("qwen2.5-coder", "codellama", "llama3.2")),
   CUSTOM("Other OpenAI-compatible", Api.OPENAI_COMPATIBLE, "", "",
-      "Any endpoint that speaks the OpenAI Chat Completions API, for example LiteLLM or vLLM.",
+      "Any endpoint that speaks the OpenAI Chat Completions or Responses API, for example LiteLLM, vLLM or"
+          + " Microsoft Foundry (https://{resource}.openai.azure.com/openai/v1). Pick the API below.",
       List.of());
 
   public enum Api {
